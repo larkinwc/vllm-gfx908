@@ -191,6 +191,13 @@ cython_debug/
 # Claude
 .claude/
 
+# Local MI100 development files
+docs/plans/
+mi100-tests/
+docker/Dockerfile.mi100
+docker/Dockerfile.mi100_base
+nlzy-vllm-gfx906/
+
 # Codex
 .codex/
 
