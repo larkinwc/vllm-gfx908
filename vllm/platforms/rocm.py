@@ -243,6 +243,7 @@ def on_mi100() -> bool:
     """Detect MI100 (gfx908) which lacks native FP8 hardware."""
     return _ON_MI100
 
+
 def on_gfx950() -> bool:
     return _ON_GFX950
 

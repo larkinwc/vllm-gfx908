@@ -29,9 +29,11 @@ I attempted to port MI100-specific optimizations from older branches (created fo
 Created static Triton kernel configurations for MoE (Mixture of Experts) layers, specifically tuned for MI100's 120 CUs.
 
 **Files Created**:
+
 - `vllm/model_executor/layers/fused_moe/configs/E=512,N=128,device_name=Arcturus_GL-XL_[Instinct_MI100],dtype=int4_w4a16.json`
 
 **Configuration Details**:
+
 ```json
 {
   "64": {
@@ -56,6 +58,7 @@ Created static Triton kernel configurations for MoE (Mixture of Experts) layers,
 ```
 
 **Rationale**:
+
 - Small block sizes (32x32, 64x64) for low token counts (prompt processing)
 - Low warp counts (1-2) optimized for MI100's wavefront characteristics
 - Based on proven configurations from older branches
@@ -76,6 +79,7 @@ Added MI100-specific autotune configurations for Triton attention kernels to red
 **File Modified**: `vllm/attention/ops/triton_flash_attention.py`
 
 **Code Changes**:
+
 ```python
 # Added platform detection
 from vllm.platforms.rocm import on_gfx908
@@ -93,6 +97,7 @@ from vllm.platforms.rocm import on_gfx908
 ```
 
 **Rationale**:
+
 - 2 warps = faster Triton compilation on MI100
 - Better for small batch sizes (common in prompt processing)
 - Falls back to 8 warps for larger workloads
@@ -103,10 +108,10 @@ from vllm.platforms.rocm import on_gfx908
 **Status**: ⚠️ **NO IMPACT - NOT COMMITTED**
 
 **Benchmark Data**:
+
 - Before: TTFT 233ms, TPOT 39.1ms
 - After: TTFT 235ms, TPOT 38.9ms
 - Difference: Within measurement noise
-
 
 ---
 
@@ -133,6 +138,7 @@ Modified low-level GPTQ quantization kernels to use AMD-specific instructions an
 ```
 
 **Rationale**:
+
 - Larger blocks → better memory coalescing
 - More work per thread block → better CU utilization (MI100 has 120 CUs)
 - Reduces kernel launch overhead
@@ -166,12 +172,14 @@ __forceinline__ __device__ float dot22_8_f(half2 (&dq)[4], const half* a_ptr,
 ```
 
 **What is `__ockl_fdot2`**:
+
 - AMD OpenCL (OCKL) fused dot product intrinsic
 - Computes `dot(a, b) + c` in a single instruction
 - Maps directly to MI100 hardware (v_dot2c_f32_f16 instruction)
 - Reduces instruction count: 4 ops → 1 op per iteration
 
 **Technical Details**:
+
 - Original CUDA code: multiply (hfma2) → extract halves → add → convert to float
 - AMD intrinsic: fused multiply-add with automatic type conversion
 - Expected: Lower latency, better throughput
@@ -200,13 +208,13 @@ __forceinline__ __device__ float dot22_8_f(half2 (&dq)[4], const half* a_ptr,
 
 **Evidence**:
 We can verify this by examining the generated ISA:
+
 ```bash
 # The CUDA path in ROCm 7.0 likely compiles to:
 # v_dot2c_f32_f16 (or equivalent fused instruction)
 #
 # The manual fdot2 path compiles to... the same thing!
 ```
-
 
 ---
 
@@ -244,7 +252,6 @@ I suspect this may be improvements from the use of newer ROCm and LLVM. I don't 
    - Auto-detection of gfx908 capabilities
    - Automatic selection of optimal instructions (fdot2, etc.)
    - Dynamic block size tuning based on CU count
-
 
 ---
 
@@ -287,6 +294,7 @@ Manual optimizations have a shelf life. What worked on ROCm 5/6 may be obsolete 
 ### 2. Trust, But Verify
 
 Modern compilers (LLVM 20.0) are extremely sophisticated. Before adding manual optimizations:
+
 - Profile to find actual bottlenecks
 - Test if the compiler already handles it
 - Verify that manual changes actually help
@@ -294,6 +302,7 @@ Modern compilers (LLVM 20.0) are extremely sophisticated. Before adding manual o
 ### 3. Dynamic > Static
 
 Static configurations (MoE configs, block sizes) are fragile:
+
 - Break when workload patterns change
 - Don't adapt to different models
 - Modern compilers do dynamic selection better
@@ -301,6 +310,7 @@ Static configurations (MoE configs, block sizes) are fragile:
 ### 4. Maintenance Cost
 
 Every manual optimization adds:
+
 - Code complexity
 - Merge conflict potential
 - Testing burden
@@ -311,6 +321,7 @@ Only add them if there's a **proven, significant benefit**.
 ### 5. Version Context is Critical
 
 Always document:
+
 - ROCm version
 - LLVM version
 - vLLM version
@@ -319,8 +330,6 @@ Always document:
 Optimizations are tied to their environment.
 
 ---
-
-
 
 ## Detailed Technical Specifications
 
@@ -370,7 +379,6 @@ CMAKE_BUILD_TYPE=Release
 ## Conclusion
 
 Our comprehensive testing demonstrates that vanilla vLLM on ROCm 7.0.2 provides optimal performance for MI100 without manual kernel optimizations. The compiler has evolved to the point where it handles architecture-specific tuning more effectively than hand-coded optimizations from the ROCm 5/6 era.
-
 
 **Not** in micro-optimizations that the compiler already handles.
 

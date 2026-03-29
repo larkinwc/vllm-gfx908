@@ -10,6 +10,7 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 ## When to Use This Skill
 
 Features that involve:
+
 - Installing and integrating external packages with vLLM
 - Porting CUDA/NVIDIA-specific code to ROCm/MI100
 - Debugging Triton kernel compatibility on gfx908
@@ -68,6 +69,7 @@ None
    - Always ensure the system can fall back to baseline operation
 
 ### Critical Notes for TurboQuant on MI100
+
 - TurboQuant uses Triton kernels that were tested on NVIDIA only
 - pytorch-triton-rocm 3.5.1 may not support all Triton features used
 - Key Triton operations to check: tl.dot, tl.load/store with masks, atomic operations

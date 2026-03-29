@@ -10,6 +10,7 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 ## When to Use This Skill
 
 Features that involve:
+
 - Downloading and configuring models for benchmarking
 - Creating benchmark scripts (synthetic and realistic workloads)
 - Running vLLM benchmarks with specific configurations
@@ -51,6 +52,7 @@ None
 8. **Run validators**: The vLLM test suite is large; only run specific tests if the feature modifies vLLM code. For pure benchmark features, validation is the benchmark results themselves.
 
 ### Critical Notes
+
 - **Always stop the vLLM server before starting a new one** (port 8000)
 - **Wait for model loading** - large models take 30-60 seconds to load
 - **Use --enforce-eager** for baseline configs (as specified in feature)

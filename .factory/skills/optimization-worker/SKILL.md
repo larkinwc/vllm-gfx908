@@ -10,6 +10,7 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 ## When to Use This Skill
 
 Features that involve:
+
 - Enabling/testing CUDA/HIP graph modes on MI100
 - Configuring MTP speculative decoding
 - Tuning serving parameters (max-model-len, batched-tokens, prefix caching)
@@ -60,6 +61,7 @@ None
 9. **Document results**: Record what worked, what didn't, and performance delta vs baseline.
 
 ### Critical Notes
+
 - **Graph modes on MI100**: Start with `FULL_DECODE_ONLY` (safest). If it works, try `PIECEWISE`. `FULL_AND_PIECEWISE` is unlikely to work without torch.compile.
 - **If torch.compile crashes**: Keep `TORCH_COMPILE_DISABLE=1` and use `FULL_DECODE_ONLY` which doesn't require compilation.
 - **MTP compatibility**: MTP may not work with all graph modes. Test MTP with enforce-eager first, then with graph modes.
