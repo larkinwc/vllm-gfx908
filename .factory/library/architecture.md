@@ -55,25 +55,24 @@ Decode (single token):
 
 ### Registration Flow
 
+**IMPORTANT:** Override ROCM_ATTN, NOT CUSTOM:
 ```python
 from vllm.v1.attention.backends.registry import register_backend, AttentionBackendEnum
-register_backend(AttentionBackendEnum.CUSTOM, "turboquant.backends.vllm_rocm.TurboQuantRocmBackend")
+register_backend(AttentionBackendEnum.ROCM_ATTN, "turboquant.backends.vllm_rocm.TurboQuantRocmBackend")
 ```
 
-This must be called before vLLM engine initialization. The launch script handles this.
+This must execute in every worker process (via sitecustomize.py). No `--attention-backend` flag needed.
 
-### vLLM Backend Selection Path
+### vLLM Dual Backend Routing
 
-```
-vllm/v1/attention/selector.py::get_attn_backend()
-  → _cached_get_attn_backend()
-    → current_platform.get_attn_backend_cls() [rocm.py]
-      → If selected_backend is not None: validate and return its path
-      → Else: auto-select from priority list
-    → resolve_obj_by_qualname(class_path) → actual backend class
-```
+vLLM has TWO separate backend routing systems:
+1. **AttentionBackendEnum** (standard attention) → `get_attn_backend()` → ROCM_ATTN on ROCm
+2. **MambaAttentionBackendEnum** (mamba/GDN/linear) → `get_mamba_attn_backend()` → GDN_ATTN for GDN layers
 
-When `--attention-backend CUSTOM` is passed (or equivalent config), vLLM selects `AttentionBackendEnum.CUSTOM` which resolves to whatever was registered.
+Qwen3.5-9B's 8 full-attention layers use system 1 (ROCM_ATTN → now TQ).
+Qwen3.5-9B's 24 GDN layers use system 2 (GDN_ATTN → unchanged).
+
+Using CUSTOM + `--attention-backend CUSTOM` breaks this because it forces ALL layers through system 1.
 
 ### Memory Budget
 
