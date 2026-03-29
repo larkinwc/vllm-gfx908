@@ -5,6 +5,9 @@ commands:
   typecheck: pre-commit run mypy-3.10 --all-files --hook-stage manual
   benchmark-synthetic: /opt/vllm-env/bin/python3 -m vllm.entrypoints.cli.main bench serve
   benchmark-throughput: /opt/vllm-env/bin/python3 -m vllm.entrypoints.cli.main bench throughput
+  benchmark-coding-agent: /opt/vllm-env/bin/python3 /root/benchmark-scripts/coding_agent_bench.py
+  benchmark-all-baselines: /root/benchmark-scripts/run_all_baselines.sh
+  benchmark-compare: /opt/vllm-env/bin/python3 /root/benchmark-scripts/compare_results.py
 
 services:
   vllm:
