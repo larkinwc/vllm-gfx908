@@ -1,0 +1,22 @@
+commands:
+  install: /opt/vllm-env/bin/pip install --no-build-isolation --no-deps -e .
+  test: /opt/vllm-env/bin/python3 -m pytest tests/ -x -v --timeout=60
+  lint: pre-commit run --all-files
+  typecheck: pre-commit run mypy-3.10 --all-files --hook-stage manual
+  benchmark-synthetic: /opt/vllm-env/bin/python3 -m vllm.entrypoints.cli.main bench serve
+  benchmark-throughput: /opt/vllm-env/bin/python3 -m vllm.entrypoints.cli.main bench throughput
+
+services:
+  vllm:
+    start: >
+      LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib
+      VLLM_ROCM_USE_AITER=1
+      ROCM_PATH=/opt/rocm/core-7.12
+      PYTORCH_ROCM_ARCH=gfx908
+      VLLM_ROCM_USE_SKINNY_GEMM=0
+      /opt/vllm-env/bin/python3 -m vllm.entrypoints.openai.api_server
+      --port 8000
+    stop: lsof -ti :8000 | xargs kill -9 2>/dev/null; sleep 2
+    healthcheck: curl -sf http://localhost:8000/health
+    port: 8000
+    depends_on: []
