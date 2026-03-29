@@ -1,0 +1,120 @@
+{
+  "group_id": "baselines-all",
+  "milestone": "baselines",
+  "assertions": {
+    "VAL-BASE-001": {
+      "status": "pass",
+      "evidence": "vLLM server was running with Qwen3.5-9B FP16 on TP=4 at port 8000. Sent POST /v1/completions request, received HTTP 200 with coherent Python code: 'def factorial(n): if n < 0: raise ValueError...' Server startup log confirms model loaded. Model was in /models/Qwen3.5-9B (19GB FP16). Startup time ~180s per model-verification.json.",
+      "details": {
+        "model": "/models/Qwen3.5-9B",
+        "health_check": "200 OK",
+        "completion_status": "200 OK",
+        "generated_text_preview": "def factorial(n):\n    if n < 0:\n        raise ValueError(\"Factorial is not defined for negative numbers.\")\n    if n == 0 or n == 1:\n        return 1\n    return n * factorial(n - 1)",
+        "coherent": true,
+        "evidence_file": "/root/benchmark-results/model-verification.json"
+      }
+    },
+    "VAL-BASE-002": {
+      "status": "pass",
+      "evidence": "Stopped previous server, started vLLM with NousResearch/Llama-2-7b-hf FP16 on TP=4. Server became healthy after ~61s. Sent POST /v1/completions, received HTTP 200 with coherent output: 'factorial(n) = n * factorial(n-1)...' Server startup log at /root/benchmark-results/server_llama_val.log confirms successful initialization.",
+      "details": {
+        "model": "/models/Llama-2-7b-hf",
+        "health_check": "200 OK after 61s",
+        "completion_status": "200 OK",
+        "generated_text_preview": "\\n\\nfactorial(n) = n * factorial(n-1)\\n\\nWrite a Python function that calculates the sum...",
+        "coherent": true,
+        "startup_log": "/root/benchmark-results/server_llama_val.log"
+      }
+    },
+    "VAL-BASE-003": {
+      "status": "pass",
+      "evidence": "File /root/benchmark-results/model-verification.json exists and documents 6 models: Qwen3.5-9B (SUCCESS), Llama-2-7b-hf (SUCCESS), Qwen3.5-9B-AWQ-INT4 (FAILED with error detail), Llama-2-7B-GPTQ (FAILED with error detail), open_llama_7b_v2 (FAILED), Qwen3.5-27B-AWQ-BF16-INT4 (NOT_TESTED). All failed models have error details. Has recommendations section.",
+      "details": {
+        "file": "/root/benchmark-results/model-verification.json",
+        "models_documented": 6,
+        "models_with_pass": ["Qwen3.5-9B", "Llama-2-7b-hf"],
+        "models_with_fail": ["Qwen3.5-9B-AWQ-INT4", "Llama-2-7B-GPTQ", "open_llama_7b_v2"],
+        "has_error_details": true,
+        "has_recommendations": true
+      }
+    },
+    "VAL-BASE-004": {
+      "status": "pass",
+      "evidence": "File /root/benchmark-results/model-verification.json contains a 'quantization_feasibility' section documenting: INT4 GPTQ (NOT_SUPPORTED - marlin backend CUDA-only), AWQ compressed-tensors (NOT_SUPPORTED - format mismatch), AWQ ExllamaLinearKernel (POTENTIAL_SUPPORT), FP8 W8A8 (SOFTWARE_EMULATION via MI100FP8ScaledMMLinearKernel). Has summary and recommendations.",
+      "details": {
+        "file": "/root/benchmark-results/model-verification.json",
+        "section": "quantization_feasibility",
+        "gptq_documented": true,
+        "awq_compressed_tensors_documented": true,
+        "fp8_emulation_documented": true,
+        "alternatives_documented": true,
+        "has_summary": true
+      }
+    },
+    "VAL-BASE-005": {
+      "status": "pass",
+      "evidence": "Synthetic benchmark files exist for both FP16 model variants with numeric TTFT, TPOT, and throughput: Qwen3.5-9B c1=228.3/c2=411.9/c4=687.7 tok/s; Llama-2-7b-hf c1=238.6/c2=448.0/c4=800.5 tok/s. All 6 runs completed 100 requests each. TTFT and TPOT are in raw result files (e.g., Qwen c1: mean_ttft=880ms, mean_tpot=50ms).",
+      "details": {
+        "qwen_files": [
+          {"file": "Qwen3.5-9B_synthetic_concurrency1_20260329_105459.json", "output_throughput": 228.27, "completed": 100, "mean_ttft_ms": 880.28, "mean_tpot_ms": 50.19},
+          {"file": "Qwen3.5-9B_synthetic_concurrency2_20260329_105459.json", "output_throughput": 411.87, "completed": 100, "mean_ttft_ms": 217.38, "mean_tpot_ms": 49.60},
+          {"file": "Qwen3.5-9B_synthetic_concurrency4_20260329_105459.json", "output_throughput": 687.72, "completed": 100, "mean_ttft_ms": 264.81, "mean_tpot_ms": 55.32}
+        ],
+        "llama_files": [
+          {"file": "Llama-2-7b-hf_synthetic_concurrency1_20260329_105459.json", "output_throughput": 238.65, "completed": 100, "mean_ttft_ms": 147.86, "mean_tpot_ms": 28.31},
+          {"file": "Llama-2-7b-hf_synthetic_concurrency2_20260329_105459.json", "output_throughput": 448.04, "completed": 100, "mean_ttft_ms": 82.68, "mean_tpot_ms": 27.13},
+          {"file": "Llama-2-7b-hf_synthetic_concurrency4_20260329_105459.json", "output_throughput": 800.50, "completed": 100, "mean_ttft_ms": 83.02, "mean_tpot_ms": 26.52}
+        ]
+      }
+    },
+    "VAL-BASE-006": {
+      "status": "pass",
+      "evidence": "Custom coding agent benchmark ran for Qwen3.5-9B at 1, 2, 4 concurrent users. c1: 10/10 successful (TTFT=81.22ms, TPOT=44.47ms, 22.5 tok/s); c2: 20/20 successful (TTFT=116.15ms, TPOT=45.44ms, 22.01 tok/s avg, 41.71 aggregate); c4: 40/40 successful (TTFT=160.71ms, TPOT=45.64ms, 21.91 tok/s avg, 82.73 aggregate).",
+      "details": {
+        "model": "Qwen3.5-9B",
+        "results": {
+          "concurrency1": {"file": "Qwen3.5-9B_coding_agent_concurrency1_fixed.json", "successful": 10, "total": 10, "avg_ttft_ms": 81.22, "avg_tpot_ms": 44.47, "avg_decode_tok_per_s": 22.5, "aggregate_decode_tok_per_s": 21.39},
+          "concurrency2": {"file": "Qwen3.5-9B_coding_agent_concurrency2_fixed.json", "successful": 20, "total": 20, "avg_ttft_ms": 116.15, "avg_tpot_ms": 45.44, "avg_decode_tok_per_s": 22.01, "aggregate_decode_tok_per_s": 41.71},
+          "concurrency4": {"file": "Qwen3.5-9B_coding_agent_concurrency4_fixed.json", "successful": 40, "total": 40, "avg_ttft_ms": 160.71, "avg_tpot_ms": 45.64, "avg_decode_tok_per_s": 21.91, "aggregate_decode_tok_per_s": 82.73}
+        }
+      }
+    },
+    "VAL-BASE-007": {
+      "status": "fail",
+      "evidence": "The baseline-report.json exists with model name, TP size=4, GPU memory utilization (~93%), and coding agent TTFT/TPOT/decode tok/s per concurrency. However, synthetic benchmark TTFT and TPOT are stored as 0 in the aggregated report (aggregation bug in generate_baseline_report.py). The raw synthetic result files do contain correct TTFT/TPOT values (e.g., Qwen c1 mean_ttft_ms=880ms). The report is missing correct synthetic TTFT/TPOT values. Also, no explicit 'quantization: FP16' or 'prefill tok/s' field is present in the report (only decode/output throughput).",
+      "details": {
+        "file": "/root/benchmark-results/baseline-report.json",
+        "has_model_name": true,
+        "has_tp_size": true,
+        "has_gpu_memory": true,
+        "has_coding_ttft_tpot": true,
+        "synthetic_ttft_tpot_correct": false,
+        "issue": "Synthetic TTFT/TPOT values are 0 in aggregated report due to aggregation bug; raw files have correct values",
+        "raw_files_have_correct_data": true
+      }
+    },
+    "VAL-BASE-008": {
+      "status": "pass",
+      "evidence": "Reproducibility data in baseline-report.json shows all runs within 10% variance. Qwen c1: 2.0% diff, c2: 0.01% diff, c4: 0.26% diff. Llama c1: 0.02%, c2: 0.12%, c4: 0.14%. All well within ±10% requirement.",
+      "details": {
+        "qwen": {
+          "c1": {"run1": 228.28, "run2": 223.71, "diff_pct": 2.0, "within_10pct": true},
+          "c2": {"run1": 411.87, "run2": 411.92, "diff_pct": 0.01, "within_10pct": true},
+          "c4": {"run1": 687.72, "run2": 689.52, "diff_pct": 0.26, "within_10pct": true}
+        },
+        "llama": {
+          "c1": {"run1": 238.65, "run2": 238.60, "diff_pct": 0.02, "within_10pct": true},
+          "c2": {"run1": 448.04, "run2": 448.56, "diff_pct": 0.12, "within_10pct": true},
+          "c4": {"run1": 800.50, "run2": 801.63, "diff_pct": 0.14, "within_10pct": true}
+        }
+      }
+    }
+  },
+  "frictions": [
+    "Stopping vLLM server leaves orphaned worker processes that hold GPU VRAM; need to explicitly kill worker PIDs via rocm-smi --showpids after stopping the API server",
+    "Baseline report aggregator (generate_baseline_report.py) stores synthetic TTFT/TPOT as 0 - the raw JSON files have correct values but the aggregate report does not capture them correctly",
+    "Server startup between switching models takes 1-2 minutes (Llama ~60s, Qwen ~180s)"
+  ],
+  "blockers": [],
+  "toolsUsed": ["curl", "python3", "rocm-smi", "lsof", "kill"]
+}

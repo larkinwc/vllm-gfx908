@@ -26,6 +26,36 @@ Testing surface, required tools, and resource cost classification.
 6. Stop server
 7. Repeat for next config
 
+## Gotchas and Known Issues
+
+### Orphaned vLLM Worker Processes After Server Stop
+When stopping the vLLM API server (e.g., via `lsof -ti :8000 | xargs kill -9`), the VLLM worker processes (VLLM::Worker_TP) are NOT automatically killed and continue to hold GPU VRAM. This prevents starting a new vLLM server.
+
+**Fix**: After stopping the API server, explicitly kill all worker PIDs:
+```bash
+# Stop API server
+lsof -ti :8000 | xargs kill -9 2>/dev/null; sleep 5
+
+# Kill remaining vLLM worker processes
+/opt/rocm/core-7.12/bin/rocm-smi --showpids 2>/dev/null | grep VLLM | awk '{print $1}' | xargs kill -9 2>/dev/null
+sleep 10
+
+# Verify VRAM is freed (should show ~6.5MB used, not 30GB+)
+/opt/rocm/core-7.12/bin/rocm-smi --showmeminfo vram | grep "Used Memory"
+```
+
+### Startup Times
+- Qwen3.5-9B FP16: ~180s to health check
+- Llama-2-7b-hf FP16: ~60s to health check
+
+## Flow Validator Guidance: CLI/API
+
+All testing is via curl and Python scripts against the vLLM API at localhost:8000.
+- Only one vLLM server at a time (max concurrent validators: 1)
+- Must kill orphaned workers after stopping server (see Gotchas section above)
+- Use /v1/completions for completion models; /v1/chat/completions for chat models with templates
+- Llama-2-7b-hf requires --chat-template flag pointing to template file
+
 ## Validation Concurrency
 
 **Max concurrent validators**: 1
