@@ -1,35 +1,17 @@
 {
   "milestone": "baselines",
-  "round": 1,
-  "status": "fail",
+  "round": 2,
+  "status": "pass",
   "assertionsSummary": {
-    "total": 8,
-    "passed": 7,
-    "failed": 1,
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
     "blocked": 0
   },
-  "passedAssertions": [
-    "VAL-BASE-001",
-    "VAL-BASE-002",
-    "VAL-BASE-003",
-    "VAL-BASE-004",
-    "VAL-BASE-005",
-    "VAL-BASE-006",
-    "VAL-BASE-008"
-  ],
-  "failedAssertions": [
-    {
-      "id": "VAL-BASE-007",
-      "reason": "baseline-report.json has synthetic TTFT and TPOT values stored as 0 due to an aggregation bug in generate_baseline_report.py. The raw individual benchmark JSON files (/root/benchmark-results/Qwen3.5-9B_synthetic_concurrency*.json and Llama-2-7b-hf_synthetic_concurrency*.json) contain correct TTFT/TPOT values. The fix is to update the generate_baseline_report.py script to correctly extract mean_ttft_ms and mean_tpot_ms from the vllm bench serve output JSON format and store them in the aggregated report."
-    }
-  ],
+  "passedAssertions": ["VAL-BASE-007"],
+  "failedAssertions": [],
   "blockedAssertions": [],
-  "appliedUpdates": [
-    {
-      "target": "user-testing.md",
-      "description": "Documented that stopping vLLM server leaves orphaned worker processes holding GPU VRAM; must kill worker PIDs via 'rocm-smi --showpids' after stopping API server process.",
-      "source": "setup"
-    }
-  ],
-  "previousRound": null
+  "appliedUpdates": [],
+  "previousRound": ".factory/validation/baselines/user-testing/synthesis-round1.json",
+  "notes": "Re-run testing only the previously failed VAL-BASE-007. The fix-synthetic-report-aggregation feature correctly updated generate_baseline_report.py to extract mean_ttft_ms and mean_tpot_ms from vllm bench serve flat JSON output. Verification confirmed baseline-report.json now has non-zero TTFT/TPOT values for all models and concurrency levels. All 8 VAL-BASE-* assertions are now passing."
 }
