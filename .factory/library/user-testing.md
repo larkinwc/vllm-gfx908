@@ -9,6 +9,7 @@ Testing surface, required tools, and resource cost classification.
 **No browser UI** -- all testing is API/CLI based
 
 ### Testing Approaches
+
 1. **Health check**: `curl http://localhost:8000/health`
 2. **Chat completion**: `curl -X POST http://localhost:8000/v1/chat/completions -H "Content-Type: application/json" -d '...'`
 3. **Synthetic benchmark**: `vllm bench serve --model <model> --dataset-name sonnet ...`
@@ -18,6 +19,7 @@ Testing surface, required tools, and resource cost classification.
 7. **Server log inspection**: grep for error messages, graph mode activation, MTP status
 
 ### Testing Workflow
+
 1. Stop current vLLM server if running
 2. Start vLLM with desired config
 3. Wait for health check to pass (up to 120s for model loading)
@@ -29,9 +31,11 @@ Testing surface, required tools, and resource cost classification.
 ## Gotchas and Known Issues
 
 ### Orphaned vLLM Worker Processes After Server Stop
+
 When stopping the vLLM API server (e.g., via `lsof -ti :8000 | xargs kill -9`), the VLLM worker processes (VLLM::Worker_TP) are NOT automatically killed and continue to hold GPU VRAM. This prevents starting a new vLLM server.
 
 **Fix**: After stopping the API server, explicitly kill all worker PIDs:
+
 ```bash
 # Stop API server
 lsof -ti :8000 | xargs kill -9 2>/dev/null; sleep 5
@@ -45,16 +49,30 @@ sleep 10
 ```
 
 ### Startup Times
+
 - Qwen3.5-9B FP16: ~180s to health check
 - Llama-2-7b-hf FP16: ~60s to health check
 
 ## Flow Validator Guidance: CLI/API
 
 All testing is via curl and Python scripts against the vLLM API at localhost:8000.
+
 - Only one vLLM server at a time (max concurrent validators: 1)
 - Must kill orphaned workers after stopping server (see Gotchas section above)
 - Use /v1/completions for completion models; /v1/chat/completions for chat models with templates
 - Llama-2-7b-hf requires --chat-template flag pointing to template file
+
+### MTP Speculative Decoding on MI100
+
+MTP speculative decoding (`--speculative-config '{"method":"mtp","num_speculative_tokens":N}'`) is **incompatible with HIP graph mode on MI100/gfx908**. When combining `--compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'` with `--speculative-config`, the server crashes with `RuntimeError: cancelled during graph capture/warmup`.
+
+**MTP works correctly in enforce-eager mode** (`--enforce-eager`), but results in 9.3% TPOT regression vs non-MTP eager baseline (graph mode without MTP is 68% faster).
+
+MTP startup time in eager mode: ~180s (same as non-MTP for Qwen3.5-9B FP16).
+
+Use `launch-mtp.sh --enforce-eager` or add `--enforce-eager` flag when testing MTP.
+
+MTP log verification: look for `Detected MTP model. Sharing target model embedding weights` and `SpecDecoding metrics: Mean acceptance length:` in server logs.
 
 ## Validation Concurrency
 
@@ -63,6 +81,7 @@ All testing is via curl and Python scripts against the vLLM API at localhost:800
 Rationale: Testing involves starting/stopping vLLM servers which consume all 4 GPUs. Only one vLLM instance can run at a time (TP=4 uses all GPUs). Sequential validation is required.
 
 **Resource constraints**:
+
 - 4x MI100 @ 32GB each = 128GB total VRAM (all consumed by one TP=4 instance)
 - 64GB system RAM (vLLM workers use ~16GB total)
 - Benchmark scripts are lightweight (curl/Python)
