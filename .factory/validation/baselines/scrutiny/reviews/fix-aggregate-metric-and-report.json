@@ -1,0 +1,49 @@
+{
+  "featureId": "fix-aggregate-metric-and-report",
+  "reviewedAt": "2026-03-29T18:00:00Z",
+  "milestone": "baselines",
+  "reviewRound": 2,
+  "fixForFeature": "run-baseline-benchmarks",
+  "status": "pass",
+  "fixAssessment": {
+    "originalIssueAddressed": true,
+    "addressedExplanation": "The blocking bug from round 1 is confirmed fixed in /root/benchmark-scripts/coding_agent_bench.py. Line 392-396 now correctly computes aggregate_decode_tok_per_s = total_decode_tokens / wall_clock_seconds where wall_clock_seconds = end_time - start_time (wall clock time). The corrected Qwen3.5-9B baseline-report.json shows aggregate values scaling correctly with concurrency: c1=21.39 tok/s, c2=41.71 tok/s (~2x), c4=82.73 tok/s (~4x). This is the correct behavior.",
+    "remainingConcerns": [
+      "Llama-2-7b-hf coding agent benchmarks were NOT re-run with the fixed script. The baseline-report.json shows Llama-2-7b-hf coding_agent data with wall_clock_seconds=0 and aggregate=avg (c1=36.1, c2=36.01, c4=36.06 - same value across all concurrency levels), indicating the old pre-fix data is still used. No _fixed.json files exist for Llama-2-7b-hf in /root/benchmark-results/.",
+      "The library document at .factory/library/environment.md still contains the stale 'Known metric issue' note describing the bug as if it were unfixed, even though the fix is now in place."
+    ]
+  },
+  "issues": [
+    {
+      "severity": "non_blocking",
+      "description": "Llama-2-7b-hf coding agent benchmarks in baseline-report.json still use pre-fix data. The report shows wall_clock_seconds=0 and aggregate_decode_tok_per_s equals avg_decode_tok_per_s at all concurrency levels (c1=36.10, c2=36.01, c4=36.06), clearly showing the old buggy calculation. The worker noted this in discoveredIssues: 'Llama-2-7b-hf benchmark files still have the old aggregate bug - no _fixed.json files exist for this model.'",
+      "location": "/root/benchmark-results/baseline-report.json (Llama-2-7b-hf section)",
+      "suggestedFix": "Re-run coding_agent_bench.py for Llama-2-7b-hf at concurrency 1, 2, 4 and update baseline-report.json with correct aggregate metrics."
+    },
+    {
+      "severity": "non_blocking",
+      "description": "The library document .factory/library/environment.md contains a stale 'Known metric issue' note: '**Known metric issue**: aggregate_decode_tok_per_s in coding_agent_bench.py uses sum(per-request decode times) as denominator...' This bug has been fixed and the note is now misleading for future optimization workers who will read this document to understand the baseline.",
+      "location": ".factory/library/environment.md (Benchmark Infrastructure section)",
+      "suggestedFix": "Remove or update the 'Known metric issue' bullet to reflect that the fix is in place: aggregate_decode_tok_per_s now correctly uses wall clock time."
+    },
+    {
+      "severity": "non_blocking",
+      "description": "Synthetic benchmark metrics in baseline-report.json show successful_requests=0 and failed_requests=0 for all entries. Reviewing the raw JSON files shows that vllm bench serve outputs 'completed' and 'failed' at top level, not as nested in a 'summary' object with those keys. The generate_baseline_report.py script reads these fields but may be using wrong key paths. The output_throughput_tok_per_s, request_throughput, and total_token_throughput values appear correct, so this is a metric extraction issue for request counts only.",
+      "location": "/root/benchmark-results/baseline-report.json (synthetic metrics successful_requests/failed_requests)",
+      "suggestedFix": "Update generate_baseline_report.py to correctly extract 'completed' and 'failed' from the vllm bench serve JSON output (top-level keys, not 'successful_requests'/'failed_requests')."
+    }
+  ],
+  "sharedStateObservations": [
+    {
+      "target": "library",
+      "observation": "The 'Known metric issue' bullet in .factory/library/environment.md under 'Benchmark Infrastructure' is now stale and should be replaced with a note confirming the fix: 'aggregate_decode_tok_per_s correctly uses wall clock time since 2026-03-29 fix. Qwen3.5-9B baselines: c1=21.4 tok/s, c2=41.7 tok/s, c4=82.7 tok/s.'",
+      "rationale": "Future optimization workers will read this library entry to understand the baseline. The stale bug note will cause confusion about whether the metric is reliable."
+    },
+    {
+      "target": "library",
+      "observation": "Llama-2-7b-hf coding agent aggregate throughput baselines are unreliable (show old pre-fix data: aggregate=avg=36 tok/s at all concurrency levels, wall_clock=0). Optimization workers comparing Llama-2-7b-hf results cannot trust the coding agent aggregate metric from the current baseline-report.json. Synthetic benchmarks for Llama-2-7b-hf are correct (output_throughput_tok_per_s scales: c1=239, c2=448, c4=801 tok/s).",
+      "rationale": "If an optimization worker compares Llama-2-7b-hf coding agent aggregate throughput against baseline, they will use incorrect baseline values, potentially causing false regressions or false improvements."
+    }
+  ],
+  "summary": "Feature PASS. The primary blocking issue (aggregate_decode_tok_per_s bug in coding_agent_bench.py) is confirmed fixed and Qwen3.5-9B baseline data is correct. Two non-blocking issues remain: (1) Llama-2-7b-hf coding agent benchmarks were not re-run so baseline-report.json still has incorrect aggregate values for that model, and (2) the library document has a stale bug note. The main mission goal — establishing a valid Qwen3.5-9B baseline for optimization comparisons — is satisfied."
+}

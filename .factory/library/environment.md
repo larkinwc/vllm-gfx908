@@ -55,5 +55,6 @@ export VLLM_ROCM_USE_SKINNY_GEMM=0     # wvSplitK is MI300X-only
 - Scripts: `/root/benchmark-scripts/` (run_synthetic_bench.sh, coding_agent_bench.py, run_all_baselines.sh, compare_results.py)
 - Results: `/root/benchmark-results/` (JSON benchmark files + GPU stats .txt files)
 - Requires `aiohttp` for coding_agent_bench.py (`/opt/vllm-env/bin/pip install aiohttp`)
-- **Known metric issue**: `aggregate_decode_tok_per_s` in coding_agent_bench.py uses sum(per-request decode times) as denominator, NOT wall clock time. For concurrency > 1 this is per-user throughput, NOT system aggregate. True aggregate = total_decode_tokens / wall_clock_time_s.
-- GPU VRAM utilization: ~93% per GPU for Qwen3.5-9B with max-model-len=32768, TP=4
+- `aggregate_decode_tok_per_s` in coding_agent_bench.py correctly uses wall clock time (`total_decode_tokens / wall_clock_seconds`). Qwen3.5-9B baselines: c1=21.4 tok/s, c2=41.7 tok/s, c4=82.7 tok/s (scales ~4x with concurrency as expected).
+- **Note**: Llama-2-7b-hf coding agent benchmarks in baseline-report.json use pre-fix data (wall_clock_seconds=0, aggregate=avg at all concurrency levels). Re-run required for reliable Llama-2-7b-hf coding agent baselines.
+- GPU VRAM utilization: ~93% per GPU for both Qwen3.5-9B (max-model-len=32768) and Llama-2-7b-hf (max-model-len=4096), TP=4
