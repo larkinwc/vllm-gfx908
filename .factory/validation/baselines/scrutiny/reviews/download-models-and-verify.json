@@ -1,0 +1,33 @@
+{
+  "featureId": "download-models-and-verify",
+  "reviewedAt": "2026-03-29T17:00:00Z",
+  "commitId": "49a3c900d",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The feature delivered exactly what was required: downloaded NousResearch/Llama-2-7b-hf FP16 to /models/Llama-2-7b-hf, verified both Qwen3.5-9B and Llama-2-7b-hf models load and respond with TP=4, and updated model-verification.json with comprehensive quantization feasibility documentation. The commit (49a3c900d) only contains mission infrastructure files (.factory/) and no vLLM code changes, which is appropriate since the feature was about operations (download + verify) rather than code modification. The model-verification.json is complete with quantization_feasibility section documenting GPTQ/AWQ limitations on ROCm and FP8 emulation path.",
+    "issues": [
+      {
+        "file": "/root/benchmark-results/model-verification.json",
+        "line": null,
+        "severity": "non_blocking",
+        "description": "The max_model_len_used for Qwen3.5-9B in the verification file is 8192, but the baseline benchmark feature uses --max-model-len 32768. The verification log notes 8192 as the test value but the actual production config differs. This inconsistency is cosmetic (the model was re-verified during benchmark runs) but could confuse future workers."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "library",
+      "observation": "The model-verification.json documents that INT4 AWQ via ExllamaLinearKernel (used by Qwen3.5-27B-AWQ-BF16-INT4) may work on ROCm, but this was not verified. The library/environment.md lists the AWQ-BF16-INT4 model as present but the architecture.md is silent on ExllamaLinearKernel support. If TurboQuant or quantization workers need this info, it should be in library/architecture.md.",
+      "evidence": "model-verification.json quantization_feasibility.int4_awq_exllama shows 'POTENTIAL_SUPPORT' with 'not tested in this session'. library/architecture.md does not mention ExllamaLinearKernel."
+    },
+    {
+      "area": "knowledge",
+      "observation": "Llama-2-7b-hf has max_position_embeddings=4096, so --max-model-len must be set to 4096 or less. This constraint was discovered during verification (the feature tried 8192 first). This fact should be in the library so future benchmark workers can set the correct max-model-len immediately.",
+      "evidence": "Handoff discoveredIssues: 'Llama-2-7b-hf has max_position_embeddings=4096, limiting context length'. The AGENTS.md mission boundary was later updated (in run-baseline-benchmarks feature) to document 4096 as the limit, but library/environment.md still lists 'Llama-2-7B to be downloaded' without the 4096 constraint."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Feature passed. Both FP16 models were downloaded and verified successfully. The model-verification.json is complete with quantization feasibility documentation meeting VAL-BASE-003 and VAL-BASE-004. The only concern is a minor inconsistency in documented max_model_len (8192 in verification log vs 32768 used in benchmarks for Qwen3.5-9B), which is non-blocking."
+}

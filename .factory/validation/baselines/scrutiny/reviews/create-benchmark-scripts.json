@@ -1,0 +1,56 @@
+{
+  "featureId": "create-benchmark-scripts",
+  "reviewedAt": "2026-03-29T17:00:00Z",
+  "commitId": "666b1ae18",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The feature created all 4 required benchmark scripts in /root/benchmark-scripts/. The scripts are well-structured, follow project conventions (using /opt/vllm-env/bin/python3, outputting JSON to /root/benchmark-results/, including required MI100 env vars), and were verified working with a dry-run on Qwen3.5-9B. The commit (666b1ae18) adds 3 benchmark commands to .factory/services.yaml following the existing manifest schema. The coding_agent_bench.py uses aiohttp for streaming, measures TTFT/TPOT/decode_tok_per_s correctly. The compare_results.py handles multiple result types. However, there are a few minor issues worth noting.",
+    "issues": [
+      {
+        "file": "/root/benchmark-scripts/coding_agent_bench.py",
+        "line": 30,
+        "severity": "non_blocking",
+        "description": "Hard dependency on 'aiohttp' with sys.exit(1) if not found. This is fine for a standalone script but the package is not listed in requirements/test.txt and not mentioned in AGENTS.md. Future workers running this script in a fresh environment may get an unexpected failure. The script itself has a helpful error message, so the UX is acceptable."
+      },
+      {
+        "file": "/root/benchmark-scripts/run_synthetic_bench.sh",
+        "line": null,
+        "severity": "non_blocking",
+        "description": "The run_synthetic_bench.sh does not explicitly set the --model-id flag, so the model ID in vllm bench serve output defaults to the model path. This creates an inconsistency with compare_results.py which tries to extract 'model' or 'model_id' from results. The benchmark ran successfully so this works in practice but could cause confusion when comparing results by model name."
+      },
+      {
+        "file": "/root/benchmark-scripts/run_all_baselines.sh",
+        "line": 32,
+        "severity": "non_blocking",
+        "description": "The Llama-2-7b-hf chat template path is hardcoded as '/root/vllm-gfx908-src/vllm/transformers_utils/chat_templates/template_llama2.jinja'. This path is only valid if vLLM is installed from /root/vllm-gfx908-src. If the template is moved or vLLM is installed elsewhere, this path will fail silently when the server starts without the template. The path works correctly in current environment since vLLM is editable-installed from /root/vllm-gfx908-src, and the template file exists there as an untracked file."
+      },
+      {
+        "file": "/root/benchmark-scripts/compare_results.py",
+        "line": 25,
+        "severity": "non_blocking",
+        "description": "Optional dependency on 'tabulate' with fallback to basic formatting when not installed. This is a reasonable approach for a standalone utility script."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "services",
+      "observation": "The services.yaml benchmark-coding-agent command is missing the model path and other required arguments. The command '/opt/vllm-env/bin/python3 /root/benchmark-scripts/coding_agent_bench.py' requires --model, --concurrency, etc. as arguments, so it cannot run standalone from the command entry. This is acceptable since services.yaml commands document the base executable, but future workers should know to append arguments.",
+      "evidence": ".factory/services.yaml line: 'benchmark-coding-agent: /opt/vllm-env/bin/python3 /root/benchmark-scripts/coding_agent_bench.py' - running this directly without args will show help/error"
+    },
+    {
+      "area": "knowledge",
+      "observation": "The aiohttp package is required by coding_agent_bench.py but was not added to any requirements file and is not documented anywhere. Future workers who need to run coding agent benchmarks should know aiohttp must be installed. Currently it's installed in /opt/vllm-env but this isn't documented.",
+      "evidence": "coding_agent_bench.py lines 29-31: 'try: import aiohttp' with sys.exit(1) fallback"
+    },
+    {
+      "area": "skills",
+      "observation": "The benchmark-worker skill documents creating scripts as step 5 but doesn't specify whether scripts should be in /root/benchmark-scripts/ or in the repo's benchmarks/ directory. The worker correctly used /root/benchmark-scripts/ (matching AGENTS.md), but the skill itself doesn't call this out clearly. skillFeedback.followedProcedure=true with no deviations.",
+      "evidence": "Skill SKILL.md step 5: 'Create benchmark scripts in /root/benchmark-scripts/' - this is documented but AGENTS.md line 'Benchmark scripts go to /root/benchmark-scripts/' also confirms it, so it's consistent."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Feature passed. All 4 benchmark scripts were created correctly and verified working. The services.yaml update follows the manifest schema. Minor concerns: hardcoded template path in run_all_baselines.sh, missing documentation for aiohttp dependency, and model ID inconsistency between synthetic bench output and compare_results.py. None of these issues affect correctness for the current environment."
+}

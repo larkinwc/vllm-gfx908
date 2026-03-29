@@ -46,5 +46,14 @@ export VLLM_ROCM_USE_SKINNY_GEMM=0     # wvSplitK is MI300X-only
 ## Models
 
 - `/models/Qwen3.5-27B-AWQ-BF16-INT4` (27GB, currently deployed)
-- Qwen3.5-9B to be downloaded (FP16 ~18GB + INT4 variant)
-- Llama-2-7B to be downloaded (FP16 ~13GB + INT4 variant)
+- `/models/Qwen3.5-9B` (FP16 ~19GB, downloaded and verified; use `--max-model-len 32768 --language-model-only`)
+- `/models/Llama-2-7b-hf` (FP16 ~13GB, NousResearch mirror; **max_position_embeddings=4096**, use `--max-model-len 4096`; requires `--chat-template /root/vllm-gfx908-src/vllm/transformers_utils/chat_templates/template_llama2.jinja`)
+- INT4 models (GPTQ, AWQ compressed-tensors) are NOT supported on MI100/ROCm — see `model-verification.json` quantization_feasibility section for details
+
+## Benchmark Infrastructure
+
+- Scripts: `/root/benchmark-scripts/` (run_synthetic_bench.sh, coding_agent_bench.py, run_all_baselines.sh, compare_results.py)
+- Results: `/root/benchmark-results/` (JSON benchmark files + GPU stats .txt files)
+- Requires `aiohttp` for coding_agent_bench.py (`/opt/vllm-env/bin/pip install aiohttp`)
+- **Known metric issue**: `aggregate_decode_tok_per_s` in coding_agent_bench.py uses sum(per-request decode times) as denominator, NOT wall clock time. For concurrency > 1 this is per-user throughput, NOT system aggregate. True aggregate = total_decode_tokens / wall_clock_time_s.
+- GPU VRAM utilization: ~93% per GPU for Qwen3.5-9B with max-model-len=32768, TP=4
