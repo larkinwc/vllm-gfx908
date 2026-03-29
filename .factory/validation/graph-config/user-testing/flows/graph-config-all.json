@@ -1,0 +1,102 @@
+{
+  "flowId": "graph-config-all",
+  "milestone": "graph-config",
+  "testedAssertions": [
+    "VAL-GRAPH-001",
+    "VAL-GRAPH-002",
+    "VAL-GRAPH-003",
+    "VAL-GRAPH-004",
+    "VAL-GRAPH-005",
+    "VAL-GRAPH-006",
+    "VAL-GRAPH-007"
+  ],
+  "tool": "curl + python scripts + vllm bench serve",
+  "isolationContext": {
+    "model": "/models/Qwen3.5-9B",
+    "port": 8000,
+    "tensorParallel": 4,
+    "graphMode": "FULL_DECODE_ONLY"
+  },
+  "results": {
+    "VAL-GRAPH-001": {
+      "status": "pass",
+      "evidence": "Server started with --compilation-config '{\"cudagraph_mode\":\"FULL_DECODE_ONLY\"}' and NO --enforce-eager flag. enforce_eager=False confirmed in engine init log. Health check GET /health returned 200 OK. Chat completion POST /v1/chat/completions returned 200 with coherent text: 'This is a straightforward task. I need to write a simple Python function...'",
+      "evidenceFile": "/root/benchmark-results/server_val_config_tuned_20260329_133659.log"
+    },
+    "VAL-GRAPH-002": {
+      "status": "pass",
+      "evidence": "Server log confirms cudagraph_mode: <CUDAGraphMode.FULL_DECODE_ONLY: (2, 0)> in compilation_config. Log shows 'Capturing CUDA graphs (decode, FULL): 100% 35/35' completing successfully. 'Graph capturing finished in 30 secs, took 0.16 GiB'. FULL_DECODE_ONLY mode explicitly activated.",
+      "evidenceFile": "/root/benchmark-results/server_val_config_tuned_20260329_133659.log"
+    },
+    "VAL-GRAPH-003": {
+      "status": "pass",
+      "evidence": "Graph c1 benchmark (FULL_DECODE_ONLY, request_rate=1.0): output_throughput=248.21 tok/s. Baseline eager c1 benchmark: output_throughput=228.28 tok/s. Ratio: 248.21/228.28=1.087 (108.7% of baseline). Threshold: >= 95% of baseline (>=216.87 tok/s). PASS: 248.21 >= 216.87.",
+      "metrics": {
+        "graph_output_throughput_c1": 248.21,
+        "baseline_output_throughput_c1": 228.28,
+        "ratio_pct": 108.7,
+        "threshold_pct": 95
+      },
+      "evidenceFile": "/root/benchmark-results/graph_full_decode_only_c1_20260329_125027.json"
+    },
+    "VAL-GRAPH-004": {
+      "status": "pass",
+      "evidence": "stability_test_config_tuned.json: 100 requests across 4 concurrent users, all 100 succeeded (success_rate=1.0), 0 failed, no crashes or OOM. Wall clock: 92.57s. Avg TTFT: 287.78ms. No HTTP 5xx errors, no server restart needed.",
+      "metrics": {
+        "total_requests": 100,
+        "successful_requests": 100,
+        "failed_requests": 0,
+        "success_rate": 1.0
+      },
+      "evidenceFile": "/root/benchmark-results/stability_test_config_tuned.json"
+    },
+    "VAL-GRAPH-005": {
+      "status": "pass",
+      "evidence": "Live test: Request 1 (cache miss) TTFT=4316ms, Request 2 (cache hit, same system prompt) TTFT=625ms, ratio=0.145 (<= 0.80 threshold). Prior test (prefix_caching_test.json): First TTFT=15622ms, Second TTFT=137ms, ratio=0.009. Both confirm cache hit reduces TTFT to <= 80% of cache miss TTFT.",
+      "metrics": {
+        "live_ttft_request1_ms": 4316,
+        "live_ttft_request2_ms": 625,
+        "live_ttft_ratio": 0.145,
+        "prior_ttft_request1_ms": 15622,
+        "prior_ttft_request2_ms": 137,
+        "prior_ttft_ratio": 0.009,
+        "threshold": 0.80
+      },
+      "evidenceFile": "/root/benchmark-results/prefix_caching_test.json"
+    },
+    "VAL-GRAPH-006": {
+      "status": "pass",
+      "evidence": "Live VRAM check with --max-model-len 32768: GPU[0]=29.76GB/31.98GB (93.0%), GPU[1]=29.80GB (93.2%), GPU[2]=29.82GB (93.2%), GPU[3]=29.80GB (93.2%). Default max-model-len=262144 would require 8x more KV cache memory, resulting in OOM on MI100 (32GB VRAM). Reduced max-model-len frees ~87.5% of KV cache memory versus the maximum context, enabling the server to run at all on MI100.",
+      "metrics": {
+        "max_model_len_tested": 32768,
+        "vram_used_pct_gpu0": 93.0,
+        "vram_total_gb": 31.98,
+        "vram_used_gb": 29.76,
+        "default_max_model_len": 262144,
+        "reduction_factor": 8
+      }
+    },
+    "VAL-GRAPH-007": {
+      "status": "pass",
+      "evidence": "Config-tuned (FULL_DECODE_ONLY + prefix-caching + max-model-len 32768) at c2: output_throughput=478.10 tok/s. Baseline eager at c2: output_throughput=411.87 tok/s. Improvement: +16.1% (478.10 > 411.87). Threshold: > 0% improvement. PASS.",
+      "metrics": {
+        "config_tuned_output_throughput_c2": 478.10,
+        "baseline_output_throughput_c2": 411.87,
+        "improvement_pct": 16.1,
+        "threshold": "> 0%"
+      },
+      "evidenceFile": "/root/benchmark-results/config_tuned_synthetic_c2_20260329_131821.json"
+    }
+  },
+  "summary": {
+    "total": 7,
+    "passed": 7,
+    "failed": 0,
+    "blocked": 0
+  },
+  "frictions": [
+    "First launch attempt with launch_graphs.sh failed: worker process died due to hitting large batch size during warmup. Resolved by using TORCH_COMPILE_DISABLE=1 and starting fresh."
+  ],
+  "blockers": [],
+  "toolsUsed": ["curl", "python3 urllib", "vllm bench serve", "rocm-smi"]
+}
