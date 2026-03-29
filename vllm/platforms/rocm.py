@@ -146,9 +146,10 @@ _GCN_ARCH = _get_gcn_arch()
 
 _ON_GFX1X = any(arch in _GCN_ARCH for arch in ["gfx11", "gfx12"])
 _ON_MI3XX = any(arch in _GCN_ARCH for arch in ["gfx942", "gfx950"])
-_ON_GFX9 = any(arch in _GCN_ARCH for arch in ["gfx90a", "gfx942", "gfx950"])
+_ON_GFX9 = any(arch in _GCN_ARCH for arch in ["gfx908", "gfx90a", "gfx942", "gfx950"])
 _ON_GFX942 = "gfx942" in _GCN_ARCH
 _ON_GFX950 = "gfx950" in _GCN_ARCH
+_ON_MI100 = "gfx908" in _GCN_ARCH
 
 
 def _capability_from_gcn_arch(gcn_arch: str) -> tuple[int, int] | None:
@@ -237,6 +238,10 @@ def on_gfx9() -> bool:
 def on_gfx942() -> bool:
     return _ON_GFX942
 
+
+def on_mi100() -> bool:
+    """Detect MI100 (gfx908) which lacks native FP8 hardware."""
+    return _ON_MI100
 
 def on_gfx950() -> bool:
     return _ON_GFX950
