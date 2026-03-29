@@ -66,3 +66,15 @@ export VLLM_ROCM_USE_SKINNY_GEMM=0     # wvSplitK is MI300X-only
 - TORCH_COMPILE_DISABLE=1 is still required with graph mode on gfx908; FULL_DECODE_ONLY does NOT use torch.compile/inductor
 - Piecewise graph compilation on gfx908: not yet tested; only FULL_DECODE_ONLY has been validated
 - Optimized launch script: `/root/benchmark-scripts/launch-config-tuned.sh` (graph mode + prefix caching + max-model-len 32768)
+
+## MTP Speculative Decoding Notes
+
+- **MTP is NOT recommended on MI100 (gfx908)**: incompatible with HIP graph mode (RuntimeError: cancelled during graph capture)
+- Enabling MTP forces eager mode, which eliminates the 68-72% TPOT improvement from graph mode
+- MTP eager n=1 shows -25.7% throughput vs baseline eager (15.90 vs 21.39 tok/s at c1); acceptance rate ~85%
+- MTP eager n=2/3 shows -42% to -45% throughput regression with further diminishing acceptance rates
+- Best performance on MI100: FULL_DECODE_ONLY graph mode + prefix caching WITHOUT MTP (+16% throughput, -68% TPOT vs baseline)
+- If MTP is required: use `--enforce-eager --speculative-config '{"method":"mtp","num_speculative_tokens":1}'`
+- MTP VRAM overhead is acceptable: 90.3% VRAM usage, stable at 4 concurrent users (52/52 requests pass)
+- Launch script: `/root/benchmark-scripts/launch-mtp.sh` (use `--enforce-eager` flag on MI100)
+- Detailed results: `.factory/library/mtp-results.md` and `/root/benchmark-results/mtp_results.json`
