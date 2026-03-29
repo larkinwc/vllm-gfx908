@@ -15,7 +15,7 @@ export VLLM_ROCM_USE_AITER=1
 export PATH=/opt/rocm/core-7.12/bin:$PATH
 export ROCM_PATH=/opt/rocm/core-7.12
 export PYTORCH_ROCM_ARCH=gfx908
-export TORCH_COMPILE_DISABLE=1          # May be removable with graph mode work
+export TORCH_COMPILE_DISABLE=1          # Must keep even in graph mode (avoids gfx908 cluster_dims error)
 export VLLM_ROCM_USE_SKINNY_GEMM=0     # wvSplitK is MI300X-only
 ```
 
@@ -58,3 +58,11 @@ export VLLM_ROCM_USE_SKINNY_GEMM=0     # wvSplitK is MI300X-only
 - `aggregate_decode_tok_per_s` in coding_agent_bench.py correctly uses wall clock time (`total_decode_tokens / wall_clock_seconds`). Qwen3.5-9B baselines: c1=21.4 tok/s, c2=41.7 tok/s, c4=82.7 tok/s (scales ~4x with concurrency as expected).
 - **Note**: Llama-2-7b-hf coding agent benchmarks in baseline-report.json use pre-fix data (wall_clock_seconds=0, aggregate=avg at all concurrency levels). Re-run required for reliable Llama-2-7b-hf coding agent baselines.
 - GPU VRAM utilization: ~93% per GPU for both Qwen3.5-9B (max-model-len=32768) and Llama-2-7b-hf (max-model-len=4096), TP=4
+
+## HIP Graph Mode Notes
+
+- Graph mode server startup: ~100 seconds (vs ~60s for enforce-eager). Health check / readiness probes must use timeout >= 120s.
+- FULL_DECODE_ONLY graph memory overhead: 0.16 GiB (35 graph sizes captured)
+- TORCH_COMPILE_DISABLE=1 is still required with graph mode on gfx908; FULL_DECODE_ONLY does NOT use torch.compile/inductor
+- Piecewise graph compilation on gfx908: not yet tested; only FULL_DECODE_ONLY has been validated
+- Optimized launch script: `/root/benchmark-scripts/launch-config-tuned.sh` (graph mode + prefix caching + max-model-len 32768)

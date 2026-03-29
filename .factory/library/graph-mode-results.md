@@ -101,6 +101,8 @@ Additional optimizations enabled on top of graph mode:
 
 - 100 requests at 4 concurrent users: 100/100 passed
 - No crashes, OOM, or HTTP 5xx errors
+- Aggregate decode throughput at c4: 276.22 tok/s (wall clock)
+- Avg TTFT at c4: 287.78 ms, Avg TPOT: 11.4 ms
 
 ## Files
 

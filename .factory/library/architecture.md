@@ -7,25 +7,30 @@
 ## vLLM Architecture on MI100
 
 ### Attention Backends
+
 - **TRITON_ATTN**: Pure Triton-based attention, works on all ROCm GPUs including gfx908. Supports ALWAYS cudagraph compatibility. This is the primary backend for MI100.
 - **ROCM_ATTN**: Legacy 2-path backend (Triton prefill + HIP paged attention decode). Supports custom paged attention on gfx9 family including gfx908.
 - **ROCM_AITER_FA / ROCM_AITER_MLA**: AITER-based backends for MI300X+ (gfx942/gfx950) only. NOT available on MI100.
 
 ### MI100 Constraints
+
 - No native FP8 hardware (CDNA1 limitation)
 - `VLLM_ROCM_USE_SKINNY_GEMM=0` required (wvSplitK kernels are MI300X-only)
 - `VLLM_ROCM_USE_AITER=1` enables Triton-based AITER ops that DO work on gfx908
 - torch.compile/inductor has `KernelMetadata.cluster_dims` error on gfx908
-- Currently runs with `--enforce-eager` and `TORCH_COMPILE_DISABLE=1`
+- Originally ran with `--enforce-eager` and `TORCH_COMPILE_DISABLE=1`; now FULL_DECODE_ONLY graph mode is used
 
 ### CUDA/HIP Graph Modes (vLLM v1)
-- NONE: No graphs (current mode via enforce-eager)
-- PIECEWISE: Attention stays eager, everything else in graph (requires piecewise compilation)
-- FULL_DECODE_ONLY: Full graph for decode only, no graph for prefill
-- FULL_AND_PIECEWISE: Full for decode, piecewise for prefill (most performant but most memory)
-- Key question: Can piecewise compilation work on gfx908 even without full inductor support?
+
+- NONE: No graphs (via --enforce-eager)
+- PIECEWISE: Attention stays eager, everything else in graph (requires piecewise compilation) — NOT tested on gfx908
+- FULL_DECODE_ONLY: Full graph for decode only, no graph for prefill — **VERIFIED WORKING on gfx908** (MI100 milestone 2)
+- FULL_AND_PIECEWISE: Full for decode, piecewise for prefill (most performant but most memory) — NOT tested on gfx908
+- TORCH_COMPILE_DISABLE=1 is still required with FULL_DECODE_ONLY on gfx908 (graph capture does not use inductor)
+- Piecewise compatibility on gfx908: still unknown (skipped in favor of FULL_DECODE_ONLY which worked immediately)
 
 ### Model Architecture: Qwen3.5-9B
+
 - Hybrid attention: 8 full-attention + 24 linear-attention layers (32 total)
 - full_attention_interval: 4 (every 4th layer is full attention)
 - head_dim: 256, num_attention_heads: 16, num_key_value_heads: 4 (GQA 4:1)
@@ -35,11 +40,13 @@
 - Vision encoder present but we use --language-model-only
 
 ### Key Data Flows
+
 1. **Request** → Scheduler → Model Runner → QKV Projection → Attention Backend → Sampling → Response
 2. **KV Cache**: Paged block allocation, stored per-layer. Full-attention layers use standard KV cache. Linear-attention layers use their own cache format.
 3. **TP=4**: Model sharded across 4 GPUs via XGMI. All-reduce for attention heads, expert parallelism for MoE (N/A for 9B).
 
 ### TurboQuant Integration Points
+
 - Monkey-patches vLLM attention layers after initialization
 - Captures KV entries during prefill, quantizes them (3-bit keys via MSE+QJL, 2-bit values via group quant)
 - Frees original KV cache after quantization
@@ -48,6 +55,7 @@
 - Uses Triton kernels for fused decode attention (should work on ROCm but untested)
 
 ### MTP (Multi-Token Prediction)
+
 - Native to Qwen3.5 models (mtp_num_hidden_layers=1)
 - Predicts 1 extra token per step, verified against actual generation
 - Reduces effective TPOT by ~30-50% when acceptance rate is high
@@ -55,6 +63,7 @@
 - Compatible with enforce-eager; compatibility with graph modes TBD
 
 ## File Locations
+
 - vLLM source: `/root/vllm-gfx908-src` (also at worktree path)
 - vLLM env: `/opt/vllm-env/`
 - Models: `/models/`
