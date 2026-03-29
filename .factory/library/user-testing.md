@@ -86,3 +86,51 @@ Rationale: Testing involves starting/stopping vLLM servers which consume all 4 G
 - 64GB system RAM (vLLM workers use ~16GB total)
 - Benchmark scripts are lightweight (curl/Python)
 - GPU monitoring via rocm-smi is negligible overhead
+
+## Flow Validator Guidance: combined
+
+All combined milestone assertions are tested sequentially by a single flow validator (max concurrency=1).
+
+### Assertions Covered
+
+1. **VAL-COMBO-001**: Start vLLM with full optimized config (graph + prefix-caching + tuned params), check health. Use `/root/launch-vllm-optimized.sh`.
+2. **VAL-COMBO-002**: Run `vllm bench serve` at c=2 vs baseline decode tok/s from `baseline-report.json`. Optimized must exceed baseline.
+3. **VAL-COMBO-003**: Run 200-request sustained load test at 4 concurrent users; all must succeed, VRAM stable. Script: `/root/benchmark-scripts/run_sustained_load_test.py`
+4. **VAL-COMBO-004**: Verify `/root/launch-vllm-optimized.sh` exists, starts server, passes health check within 120s.
+5. **VAL-COMBO-005**: Verify final benchmark report exists at `/root/benchmark-results/final-report.json` with all required fields.
+6. **VAL-COMBO-006**: Run benchmark on Llama-2-7b-hf with optimized config; compare to Llama-2-7B baseline.
+7. **VAL-CROSS-001**: MTP + HIP graphs: Start with BOTH enabled, expect crash or incompatibility; document it.
+8. **VAL-CROSS-002**: Prefix caching + MTP: Both enabled in eager mode; second request TTFT <= 80% of first.
+9. **VAL-CROSS-003**: TurboQuant + MTP: Both disabled on MI100; document incompatibility.
+10. **VAL-CROSS-004**: Server restart: clean shutdown, then restart within 120s.
+11. **VAL-CROSS-005**: Thermal stability: GPU temps < 85°C during 5-min sustained load.
+
+### Key References
+
+- Production launch script: `/root/launch-vllm-optimized.sh`
+- Benchmark scripts: `/root/benchmark-scripts/`
+- Results directory: `/root/benchmark-results/`
+- Baseline report: `/root/benchmark-results/baseline-report.json`
+- Final report (if exists): `/root/benchmark-results/final-report.json`
+- Required env vars: `LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib ROCM_PATH=/opt/rocm/core-7.12 PYTORCH_ROCM_ARCH=gfx908 VLLM_ROCM_USE_SKINNY_GEMM=0 VLLM_ROCM_USE_AITER=1 TORCH_COMPILE_DISABLE=1`
+- Python: `/opt/vllm-env/bin/python3`
+- rocm-smi: `/opt/rocm/core-7.12/bin/rocm-smi`
+
+### CROSS-001 Known Behavior
+
+MTP is documented as incompatible with HIP graph mode on gfx908. Evidence from prior test:
+- Server crashes with `RuntimeError: cancelled during graph capture/warmup`
+- Log file: `/root/benchmark-results/server_mtp_graph_n1_20260329_135239.log`
+- This is expected behavior. CROSS-001 PASSES if: (a) combined start crashes with documented error, OR (b) incompatibility is confirmed documented.
+
+### CROSS-003 Known Behavior
+
+TurboQuant integration is blocked by vLLM v0.18.1 multi-process architecture. Evidence from prior test.
+CROSS-003 PASSES if: The known incompatibility is documented. MTP + TurboQuant both fail on gfx908/vLLM v0.18.1.
+
+### VRAM Monitoring
+
+```bash
+/opt/rocm/core-7.12/bin/rocm-smi --showmeminfo vram
+/opt/rocm/core-7.12/bin/rocm-smi --showtemp --showclocks
+```
