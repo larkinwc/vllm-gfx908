@@ -1,80 +1,42 @@
 # Environment
 
-Environment variables, external dependencies, and setup notes.
-
-**What belongs here:** Required env vars, external API keys/services, dependency quirks, platform-specific notes.
+**What belongs here:** Required env vars, external dependencies, setup notes.
 **What does NOT belong here:** Service ports/commands (use `.factory/services.yaml`).
 
----
+## System
 
-## Required Environment Variables for MI100
+- 4x AMD MI100 (gfx908), 32GB VRAM each
+- 64 CPU cores (AMD EPYC), 62GB RAM
+- ROCm 7.12, Ubuntu 24.04
+- Python 3.12.3 at `/opt/vllm-env/bin/python3`
 
-```bash
-export LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib
-export VLLM_ROCM_USE_AITER=1
-export PATH=/opt/rocm/core-7.12/bin:$PATH
-export ROCM_PATH=/opt/rocm/core-7.12
-export PYTORCH_ROCM_ARCH=gfx908
-export TORCH_COMPILE_DISABLE=1          # Must keep even in graph mode (avoids gfx908 cluster_dims error)
-export VLLM_ROCM_USE_SKINNY_GEMM=0     # wvSplitK is MI300X-only
-```
+## Key Paths
 
-## Python Environment
+- vLLM env: `/opt/vllm-env/`
+- vLLM source (read-only): current worktree
+- TurboQuant: `/opt/turboquant/` (editable install)
+- Models: `/models/Qwen3.5-9B`
+- Benchmark scripts: `/root/benchmark-scripts/`
+- Benchmark results: `/root/benchmark-results/`
+- Production launch: `/root/launch-vllm-optimized.sh`
 
-- Virtual env: `/opt/vllm-env/`
-- Python: 3.12
-- PyTorch: 2.11.0+rocm7.2
-- Triton: pytorch-triton-rocm 3.5.1
-- vLLM: 0.18.1.dev4 installed editable from `/root/vllm-gfx908-src`
+## Environment Variables
 
-## Hardware
-
-- 4x MI100 (gfx908), 32GB HBM2 each, 120 CUs, 1.23 TB/s bandwidth
-- XGMI Infinity Bridge full mesh (1-hop)
-- AMD EPYC 7742 64C/64T
-- 64GB DDR4 system RAM
-- 1.2TB free disk (ZFS on NVMe)
+- `HF_TOKEN=<set via environment variable>`
+- `TORCH_COMPILE_DISABLE=1` (required for gfx908 to avoid torch.compile issues)
+- `VLLM_TORCH_COMPILE_CONFIG` -- set to config path for graph mode
+- `VLLM_USE_V1=1` -- v1 engine (default in 0.18.1)
 
 ## Known Issues
 
-- `TORCH_COMPILE_DISABLE=1` needed to avoid `KernelMetadata.cluster_dims` error
-- `VLLM_ROCM_USE_SKINNY_GEMM=0` needed to avoid MI300X-only kernel crash
-- flashinfer is CUDA-only, must be uninstalled
-- PyTorch ROCm version must match host ROCm major version (use rocm7.2 wheels with ROCm 7.12)
-- Upstream triton (CUDA-only) conflicts with pytorch-triton-rocm
+- TurboQuant's `setup.py` specifies `torch>=2.1` which causes pip to replace ROCm PyTorch with CUDA. Always verify after install.
+- rocm-smi `--all --json` doesn't include temperature; use `--showtemp --json`
+- `tests/distributed/` fails due to pre-existing RANK env var issue
+- Only one vLLM instance at a time (93% VRAM per GPU)
 
-## Models
+## Previous Mission Results (Reference)
 
-- `/models/Qwen3.5-27B-AWQ-BF16-INT4` (27GB, currently deployed)
-- `/models/Qwen3.5-9B` (FP16 ~19GB, downloaded and verified; use `--max-model-len 32768 --language-model-only`)
-- `/models/Llama-2-7b-hf` (FP16 ~13GB, NousResearch mirror; **max_position_embeddings=4096**, use `--max-model-len 4096`; requires `--chat-template /root/vllm-gfx908-src/vllm/transformers_utils/chat_templates/template_llama2.jinja`)
-- INT4 models (GPTQ, AWQ compressed-tensors) are NOT supported on MI100/ROCm — see `model-verification.json` quantization_feasibility section for details
-
-## Benchmark Infrastructure
-
-- Scripts: `/root/benchmark-scripts/` (run_synthetic_bench.sh, coding_agent_bench.py, run_all_baselines.sh, compare_results.py)
-- Results: `/root/benchmark-results/` (JSON benchmark files + GPU stats .txt files)
-- Requires `aiohttp` for coding_agent_bench.py (`/opt/vllm-env/bin/pip install aiohttp`)
-- `aggregate_decode_tok_per_s` in coding_agent_bench.py correctly uses wall clock time (`total_decode_tokens / wall_clock_seconds`). Qwen3.5-9B baselines: c1=21.4 tok/s, c2=41.7 tok/s, c4=82.7 tok/s (scales ~4x with concurrency as expected).
-- **Note**: Llama-2-7b-hf coding agent benchmarks in baseline-report.json use pre-fix data (wall_clock_seconds=0, aggregate=avg at all concurrency levels). Re-run required for reliable Llama-2-7b-hf coding agent baselines.
-- GPU VRAM utilization: ~93% per GPU for both Qwen3.5-9B (max-model-len=32768) and Llama-2-7b-hf (max-model-len=4096), TP=4
-
-## HIP Graph Mode Notes
-
-- Graph mode server startup: ~100 seconds (vs ~60s for enforce-eager). Health check / readiness probes must use timeout >= 120s.
-- FULL_DECODE_ONLY graph memory overhead: 0.16 GiB (35 graph sizes captured)
-- TORCH_COMPILE_DISABLE=1 is still required with graph mode on gfx908; FULL_DECODE_ONLY does NOT use torch.compile/inductor
-- Piecewise graph compilation on gfx908: not yet tested; only FULL_DECODE_ONLY has been validated
-- Optimized launch script: `/root/benchmark-scripts/launch-config-tuned.sh` (graph mode + prefix caching + max-model-len 32768)
-
-## MTP Speculative Decoding Notes
-
-- **MTP is NOT recommended on MI100 (gfx908)**: incompatible with HIP graph mode (RuntimeError: cancelled during graph capture)
-- Enabling MTP forces eager mode, which eliminates the 68-72% TPOT improvement from graph mode
-- MTP eager n=1 shows -25.7% throughput vs baseline eager (15.90 vs 21.39 tok/s at c1); acceptance rate ~85%
-- MTP eager n=2/3 shows -42% to -45% throughput regression with further diminishing acceptance rates
-- Best performance on MI100: FULL_DECODE_ONLY graph mode + prefix caching WITHOUT MTP (+16% throughput, -68% TPOT vs baseline)
-- If MTP is required: use `--enforce-eager --speculative-config '{"method":"mtp","num_speculative_tokens":1}'`
-- MTP VRAM overhead is acceptable: 90.3% VRAM usage, stable at 4 concurrent users (52/52 requests pass)
-- Launch script: `/root/benchmark-scripts/launch-mtp.sh` (use `--enforce-eager` flag on MI100)
-- Detailed results: `.factory/library/mtp-results.md` and `/root/benchmark-results/mtp_results.json`
+- Baseline Qwen3.5-9B: ~228 tok/s at c=1, ~412 tok/s at c=2
+- Optimized (FULL_DECODE_ONLY + prefix cache): ~248 tok/s at c=1, ~478 tok/s at c=2
+- TPOT: 50ms baseline → 14ms optimized (FULL_DECODE_ONLY)
+- TQ Triton kernels: All 3 compile and run on gfx908, 5.22x compression, cos_sim=0.983

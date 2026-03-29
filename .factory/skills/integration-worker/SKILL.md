@@ -1,6 +1,6 @@
 ---
 name: integration-worker
-description: Integrates external libraries (TurboQuant) into vLLM on MI100, handles ROCm compatibility issues
+description: Creates TurboQuant vLLM attention backend, registration, and launch infrastructure
 ---
 
 # Integration Worker
@@ -10,106 +10,172 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 ## When to Use This Skill
 
 Features that involve:
-
-- Installing and integrating external packages with vLLM
-- Porting CUDA/NVIDIA-specific code to ROCm/MI100
-- Debugging Triton kernel compatibility on gfx908
-- TurboQuant KV cache compression integration
-- Creating combined optimization configurations
+- Creating the TurboQuantRocmBackend and TurboQuantRocmImpl classes
+- Registering the backend with vLLM's registry API
+- Creating launch scripts that set up and start vLLM with the TQ backend
+- Implementing capture_only and hybrid decode modes
+- Testing HIP graph compatibility with TQ kernels
+- Quality validation (coding prompts, needle-in-haystack)
 
 ## Required Skills
 
-None
+None.
 
 ## Work Procedure
 
-1. **Read feature requirements** from the assigned feature. Understand the integration target and success criteria.
+### Step 1: Read Context
 
-2. **Prepare environment**:
-   ```bash
-   export LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib
-   export ROCM_PATH=/opt/rocm/core-7.12
-   export PYTORCH_ROCM_ARCH=gfx908
-   export VLLM_ROCM_USE_SKINNY_GEMM=0
-   export VLLM_ROCM_USE_AITER=1
-   ```
+Read these files before starting implementation:
+- `.factory/library/architecture.md` -- system architecture
+- `.factory/library/environment.md` -- env vars, paths
+- `AGENTS.md` -- boundaries, critical technical context
+- `/opt/turboquant/turboquant/integration/vllm.py` -- existing TQ integration (reference for what hooks exist)
+- `/opt/turboquant/turboquant/triton_kernels.py` -- TQ Triton kernels
+- `/opt/turboquant/turboquant/store.py`, `capture.py`, `quantizer.py` -- core TQ components
 
-3. **Clone and install the external package**:
-   - For TurboQuant: `cd /opt && git clone https://github.com/0xSero/turboquant.git && cd turboquant && /opt/vllm-env/bin/pip install -e .`
-   - Verify import: `/opt/vllm-env/bin/python3 -c "import turboquant; print('OK')"`
+Also read vLLM's backend interface:
+- The vLLM worktree's `vllm/v1/attention/backends/rocm_attn.py` -- RocmAttentionBackend and RocmAttentionImpl to extend
+- `vllm/v1/attention/backends/registry.py` -- register_backend API
+- `vllm/v1/attention/backend.py` -- AttentionBackend base class
 
-4. **Test standalone functionality first**:
-   - Run any included tests (e.g., `python validate_paper.py` for TurboQuant)
-   - Check Triton kernel compilation on ROCm: look for compilation errors specific to gfx908
-   - If Triton kernels fail, analyze the error and attempt fixes:
-     a. Check for CUDA-specific Triton features not available on ROCm
-     b. Check for hardcoded GPU architecture assumptions
-     c. Check for unsupported Triton operations on gfx908
+### Step 2: Write Tests First
 
-5. **Integrate with vLLM**:
-   - Follow the package's integration guide (monkey-patching, config flags, etc.)
-   - Start vLLM server with integration enabled
-   - Verify health check and basic functionality
-   - If integration fails, document the failure mode and attempt workarounds
+Before implementing the backend, write test scripts that will validate it:
+- Import test: `turboquant.backends.vllm_rocm` imports cleanly
+- Registration test: `register_backend()` succeeds, CUSTOM resolves to TQ backend
+- Functional test: server starts, health check passes, requests return valid responses
+- If hybrid mode: quality test with 10 coding prompts and needle-in-haystack
 
-6. **Verify quality**:
-   - Send 10 test prompts covering code generation, reasoning, and factual recall
-   - Compare output quality against baseline (no integration)
-   - Run needle-in-haystack test if applicable (context-dependent features)
+Place test scripts at `/root/benchmark-scripts/test_tq_backend_*.py`.
 
-7. **Benchmark the integration**:
-   - Run standard benchmark suite from `/root/benchmark-scripts/`
-   - Measure KV cache savings, throughput changes, memory usage changes
-   - Save results to `/root/benchmark-results/`
+Run each test to confirm it FAILS before implementation (since the backend doesn't exist yet).
 
-8. **Handle failures gracefully**:
-   - If Triton kernels won't compile on ROCm, document the specific errors
-   - If integration causes crashes, isolate the cause
-   - If quality degrades, quantify the degradation
-   - Always ensure the system can fall back to baseline operation
+### Step 3: Implement the Backend
 
-### Critical Notes for TurboQuant on MI100
+Create `/opt/turboquant/turboquant/backends/__init__.py` and `/opt/turboquant/turboquant/backends/vllm_rocm.py`.
 
-- TurboQuant uses Triton kernels that were tested on NVIDIA only
-- pytorch-triton-rocm 3.5.1 may not support all Triton features used
-- Key Triton operations to check: tl.dot, tl.load/store with masks, atomic operations
-- If kernels fail, check if there's a pure-PyTorch fallback path
-- TurboQuant monkey-patches vLLM attention -- ensure the patch targets exist in our vLLM version (0.18.1)
-- Qwen3.5-9B has only 8/32 full-attention layers -- TurboQuant savings will be ~25% max
-- head_dim=256 is supported by TurboQuant (they tested with this dimension)
+**TurboQuantRocmBackend** must:
+- Extend `RocmAttentionBackend` from `vllm.v1.attention.backends.rocm_attn`
+- Override `get_name()` to return "TURBOQUANT_ROCM"
+- Override `get_impl_cls()` to return `TurboQuantRocmImpl`
+- Keep all other class methods delegating to super (kv_cache_shape, head_sizes, etc.)
+
+**TurboQuantRocmImpl** must:
+- Extend `RocmAttentionImpl`
+- In `__init__`: create per-layer TQ state (CompressedKVStore, KVCaptureEngine)
+- Override `do_kv_cache_update()`: call super() for standard paged cache, then capture K/V into TQ store
+- Override `forward()`:
+  - In capture_only mode: always delegate to super().forward()
+  - In hybrid mode: use TQ hybrid decode for decode tokens (when compressed store has enough history), fall back to super() for prefill
+
+**Critical implementation details:**
+- Layer index tracking: use a class-level counter in `__init__` (increment per instance)
+- Mode control: use environment variable `TURBOQUANT_MODE` (capture_only | hybrid) read at init time
+- Head dim for Qwen3.5-9B: 256 (from `self.head_size` in RocmAttentionImpl)
+- num_kv_heads: from `self.num_kv_heads` in RocmAttentionImpl
+- Device: from the tensors passed to forward/do_kv_cache_update
+
+### Step 4: Create Launch Script
+
+Create `/root/benchmark-scripts/launch-tq-backend.sh` that:
+1. Registers the TQ backend before starting vLLM
+2. Starts vLLM with `--attention-backend CUSTOM` (or equivalent)
+3. Configures TQ mode via environment variable
+4. Handles all MI100-specific settings (TORCH_COMPILE_DISABLE=1, etc.)
+
+The launch script should be a Python wrapper that:
+```python
+from vllm.v1.attention.backends.registry import register_backend, AttentionBackendEnum
+register_backend(AttentionBackendEnum.CUSTOM, "turboquant.backends.vllm_rocm.TurboQuantRocmBackend")
+# Then start vLLM engine
+```
+
+### Step 5: Run Tests and Verify
+
+1. Run all test scripts to verify they PASS
+2. Start server with TQ backend, send test requests via curl
+3. For capture_only: verify output matches baseline
+4. For hybrid: verify output quality (coherent, syntactically valid)
+5. Check server logs for TQ-specific messages (layer initialization, compression stats)
+6. Verify no VRAM leaks: check rocm-smi before and after serving 20 requests
+
+### Step 6: Manual Verification
+
+- Start the server manually, send 3 diverse prompts via curl, verify responses make sense
+- Check TQ stats in logs or via diagnostic output
+- If graph mode: verify graph capture count in logs
+- Stop server cleanly, verify no orphaned processes
 
 ## Example Handoff
 
 ```json
 {
-  "salientSummary": "Installed TurboQuant from 0xSero/turboquant. Paper validation tests passed (9/9). Triton kernels compiled on ROCm gfx908 after fixing one tl.atomic_add incompatibility. vLLM integration via monkey-patch works -- KV cache compressed on 8 full-attention layers. Measured 22% KV cache reduction, needle-in-haystack passes at 8k context. Decode tok/s unchanged (within 2% of baseline).",
-  "whatWasImplemented": "Cloned turboquant to /opt/turboquant, installed in vllm-env. Fixed triton_kernels.py line 142: replaced tl.atomic_add with tl.store for ROCm compatibility. Created /root/benchmark-scripts/launch-turboquant.sh with TurboQuant integration. Results in /root/benchmark-results/turboquant-qwen35-9b.json.",
+  "salientSummary": "Created TurboQuantRocmBackend extending RocmAttentionBackend with capture_only mode. Backend registers via register_backend(CUSTOM), server starts on port 8000, all 5 test requests return identical output to baseline. 8 TQ layers initialized for Qwen3.5-9B full-attention layers, 24 linear layers use standard GDN backend.",
+  "whatWasImplemented": "Created /opt/turboquant/turboquant/backends/vllm_rocm.py with TurboQuantRocmBackend and TurboQuantRocmImpl. Created /root/benchmark-scripts/launch-tq-backend.sh for server startup with TQ backend registration. Created test scripts for import, registration, and functional validation.",
   "whatWasLeftUndone": "",
   "verification": {
     "commandsRun": [
-      {"command": "pip install -e /opt/turboquant", "exitCode": 0, "observation": "Installed successfully"},
-      {"command": "python validate_paper.py", "exitCode": 0, "observation": "9/9 paper validation tests passed"},
-      {"command": "Launch vLLM with TurboQuant", "exitCode": 0, "observation": "Server started, logs show TurboQuant KV compression active"},
-      {"command": "Needle-in-haystack at 8k context", "exitCode": 0, "observation": "Needle found correctly"}
+      {
+        "command": "/opt/vllm-env/bin/python3 -c 'from turboquant.backends.vllm_rocm import TurboQuantRocmBackend; print(\"OK\")'",
+        "exitCode": 0,
+        "observation": "Import succeeds, TurboQuantRocmBackend class available"
+      },
+      {
+        "command": "/opt/vllm-env/bin/python3 /root/benchmark-scripts/test_tq_backend_registration.py",
+        "exitCode": 0,
+        "observation": "register_backend succeeds, CUSTOM resolves to TurboQuantRocmBackend"
+      },
+      {
+        "command": "curl -sf http://localhost:8000/health",
+        "exitCode": 0,
+        "observation": "Health check 200 after 85s startup with TQ backend"
+      },
+      {
+        "command": "/opt/vllm-env/bin/python3 /root/benchmark-scripts/test_tq_backend_functional.py",
+        "exitCode": 0,
+        "observation": "5/5 requests return identical output to baseline, TQ stats show 8 layers capturing"
+      },
+      {
+        "command": "rocm-smi --showmeminfo vram --json",
+        "exitCode": 0,
+        "observation": "VRAM stable at 93% after 20 requests, no leak detected"
+      }
     ],
     "interactiveChecks": [
-      {"action": "Sent 10 coding prompts with TurboQuant active", "observed": "All 10 produced coherent code, no quality degradation visible"},
-      {"action": "Checked rocm-smi VRAM with TurboQuant", "observed": "VRAM usage 68% vs 85% baseline (KV cache savings visible)"}
+      {
+        "action": "Sent 3 curl requests with different coding prompts",
+        "observed": "All 3 responses coherent and correct, server logs show TQ capture on full-attention layers"
+      }
     ]
   },
   "tests": {
-    "added": []
+    "added": [
+      {
+        "file": "/root/benchmark-scripts/test_tq_backend_registration.py",
+        "cases": [
+          {"name": "test_import", "verifies": "turboquant.backends.vllm_rocm imports without error"},
+          {"name": "test_register", "verifies": "register_backend succeeds with CUSTOM enum"}
+        ]
+      },
+      {
+        "file": "/root/benchmark-scripts/test_tq_backend_functional.py",
+        "cases": [
+          {"name": "test_server_health", "verifies": "vLLM starts with TQ backend"},
+          {"name": "test_identical_output", "verifies": "capture_only output matches baseline"},
+          {"name": "test_tq_stats", "verifies": "compression stats show active capture"}
+        ]
+      }
+    ],
+    "coverage": "Import, registration, server startup, output correctness, compression stats"
   },
-  "discoveredIssues": [
-    {"severity": "medium", "description": "TurboQuant hybrid decode dequantizes all history to float32 per decode step -- this may limit speedup at very long contexts", "suggestedFix": "Use TurboQuant's fused Triton decode kernels instead of hybrid path if they work on ROCm"}
-  ]
+  "discoveredIssues": []
 }
 ```
 
 ## When to Return to Orchestrator
 
-- Triton kernels fundamentally incompatible with ROCm gfx908 (not fixable with minor patches)
-- Integration requires modifying vLLM core in ways that break other features
-- Package version incompatible with vLLM 0.18.1 API
-- Quality degradation is severe (>20% coherence loss)
-- Package license concerns (GPL-3.0 interaction with Apache-2.0 vLLM)
+- vLLM's `register_backend` API doesn't work as documented (missing, different signature)
+- RocmAttentionImpl interface has changed and cannot be extended as planned
+- TQ Triton kernels crash during graph capture (return with evidence for graph compatibility assessment)
+- VRAM exhaustion prevents server startup with TQ backend
+- Backend selection doesn't route to CUSTOM even with correct config

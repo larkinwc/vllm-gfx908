@@ -1,6 +1,6 @@
 ---
 name: benchmark-worker
-description: Downloads models, creates benchmark scripts, runs benchmarks, and produces comparison reports
+description: Runs benchmarks, creates comparison reports, and documents production recommendations
 ---
 
 # Benchmark Worker
@@ -10,78 +10,114 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 ## When to Use This Skill
 
 Features that involve:
-
-- Downloading and configuring models for benchmarking
-- Creating benchmark scripts (synthetic and realistic workloads)
-- Running vLLM benchmarks with specific configurations
-- Producing structured benchmark reports
-- Comparing results across configurations
+- Running synthetic and coding agent benchmarks
+- Comparing TQ backend performance vs baseline/optimized configurations
+- Measuring VRAM usage and compression ratios
+- Creating comparison reports
+- Writing production recommendations
 
 ## Required Skills
 
-None
+None.
 
 ## Work Procedure
 
-1. **Read feature requirements** from the assigned feature in features.json. Understand exactly which models, configurations, and metrics are needed.
+### Step 1: Read Context
 
-2. **Prepare environment**:
-   - Source environment: `export LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib && export ROCM_PATH=/opt/rocm/core-7.12 && export PYTORCH_ROCM_ARCH=gfx908 && export VLLM_ROCM_USE_SKINNY_GEMM=0 && export VLLM_ROCM_USE_AITER=1`
-   - All vLLM commands must use `/opt/vllm-env/bin/python3`
-   - All model downloads use: `/opt/vllm-env/bin/huggingface-cli download <model> --local-dir /models/<model-name>`
+Read these files:
+- `.factory/library/architecture.md` -- system architecture
+- `.factory/library/environment.md` -- paths, previous baseline results
+- `AGENTS.md` -- boundaries, server management
+- `.factory/services.yaml` -- how to start/stop vLLM
 
-3. **Download models** if not already present in `/models/`. Check first with `ls /models/`.
+Also read previous benchmark results for comparison baselines:
+- `/root/benchmark-results/final-report.json` -- previous mission's final report
+- `/root/benchmark-results/baseline-report.json` -- original baselines
 
-4. **Stop any running vLLM server**: `lsof -ti :8000 | xargs kill -9 2>/dev/null; sleep 5`
+### Step 2: Plan Benchmark Matrix
 
-5. **Create benchmark scripts** in `/root/benchmark-scripts/`:
-   - Scripts must be self-contained Python files that can be run directly
-   - For synthetic benchmarks, use `vllm bench serve` or `vllm bench throughput` CLI
-   - For realistic coding agent benchmarks, create a Python script using aiohttp/httpx to send concurrent requests
-   - Scripts must output results in JSON format to `/root/benchmark-results/`
+Define the configurations to test:
+- **Baseline optimized**: FULL_DECODE_ONLY + prefix caching (reference from previous mission)
+- **TQ capture_only**: TQ backend in capture_only mode (overhead measurement)
+- **TQ hybrid**: TQ backend in hybrid mode (actual TQ decode)
+- Each at c=1, c=2, c=4 concurrent users
 
-6. **Run benchmarks**:
-   - Start vLLM server with the specific config as a background process
-   - Wait for health check: `for i in $(seq 1 120); do curl -sf http://localhost:8000/health && break; sleep 1; done`
-   - Run benchmark script
-   - Save results to `/root/benchmark-results/<model>-<config>-<timestamp>.json`
-   - Stop vLLM server after benchmark completes
+For each configuration, measure:
+- Throughput (tok/s) via vllm bench serve
+- TPOT (time per output token)
+- TTFT (time to first token)
+- VRAM usage via rocm-smi
 
-7. **Produce reports**: Create a comparison report in `/root/benchmark-results/` combining results.
+### Step 3: Run Benchmarks
 
-8. **Run validators**: The vLLM test suite is large; only run specific tests if the feature modifies vLLM code. For pure benchmark features, validation is the benchmark results themselves.
+For each configuration:
+1. Stop any running vLLM instance
+2. Start vLLM with the target configuration
+3. Wait for health check
+4. Run synthetic benchmark: `vllm bench serve --model /models/Qwen3.5-9B --num-prompts 100 --request-rate 2 --dataset-name random --save-result`
+5. Run coding agent benchmark: `/opt/vllm-env/bin/python3 /root/benchmark-scripts/coding_agent_bench.py` at c=1,2,4
+6. Record VRAM usage: `rocm-smi --showmeminfo vram --json`
+7. Save results to `/root/benchmark-results/` with descriptive filenames including timestamp
 
-### Critical Notes
+**IMPORTANT:** Save raw benchmark output JSON files. Do not just report summary numbers.
 
-- **Always stop the vLLM server before starting a new one** (port 8000)
-- **Wait for model loading** - large models take 30-60 seconds to load
-- **Use --enforce-eager** for baseline configs (as specified in feature)
-- **Record GPU stats**: `rocm-smi` output before/during/after benchmark
-- **INT4 models** require `--dtype float16` (ExllamaLinearKernel requirement)
-- **Do not use port 8080** (GPU dashboard)
-- **Background the server**: Use `nohup ... &` or similar, capture PID for later kill
+### Step 4: Create Comparison Report
+
+Create a structured report comparing all configurations:
+- Save as `/root/benchmark-results/tq-comparison-report.json` (machine-readable)
+- Include percentage changes vs baseline optimized
+- Include VRAM comparison
+- Include quality assessment (if applicable)
+
+### Step 5: Write Production Recommendation
+
+Based on benchmark evidence, write a clear recommendation:
+- Should TQ be enabled in production for Qwen3.5-9B on MI100?
+- If yes: create a production launch script with TQ
+- If no: explain why with data (e.g., overhead exceeds savings, quality regression)
+- Document what would need to change for TQ to be beneficial (e.g., model with more full-attention layers)
+
+### Step 6: Verify Results
+
+- Cross-check that all benchmark JSON files are valid and complete
+- Verify comparison report numbers match raw data
+- Ensure recommendation is supported by the data
 
 ## Example Handoff
 
 ```json
 {
-  "salientSummary": "Downloaded Qwen3.5-9B FP16 and INT4 models, created synthetic and coding-agent benchmark scripts, ran baselines at 1/2/4 concurrent users. FP16 baseline: 85 tok/s decode at 1 user, 72 tok/s at 4 users. INT4: 110 tok/s at 1 user, 95 tok/s at 4 users. Results saved to /root/benchmark-results/.",
-  "whatWasImplemented": "Downloaded Qwen3.5-9B FP16 (18GB) and AWQ-INT4 (5GB) to /models/. Created /root/benchmark-scripts/synthetic_bench.sh and /root/benchmark-scripts/coding_agent_bench.py. Ran all benchmarks, results in /root/benchmark-results/baseline-report.json with per-model, per-concurrency metrics.",
+  "salientSummary": "Ran full benchmark suite: TQ capture_only has 2.3% overhead vs optimized baseline, TQ hybrid shows 5% throughput improvement at c=2 with 15% VRAM savings on full-attention layers. Recommendation: enable TQ hybrid for workloads with >8k context where VRAM savings matter.",
+  "whatWasImplemented": "Ran synthetic + coding agent benchmarks at c=1,2,4 for 3 configurations. Created tq-comparison-report.json with full metrics. Created production recommendation with data-backed conclusion.",
   "whatWasLeftUndone": "",
   "verification": {
     "commandsRun": [
-      {"command": "huggingface-cli download Qwen/Qwen3.5-9B --local-dir /models/Qwen3.5-9B", "exitCode": 0, "observation": "18GB downloaded in 4 minutes"},
-      {"command": "curl -sf http://localhost:8000/health", "exitCode": 0, "observation": "Server healthy after 45s startup"},
-      {"command": "python3 /root/benchmark-scripts/coding_agent_bench.py --concurrency 4", "exitCode": 0, "observation": "All 100 requests completed, results saved"},
-      {"command": "rocm-smi", "exitCode": 0, "observation": "All 4 GPUs at 31-33°C idle, 45-55°C under load, VRAM 85%"}
+      {
+        "command": "/opt/vllm-env/bin/python3 -m vllm.entrypoints.cli.main bench serve --model /models/Qwen3.5-9B --num-prompts 100 --request-rate 2 --dataset-name random --save-result",
+        "exitCode": 0,
+        "observation": "TQ hybrid: 465 tok/s at c=2 (vs 478 baseline optimized = -2.7%)"
+      },
+      {
+        "command": "rocm-smi --showmeminfo vram --json",
+        "exitCode": 0,
+        "observation": "TQ hybrid VRAM: 28.8 GB avg vs 29.5 GB baseline = 2.4% savings"
+      },
+      {
+        "command": "/opt/vllm-env/bin/python3 /root/benchmark-scripts/coding_agent_bench.py --concurrency 4",
+        "exitCode": 0,
+        "observation": "4/4 concurrent requests successful, aggregate 310 tok/s"
+      }
     ],
     "interactiveChecks": [
-      {"action": "Sent coding prompt to FP16 model", "observed": "Generated valid Python code for fibonacci function, 85 tok/s decode"},
-      {"action": "Ran 4-user concurrent benchmark on INT4", "observed": "All 4 users got responses, aggregate 380 tok/s, no errors"}
+      {
+        "action": "Verified tq-comparison-report.json has all required fields",
+        "observed": "Report contains throughput, TPOT, TTFT, VRAM for all 3 configs at all concurrency levels"
+      }
     ]
   },
   "tests": {
-    "added": []
+    "added": [],
+    "coverage": "Benchmark results validated via cross-checking raw JSON files against report"
   },
   "discoveredIssues": []
 }
@@ -89,8 +125,7 @@ None
 
 ## When to Return to Orchestrator
 
-- Model download fails (HuggingFace access issues, disk space)
-- vLLM crashes during model loading (OOM, architecture incompatibility)
-- Benchmark produces no results or all-zero results
-- GPU hardware issues (rocm-smi shows errors)
-- Required INT4 quantized model doesn't exist on HuggingFace
+- TQ backend server fails to start (backend implementation issue, not benchmark issue)
+- Benchmark scripts from previous mission are broken or incompatible
+- Results show catastrophic regression (>50% throughput loss) suggesting a backend bug
+- VRAM exhaustion prevents completing benchmark suite

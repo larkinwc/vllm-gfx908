@@ -1,74 +1,96 @@
-# Architecture: vLLM MI100 Throughput Optimization
+# Architecture: TurboQuant Custom Attention Backend for vLLM
 
 ## System Overview
 
-4x AMD MI100 (gfx908, CDNA1) GPUs connected via XGMI Infinity Bridge (full mesh, 1-hop) on an AMD EPYC 7742 host with 64GB RAM. ROCm 7.12, PyTorch 2.11+rocm7.2, vLLM 0.18.1.dev4 (mi100-fixes fork).
+TurboQuant KV cache compression is integrated into vLLM as a custom attention backend via the `register_backend(AttentionBackendEnum.CUSTOM)` API. The backend extends `RocmAttentionBackend` and is instantiated inside each GPU worker process naturally, solving the multi-process architecture problem.
 
-## vLLM Architecture on MI100
+## Key Components
 
-### Attention Backends
+### TurboQuant Backend (`/opt/turboquant/turboquant/backends/vllm_rocm.py`)
 
-- **TRITON_ATTN**: Pure Triton-based attention, works on all ROCm GPUs including gfx908. Supports ALWAYS cudagraph compatibility. This is the primary backend for MI100.
-- **ROCM_ATTN**: Legacy 2-path backend (Triton prefill + HIP paged attention decode). Supports custom paged attention on gfx9 family including gfx908.
-- **ROCM_AITER_FA / ROCM_AITER_MLA**: AITER-based backends for MI300X+ (gfx942/gfx950) only. NOT available on MI100.
+- **TurboQuantRocmBackend**: Extends `RocmAttentionBackend`. Registered as `AttentionBackendEnum.CUSTOM`. Provides `TurboQuantRocmImpl` as the implementation class.
+- **TurboQuantRocmImpl**: Extends `RocmAttentionImpl`. Each instance owns per-layer TQ state (CompressedKVStore, KVCaptureEngine, quantizer). Overrides `do_kv_cache_update()` to capture KV into compressed store, and `forward()` to optionally use TQ hybrid decode.
 
-### MI100 Constraints
+### Per-Layer State (lives in worker process)
 
-- No native FP8 hardware (CDNA1 limitation)
-- `VLLM_ROCM_USE_SKINNY_GEMM=0` required (wvSplitK kernels are MI300X-only)
-- `VLLM_ROCM_USE_AITER=1` enables Triton-based AITER ops that DO work on gfx908
-- torch.compile/inductor has `KernelMetadata.cluster_dims` error on gfx908
-- Originally ran with `--enforce-eager` and `TORCH_COMPILE_DISABLE=1`; now FULL_DECODE_ONLY graph mode is used
+Each `TurboQuantRocmImpl` instance owns:
+- `CompressedKVStore` -- chunked compressed KV history (3-bit keys via MSE+QJL, 2-bit values via group quantization)
+- `KVCaptureEngine` -- ring buffer (128 recent tokens in full precision) + bulk capture for prefill
+- `TurboQuantProd` quantizer -- rotation matrix Pi (DxD), QJL matrix S (DxD), codebook (8 centroids)
 
-### CUDA/HIP Graph Modes (vLLM v1)
+### Qwen3.5-9B Hybrid Architecture
 
-- NONE: No graphs (via --enforce-eager)
-- PIECEWISE: Attention stays eager, everything else in graph (requires piecewise compilation) — NOT tested on gfx908
-- FULL_DECODE_ONLY: Full graph for decode only, no graph for prefill — **VERIFIED WORKING on gfx908** (MI100 milestone 2)
-- FULL_AND_PIECEWISE: Full for decode, piecewise for prefill (most performant but most memory) — NOT tested on gfx908
-- TORCH_COMPILE_DISABLE=1 is still required with FULL_DECODE_ONLY on gfx908 (graph capture does not use inductor)
-- Piecewise compatibility on gfx908: still unknown (skipped in favor of FULL_DECODE_ONLY which worked immediately)
+- 32 total layers: 8 full-attention + 24 linear-attention (GDN)
+- TQ only applies to the 8 full-attention layers
+- Linear-attention layers use a separate backend (GDNAttentionBackend) -- TQ does not touch them
+- vLLM routes layers to their respective backends automatically based on layer type
 
-### Model Architecture: Qwen3.5-9B
+### Data Flow
 
-- Hybrid attention: 8 full-attention + 24 linear-attention layers (32 total)
-- full_attention_interval: 4 (every 4th layer is full attention)
-- head_dim: 256, num_attention_heads: 16, num_key_value_heads: 4 (GQA 4:1)
-- Linear attention layers: linear_key_head_dim=128, linear_num_key_heads=16, linear_num_value_heads=32
-- Native MTP: mtp_num_hidden_layers=1
-- Max position embeddings: 262144
-- Vision encoder present but we use --language-model-only
+**Capture-only mode (Phase 1):**
+```
+Request → vLLM Scheduler → Worker Process → Model Forward
+  → TurboQuantRocmImpl.do_kv_cache_update():
+      1. Write to paged KV cache (standard path via super())
+      2. Capture K,V into CompressedKVStore (quantize and store)
+  → TurboQuantRocmImpl.forward():
+      1. Always delegate to super().forward() (standard flash/paged attention)
+      2. TQ compressed store is populated but not used for decode
+```
 
-### Key Data Flows
+**Hybrid mode (Phase 2):**
+```
+Prefill:
+  → do_kv_cache_update(): write to paged cache + capture into TQ store
+  → forward(): use standard flash attention for prefill (super())
 
-1. **Request** → Scheduler → Model Runner → QKV Projection → Attention Backend → Sampling → Response
-2. **KV Cache**: Paged block allocation, stored per-layer. Full-attention layers use standard KV cache. Linear-attention layers use their own cache format.
-3. **TP=4**: Model sharded across 4 GPUs via XGMI. All-reduce for attention heads, expert parallelism for MoE (N/A for 9B).
+Decode (single token):
+  → do_kv_cache_update(): append to ring buffer, flush oldest to compressed store if full
+  → forward():
+      IF compressed store has >= 16 tokens:
+        Use TQ hybrid decode (Triton fused kernel over compressed history + ring buffer)
+      ELSE:
+        Fall back to standard paged attention (super())
+```
 
-### TurboQuant Integration Points
+### Registration Flow
 
-- Monkey-patches vLLM attention layers after initialization
-- Captures KV entries during prefill, quantizes them (3-bit keys via MSE+QJL, 2-bit values via group quant)
-- Frees original KV cache after quantization
-- Hybrid decode: dequantizes compressed cache for decode attention
-- Only compresses full-attention layers (8/32 for Qwen3.5-9B = 25%)
-- Uses Triton kernels for fused decode attention (should work on ROCm but untested)
+```python
+from vllm.v1.attention.backends.registry import register_backend, AttentionBackendEnum
+register_backend(AttentionBackendEnum.CUSTOM, "turboquant.backends.vllm_rocm.TurboQuantRocmBackend")
+```
 
-### MTP (Multi-Token Prediction)
+This must be called before vLLM engine initialization. The launch script handles this.
 
-- Native to Qwen3.5 models (mtp_num_hidden_layers=1)
-- Predicts 1 extra token per step, verified against actual generation
-- Reduces effective TPOT by ~30-50% when acceptance rate is high
-- Adds one extra MTP head layer to VRAM but minimal overhead for 9B model
-- Compatible with enforce-eager; compatibility with graph modes TBD
+### vLLM Backend Selection Path
 
-## File Locations
+```
+vllm/v1/attention/selector.py::get_attn_backend()
+  → _cached_get_attn_backend()
+    → current_platform.get_attn_backend_cls() [rocm.py]
+      → If selected_backend is not None: validate and return its path
+      → Else: auto-select from priority list
+    → resolve_obj_by_qualname(class_path) → actual backend class
+```
 
-- vLLM source: `/root/vllm-gfx908-src` (also at worktree path)
-- vLLM env: `/opt/vllm-env/`
-- Models: `/models/`
-- ROCm: `/opt/rocm/core-7.12/`
-- Launch script: `/root/launch-vllm.sh`
-- MI100-specific code: `vllm/platforms/rocm.py` (on_mi100(), on_gfx9())
-- Attention backends: `vllm/v1/attention/backends/`
-- Benchmark tools: `benchmarks/` dir + `vllm bench` CLI
+When `--attention-backend CUSTOM` is passed (or equivalent config), vLLM selects `AttentionBackendEnum.CUSTOM` which resolves to whatever was registered.
+
+### Memory Budget
+
+Per full-attention layer overhead:
+- Pi rotation matrix: 256x256 float32 = 256 KB
+- S QJL matrix: 256x256 float32 = 256 KB  
+- Codebook: 8 float32 = 32 B
+- Ring buffer: 128 tokens x 256 dim x 2 (K+V) x 2 bytes = 128 KB per KV head
+- Total per layer: ~600 KB (negligible vs 32 GB VRAM)
+
+### HIP Graph Compatibility
+
+FULL_DECODE_ONLY captures decode forward passes into HIP graphs. If TQ Triton kernels are graph-capturable, hybrid decode benefits from graph mode. If not, hybrid decode must run in eager mode while capture_only can still use graph mode (since it delegates to standard forward).
+
+## Existing Infrastructure
+
+- Baseline benchmarks: `/root/benchmark-results/` (from previous mission)
+- Benchmark scripts: `/root/benchmark-scripts/` (reusable)
+- Production launch: `/root/launch-vllm-optimized.sh` (FULL_DECODE_ONLY + prefix caching)
+- TQ standalone tests: Already verified 3 Triton kernels compile/run on gfx908
