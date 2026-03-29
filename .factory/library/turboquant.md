@@ -79,8 +79,51 @@ Integration files:
 
 If Triton kernels fail, TurboQuant has a pure-PyTorch fallback path in `score.py` (`compute_hybrid_attention`).
 
+## vLLM v0.18.1 Integration Status
+
+**BLOCKED**: TurboQuant's integration layer is incompatible with vLLM v0.18.1's multi-process architecture.
+
+### Root Cause
+- vLLM v0.18.1 uses separate OS processes for GPU workers (`Worker_TP*`)
+- TurboQuant's `install_hooks()` requires direct access to `GPUModelRunner` in the same process
+- Worker processes don't inherit monkey-patches from the main process
+- `collective_rpc` can send functions but patches don't persist across requests
+
+### Attempted Approaches
+1. **Direct LLM class with hooks**: Engine initialization hangs during profile_run
+2. **collective_rpc hook installation**: Hooks install but don't persist
+3. **enable_no_alloc() early patching**: Workers spawn fresh processes without patches
+
+### Resolution
+TurboQuant integration requires either:
+- vLLM adding official extension hooks for attention backends
+- TurboQuant updating for vLLM v0.18.x architecture
+- Custom vLLM fork (not recommended for production)
+
 ## Validation Contract Status
 
-- VAL-TQ-001: PASS (turboquant import succeeds)
-- VAL-TQ-002: PASS (Triton kernels compile on ROCm)
-- VAL-TQ-007: PASS (fallback path available)
+| Assertion | Status | Notes |
+|-----------|--------|-------|
+| VAL-TQ-001 | PASS | TurboQuant import succeeds |
+| VAL-TQ-002 | PASS | Triton kernels compile on ROCm |
+| VAL-TQ-003 | FAIL | Cannot install hooks on multi-process workers |
+| VAL-TQ-004 | N/A | KV cache savings not measurable without hooks |
+| VAL-TQ-005 | PASS* | 10/10 coding prompts coherent (baseline vLLM) |
+| VAL-TQ-006 | PASS* | Needle-in-haystack 8k passes (baseline vLLM) |
+| VAL-TQ-007 | PASS | System falls back gracefully, no crashes |
+
+*Quality tests on baseline vLLM without TurboQuant active.
+
+## Quality Test Results (Baseline vLLM - No TQ)
+
+- **10 Coding Prompts**: 10/10 PASS
+- **Needle-in-Haystack (8k)**: PASS
+- **Throughput (eager mode)**: 87.5 tok/s
+
+## Files Created
+
+- `.factory/library/turboquant-integration-report.md` - Detailed technical report
+- `/root/benchmark-scripts/launch-turboquant.sh` - Integration launch script
+- `/root/benchmark-scripts/run_turboquant_test.py` - Integration test script
+- `/root/benchmark-scripts/test_turboquant_direct.py` - Direct LLM test script
+- `/root/benchmark-scripts/run_quality_tests.py` - Quality test script
