@@ -1,0 +1,41 @@
+{
+  "flowId": "graph-compat",
+  "milestone": "hybrid-decode",
+  "assertions": ["VAL-GRAPH-002", "VAL-GRAPH-003"],
+  "timestamp": "2026-03-30T09:01:00Z",
+  "results": {
+    "VAL-GRAPH-002": {
+      "status": "pass",
+      "evidence": "TQ hybrid + FULL_DECODE_ONLY graph mode is fully compatible. Server started with TURBOQUANT_MODE=hybrid and --compilation-config '{\"cudagraph_mode\":\"FULL_DECODE_ONLY\"}'. 35 decode graphs were captured successfully in 40 seconds (batch sizes 1-512). TurboQuantTritonBackend was auto-registered as TRITON_ATTN override in all 4 worker processes. Health check passed after 120s. 10/10 test requests (coding prompts: factorial, async/await, binary search Rust, closures, email regex, TCP vs UDP, LRU cache Go, dependency injection, linked list reversal, SOLID principles) all succeeded with coherent responses. No graph errors or Triton capture errors in server log.",
+      "details": {
+        "graph_capture_count": 35,
+        "graph_capture_time_s": 40,
+        "server_startup_time_s": 120,
+        "requests_succeeded": 10,
+        "requests_coherent": 10,
+        "tq_registered_processes": 4,
+        "fatal_errors": [],
+        "graph_errors": [],
+        "triton_errors": [],
+        "server_log_evidence": "Capturing CUDA graphs (decode, FULL): 100%|██████████| 35/35 [00:39<00:00, 1.12s/it]",
+        "conclusion": "TQ hybrid mode is COMPATIBLE with FULL_DECODE_ONLY graphs",
+        "test_run_date": "2026-03-30 08:49:43",
+        "results_file": "/tmp/tq_hybrid_graph_results.json"
+      }
+    },
+    "VAL-GRAPH-003": {
+      "status": "pass",
+      "evidence": "N/A - TQ hybrid decode was confirmed COMPATIBLE with FULL_DECODE_ONLY graph mode (VAL-GRAPH-002 passed). No eager mode fallback was required. Per the assertion contract: 'or N/A if graph-compatible'. The assertion passes because the condition (graph-incompatible) was not triggered.",
+      "details": {
+        "eager_fallback_needed": false,
+        "reason": "VAL-GRAPH-002 confirmed graph compatibility, so VAL-GRAPH-003 (eager fallback) is not needed",
+        "na_status": true
+      }
+    }
+  },
+  "frictions": [],
+  "blockers": [],
+  "toolsUsed": ["python", "curl", "rocm-smi"],
+  "testScript": "/root/benchmark-scripts/test_tq_hybrid_graph_mode.py",
+  "evidenceDir": "/root/.factory/missions/8e2a4f46-d493-48db-94c7-49816507d223/evidence/hybrid-decode/graph-compat/"
+}

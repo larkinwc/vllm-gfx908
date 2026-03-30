@@ -1,0 +1,33 @@
+{
+  "milestone": "hybrid-decode",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": ["VAL-GRAPH-002", "VAL-GRAPH-003"],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null,
+  "notes": {
+    "VAL-GRAPH-002": "TQ hybrid + FULL_DECODE_ONLY graph mode confirmed compatible. 35 decode graphs captured in 40s. Server health check passed at 120s. 10/10 requests coherent.",
+    "VAL-GRAPH-003": "N/A - Graph-compatible path taken in VAL-GRAPH-002. Assertion passes per contract spec (N/A if graph-compatible)."
+  },
+  "testDetails": {
+    "testScript": "/root/benchmark-scripts/test_tq_hybrid_graph_mode.py",
+    "runDate": "2026-03-30 08:49:43",
+    "resultsFile": "/tmp/tq_hybrid_graph_results.json",
+    "evidenceDir": "/root/.factory/missions/8e2a4f46-d493-48db-94c7-49816507d223/evidence/hybrid-decode/graph-compat/",
+    "serverConfig": {
+      "mode": "hybrid",
+      "graphMode": "FULL_DECODE_ONLY",
+      "graphsCaptured": 35,
+      "gpuMemoryUtilization": 0.80,
+      "tensorParallel": 4
+    }
+  }
+}
