@@ -77,15 +77,15 @@ TurboQuant hybrid decode mode successfully implemented and validated for Qwen3.5
 - **Mode:** `TURBOQUANT_MODE=hybrid` environment variable
 - **Launch Script:** `/root/benchmark-scripts/launch-tq-backend.sh hybrid`
 - **GPU Memory:** `--gpu-memory-utilization 0.85` (lower than baseline 0.93 for TQ headroom)
-- **Graph Mode:** `--enforce-eager` (hybrid mode requires eager mode for Triton kernel compatibility - see VAL-GRAPH-002)
+- **Graph Mode:** FULL_DECODE_ONLY graphs ARE compatible with TQ hybrid mode (confirmed by VAL-GRAPH-002). Use `--compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'` for best performance. `--enforce-eager` is an option but not required for TQ hybrid.
 
 ## Known Limitations
 
-1. **Graph Mode Compatibility:** TQ hybrid Triton kernels may not be HIP graph compatible. This is tested separately in `graph-mode-compatibility-test` feature.
+1. **Graph Mode Compatibility:** ~~TQ hybrid Triton kernels may not be HIP graph compatible.~~ **RESOLVED:** `graph-mode-compatibility-test` confirmed TQ hybrid is COMPATIBLE with FULL_DECODE_ONLY graphs (35 decode graphs captured successfully). The compute_hybrid_attention() decode path uses standard PyTorch matmuls, which are graph-compatible. See `.factory/library/tq-hybrid-graph-compatibility.md`.
 
 2. **Multi-Sequence Decode:** Falls back to standard attention for batches with multiple sequences to ensure isolation.
 
-3. **Memory Reduction:** Limited due to TQ only affecting full-attention layers (8/32 for Qwen3.5-9B).
+3. **Memory Reduction:** Limited due to TQ only affecting full-attention layers (8/32 for Qwen3.5-9B). Note: the 5.8% observed reduction partially reflects the lower --gpu-memory-utilization (0.85 TQ vs 0.93 baseline), not purely TQ compression savings.
 
 ## Files Modified
 

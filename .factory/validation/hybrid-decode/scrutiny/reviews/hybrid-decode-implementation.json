@@ -1,0 +1,40 @@
+{
+  "featureId": "hybrid-decode-implementation",
+  "milestone": "hybrid-decode",
+  "reviewer": "scrutiny-validator (inline)",
+  "status": "pass",
+  "issues": [
+    {
+      "severity": "non_blocking",
+      "description": "VAL-HYB-003 validation evidence is weak: the test passes because 'TQ layers were initialized in logs' OR 'requests worked in hybrid mode'. The latter condition always holds if the server is running, regardless of whether compressed KV reads actually happen. The validation does not assert that `_tq_hybrid_count > 0` on any layer instance, meaning hybrid decode may not be triggering in practice.",
+      "location": "/root/benchmark-scripts/test_hybrid_mode.py test_hyb_003_compressed_kv_reads()",
+      "suggestedFix": "Add an assertion that hybrid_count or compressed_token reads are non-zero, e.g., by exposing a stats endpoint or parsing log lines like '[TurboQuant] Layer X hybrid decode: N tokens' (add debug logging to the forward path)."
+    },
+    {
+      "severity": "non_blocking",
+      "description": "The multi-sequence decode fallback condition is checked via `num_seqs = attn_metadata.seq_lens.shape[0]`, but vLLM can batch multiple decode steps for different sequences with equal seq_lens shape. The isolation guarantee relies on correct seq-count detection, which may fail if vLLM batch packing changes. This is an inherent limitation of the approach, not a bug per se, but it is undocumented in the code.",
+      "location": "/opt/turboquant/turboquant/backends/vllm_rocm.py forward() ~line 310",
+      "suggestedFix": "Add a comment explaining the batch isolation assumption and note that this may need revisiting if vLLM's batching strategy changes."
+    },
+    {
+      "severity": "non_blocking",
+      "description": "In do_kv_cache_update(), the prefill path unconditionally calls self._tq_engine.reset() before ingest_prefill(). This means that chunked prefills (when vLLM splits a long prompt into multiple prefill calls) would incorrectly reset TQ state mid-sequence, losing captured KV. Whether vLLM uses chunked prefills depends on configuration, but the code does not guard against this.",
+      "location": "/opt/turboquant/turboquant/backends/vllm_rocm.py do_kv_cache_update() ~line 251",
+      "suggestedFix": "Add a check: only reset if this is the first prefill chunk (e.g., by checking if the ring buffer is empty or tracking a sequence ID). Alternatively, document that chunked prefill is not supported."
+    },
+    {
+      "severity": "non_blocking",
+      "description": "The VAL-HYB-005 (VRAM reduction) test uses a hardcoded baseline VRAM estimate of 120 GiB (30 GiB/GPU * 4) and compares to the measured TQ hybrid VRAM. However, the TQ server was started with --gpu-memory-utilization 0.80 while the baseline used 0.93. The 5.8% reduction is therefore largely attributable to the lower gpu-memory-utilization setting, not TQ compression. This conflates the two effects.",
+      "location": "/root/benchmark-scripts/test_hybrid_mode.py test_hyb_005_memory_reduction()",
+      "suggestedFix": "Either compare at the same gpu-memory-utilization level, or clearly distinguish VRAM allocated from VRAM actually used by KV cache, reporting the compression ratio separately."
+    }
+  ],
+  "sharedStateObservations": [
+    {
+      "target": "library",
+      "suggestion": "Document in hybrid-decode-validation.md that VAL-HYB-005 VRAM measurement conflates gpu-memory-utilization differences with actual KV compression savings. The real compression ratio is theoretical ~25% on full-attention layers, but effective VRAM reduction depends on utilization settings.",
+      "sourceFeature": "hybrid-decode-implementation"
+    }
+  ],
+  "summary": "Hybrid decode implementation is well-structured with clear mode separation, eager TQ initialization for graph compatibility, and correct prefill/decode routing. The main concerns are: (1) weak VAL-HYB-003 evidence that doesn't confirm actual compressed token reads during decode, (2) potential chunked-prefill issue with unconditional reset, (3) VRAM measurement conflating utilization settings with compression savings. No blocking issues found."
+}
