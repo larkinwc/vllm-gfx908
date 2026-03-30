@@ -17,6 +17,7 @@ services:
       --port 8000
       --enable-prefix-caching
       --gpu-memory-utilization 0.93
+      --language-model-only
     stop: pkill -9 -f 'vllm.entrypoints' 2>/dev/null; pkill -9 -f 'VLLM::' 2>/dev/null; sleep 2
     healthcheck: curl -sf http://localhost:8000/health
     port: 8000

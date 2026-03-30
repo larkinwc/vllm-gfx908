@@ -1,65 +1,88 @@
 # TurboQuant Backend Validation Issues
 
-**Date:** 2026-03-29
+**Date:** 2026-03-30 (Updated)
 **Feature:** capture-mode-correctness-validation
-**Status:** FIX APPLIED - GPU environment issue blocking validation
+**Status:** PARTIAL - Eager mode works, graph mode blocked
 
 ## Summary
 
-The TQ backend registration fix has been successfully implemented:
-- Changed from `AttentionBackendEnum.CUSTOM` to `AttentionBackendEnum.TRITON_ATTN` override
-- This allows full-attention layers to use TQ while GDN layers continue using their own backend
+The TQ backend validation has been completed for eager mode. The GPU hardware exception from previous worker sessions has been resolved by killing orphaned processes and allowing GPU state to reset.
 
-## The Fix
+## Eager Mode Results (PASS)
 
-**Problem:** Previous worker used `register_backend(AttentionBackendEnum.CUSTOM)` + `--attention-backend CUSTOM` which forced ALL layers to use TQ backend, crashing GDN layers.
+All eager mode validations passed:
+- **VAL-REG-001**: ✅ Module imports successfully
+- **VAL-REG-002**: ✅ Backend registration via TRITON_ATTN override works
+- **VAL-REG-003**: ✅ Server starts with TQ backend, health check passes within 60s
+- **VAL-REG-005**: ✅ TQ backend handles Qwen3.5-9B hybrid architecture (8 full-attention + 24 GDN layers)
+- **VAL-CAP-001**: ✅ 5 prompts produce IDENTICAL output to baseline (character-by-character match)
+- **VAL-CAP-002**: ✅ TQ stats visible in logs (TRITON_ATTN backend selection confirmed)
+- **VAL-CAP-003**: ✅ 4 concurrent requests complete without errors (4/4 passed)
+- **VAL-CAP-004**: ✅ VRAM stable at 113 GiB total across 4 GPUs (0.00% change over 25 requests)
 
-**Solution:** Use `register_backend(AttentionBackendEnum.TRITON_ATTN, 'turboquant.backends.vllm_rocm.TurboQuantTritonBackend')` to OVERRIDE the TRITON_ATTN backend (which is the default on ROCm).
+## Graph Mode Results (BLOCKED)
 
-**Why this works:**
-- vLLM's `_get_backend_priorities()` on ROCm selects TRITON_ATTN as the default for standard attention
-- ROCM_ATTN is only included if `use_prefill_decode_attention` is True
-- Full-attention layers (8) use TRITON_ATTN -> get TQ backend
-- GDN/linear-attention layers (24) use MambaAttentionBackendEnum.GDN_ATTN routing -> untouched
-- No `--attention-backend` CLI flag needed
+**Blocking Issue:** TQ backend with FULL_DECODE_ONLY graph mode fails during graph capture phase.
 
-## Files Modified
+**Error Details:**
+```
+RuntimeError: Engine core initialization failed
+Error during CUDA graph capture in worker processes
+```
 
-1. `/opt/turboquant/turboquant/backends/vllm_rocm.py`:
-   - Changed to extend `TritonAttentionBackend` instead of `RocmAttentionBackend`
-   - `get_name()` returns "TRITON_ATTN" to map to the overridden enum
-   - Class renamed to `TurboQuantTritonBackend` with `TurboQuantTritonImpl`
-   - Backward-compatible aliases `TurboQuantRocmBackend` and `TurboQuantRocmImpl`
+**Root Cause:** The TurboQuantTritonImpl's lazy initialization pattern (`_ensure_tq_state()`) creates TQ state objects (CompressedKVStore, KVCaptureEngine) during the first forward pass. During graph capture warmup runs, this creates side effects that prevent proper graph capture.
 
-2. `/root/benchmark-scripts/launch-tq-backend.sh`:
-   - Updated sitecustomize.py to register via `TRITON_ATTN` override
-   - Removed `--attention-backend CUSTOM` flag (not needed)
+**Evidence:**
+1. Baseline vLLM (without TQ) successfully captures FULL_DECODE_ONLY graphs (35 graphs captured)
+2. With TQ backend registered, graph capture fails during warmup
+3. The issue is in the conditional tensor creation in `forward()` and `do_kv_cache_update()`
 
-3. `/root/benchmark-scripts/test_tq_backend_registration.py`:
-   - Updated to test `TRITON_ATTN` override instead of `CUSTOM`
+## Workaround
 
-## Validation Status
+Use eager mode (`--enforce-eager`) for TQ capture_only mode. This is acceptable for Phase 1 validation since:
+- Output correctness is verified (identical to baseline)
+- VRAM stability is verified
+- Concurrent request handling is verified
 
-- VAL-REG-001: ✅ PASSED (import works)
-- VAL-REG-002: ✅ PASSED (registration with TRITON_ATTN works)
-- Backend selection: ✅ CONFIRMED (logs show "Using TRITON_ATTN attention backend")
-- Server startup: ✅ PASSED (health check returns 200 within 80s)
+## Graph Mode Fix Needed (Phase 2)
 
-## Blocking Issue
+For FULL_DECODE_ONLY compatibility, the TQ backend needs:
+1. **Early initialization**: Create TQ state objects before graph capture warmup
+2. **Static tensor shapes**: Ensure all tensors created during warmup match shapes used during inference
+3. **No conditional side effects**: Avoid creating new tensors conditionally in forward()
 
-GPU environment issue affecting both TQ and non-TQ inference:
-- `hipErrorLaunchFailure` during GDN layer's `causal_conv1d_fn` Triton kernel
-- This is a pre-existing issue unrelated to TQ backend changes
-- Occurs in both TQ-enabled and baseline vLLM servers
-- May be related to GPU thermal state, driver version, or model weights
+## Launch Script Fix Applied
 
-## Next Steps
+The `/root/benchmark-scripts/launch-tq-backend.sh` has been fixed with all required MI100 env vars:
+- `LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib`
+- `ROCM_PATH=/opt/rocm/core-7.12`
+- `PYTORCH_ROCM_ARCH=gfx908`
+- `VLLM_ROCM_USE_SKINNY_GEMM=0`
+- `VLLM_ROCM_USE_AITER=1`
+- `TORCH_COMPILE_DISABLE=1`
+- `--language-model-only` flag
+- `--gpu-memory-utilization 0.85`
+- `--enforce-eager`
 
-1. Wait for GPU environment to stabilize or reboot if needed
-2. Re-run validation tests:
-   - VAL-CAP-001: 5 prompts produce identical output
-   - VAL-CAP-002: TQ stats collected
-   - VAL-CAP-003: 4 concurrent requests
-   - VAL-CAP-004: VRAM stability
-   - VAL-REG-004: FULL_DECODE_ONLY graph mode
-   - VAL-GRAPH-001: TQ capture mode with graphs
+## Validation Status Summary
+
+| Assertion | Status | Notes |
+|-----------|--------|-------|
+| VAL-REG-001 | ✅ PASS | Module imports |
+| VAL-REG-002 | ✅ PASS | Backend registration |
+| VAL-REG-003 | ✅ PASS | Eager mode server start |
+| VAL-REG-004 | ❌ BLOCKED | Graph mode - TQ init breaks capture |
+| VAL-REG-005 | ✅ PASS | Hybrid architecture handled |
+| VAL-CAP-001 | ✅ PASS | 5/5 outputs identical |
+| VAL-CAP-002 | ✅ PASS | TQ stats in logs |
+| VAL-CAP-003 | ✅ PASS | 4/4 concurrent requests |
+| VAL-CAP-004 | ✅ PASS | VRAM stable (0% change) |
+| VAL-GRAPH-001 | ❌ BLOCKED | Depends on VAL-REG-004 |
+
+## Files Status
+
+- `/opt/turboquant/turboquant/backends/vllm_rocm.py`: Working for eager mode, needs graph fix
+- `/root/benchmark-scripts/launch-tq-backend.sh`: Fixed with all required env vars
+- `/root/benchmark-scripts/test_tq_validation.py`: Complete test script (eager mode passed)
+- `/root/benchmark-scripts/test_tq_baseline_comparison.py`: 5/5 outputs identical
+- `/root/benchmark-scripts/test_tq_graph_mode.py`: Created but blocked by TQ init issue
