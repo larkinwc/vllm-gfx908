@@ -89,14 +89,31 @@ Per full-attention layer overhead:
 
 ### HIP Graph Compatibility
 
-FULL_DECODE_ONLY captures decode forward passes into HIP graphs. TQ capture_only mode IS compatible with FULL_DECODE_ONLY graphs (35 graphs captured, verified working). 
+FULL_DECODE_ONLY captures decode forward passes into HIP graphs. Both TQ capture_only and TQ hybrid modes ARE compatible with FULL_DECODE_ONLY graphs.
+
+**VALIDATED:**
+- TQ capture_only + FULL_DECODE_ONLY: 35 graphs captured, 10/10 requests coherent (VAL-GRAPH-001)
+- TQ hybrid + FULL_DECODE_ONLY: 35 graphs captured, 10/10 requests coherent (VAL-GRAPH-002)
 
 **Requirements for HIP graph compatibility:**
 1. All random tensor generation must specify `device='cpu'` explicitly (e.g., `torch.randn(..., device='cpu')`)
 2. Tensors used in forward() operations must be pre-registered as module buffers via `register_buffer()`, not created dynamically during forward
 3. TQ state (CompressedKVStore, KVCaptureEngine) must be initialized eagerly in `__init__`, not lazily during first forward pass
+4. The hybrid decode path uses PyTorch matmuls (`_matmul_attend` in score.py) which are graph-compatible
 
-For hybrid mode, TQ Triton kernel graph compatibility is TBD (to be assessed in milestone 2).
+**Recommended production config:**
+```bash
+TURBOQUANT_MODE=hybrid \
+    /opt/vllm-env/bin/python3 -m vllm.entrypoints.openai.api_server \
+    --model /models/Qwen3.5-9B \
+    --tensor-parallel-size 4 \
+    --max-model-len 32768 \
+    --port 8000 \
+    --enable-prefix-caching \
+    --gpu-memory-utilization 0.80 \
+    --language-model-only \
+    --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'
+```
 
 ## Existing Infrastructure
 
