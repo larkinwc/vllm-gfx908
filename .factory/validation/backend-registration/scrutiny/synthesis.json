@@ -1,0 +1,65 @@
+{
+  "milestone": "backend-registration",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "/opt/vllm-env/bin/python3 -m pytest tests/transformers_utils/ --ignore=tests/transformers_utils/test_config.py -v --timeout=60",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "/opt/vllm-env/bin/python3 -m pre_commit run mypy-3.10 --all-files --hook-stage manual",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "/opt/vllm-env/bin/python3 -m pre_commit run ruff-check --all-files",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Updated .factory/library/architecture.md to correct the backend class hierarchy (TritonAttentionBackend instead of RocmAttentionBackend), fix the registration approach (TRITON_ATTN override instead of ROCM_ATTN/CUSTOM), update vLLM dual routing documentation, and add HIP graph compatibility requirements section.",
+      "sourceFeature": "create-tq-backend-and-register + fix-tq-graph-mode-init"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Update the 'CORRECT approach' for backend registration to use TRITON_ATTN override instead of ROCM_ATTN. Current AGENTS.md says: 'register_backend(AttentionBackendEnum.ROCM_ATTN, ...)' but ROCM_ATTN is not the default backend selected on ROCm for standard attention -- TRITON_ATTN is. Using ROCM_ATTN will not intercept full-attention layer processing.",
+      "evidence": "Feature create-tq-backend-and-register went through 3 iterations (CUSTOM → ROCM_ATTN → TRITON_ATTN) before finding the working approach. The fix is documented in commit d4fa1b7e7 and vllm_rocm.py docstring. Two separate commits (6c64563b7, d4fa1b7e7) show the worker had to discover this empirically despite AGENTS.md guidance.",
+      "isSystemic": false
+    },
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Add HIP graph compatibility requirements for any code running in graph-captured forward passes: (1) torch.randn() and similar RNG calls must use device='cpu', (2) tensors used in forward() must be pre-registered via register_buffer() not created dynamically, (3) TQ state initialization must happen in __init__. This knowledge is needed for hybrid-decode implementation as well.",
+      "evidence": "Feature fix-tq-graph-mode-init was a dedicated fix feature created because capture-mode-correctness-validation failed graph mode across 5 worker sessions. The root cause was lazy initialization + dynamic tensor creation in forward(). This pattern will apply to hybrid-decode Triton kernel integration in the next milestone.",
+      "isSystemic": true
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "Class-level _layer_counter in TurboQuantTritonImpl may not reset between model loads",
+      "reason": "Non-blocking in current single-model deployment. Not worth a library update as this is an implementation detail of the TQ backend, not a vLLM or mission convention."
+    },
+    {
+      "observation": "VRAM test used 25 requests instead of the contract's 50",
+      "reason": "The VRAM stability observed (0% change over 25 requests) provides strong enough evidence. The difference between 25 and 50 is not meaningful for detecting VRAM leaks."
+    },
+    {
+      "observation": "Missing completedWorkerSessionId for capture-mode-correctness-validation",
+      "reason": "Administrative data quality issue in features.json, not a code or knowledge gap. Not actionable via library or AGENTS.md update."
+    }
+  ],
+  "previousRound": null
+}

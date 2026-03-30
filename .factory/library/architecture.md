@@ -2,14 +2,14 @@
 
 ## System Overview
 
-TurboQuant KV cache compression is integrated into vLLM as a custom attention backend via the `register_backend(AttentionBackendEnum.CUSTOM)` API. The backend extends `RocmAttentionBackend` and is instantiated inside each GPU worker process naturally, solving the multi-process architecture problem.
+TurboQuant KV cache compression is integrated into vLLM as a custom attention backend via the `register_backend(AttentionBackendEnum.TRITON_ATTN, ...)` override API. The backend extends `TritonAttentionBackend` (not RocmAttentionBackend) and is instantiated inside each GPU worker process naturally, solving the multi-process architecture problem.
 
 ## Key Components
 
 ### TurboQuant Backend (`/opt/turboquant/turboquant/backends/vllm_rocm.py`)
 
-- **TurboQuantRocmBackend**: Extends `RocmAttentionBackend`. Registered as `AttentionBackendEnum.CUSTOM`. Provides `TurboQuantRocmImpl` as the implementation class.
-- **TurboQuantRocmImpl**: Extends `RocmAttentionImpl`. Each instance owns per-layer TQ state (CompressedKVStore, KVCaptureEngine, quantizer). Overrides `do_kv_cache_update()` to capture KV into compressed store, and `forward()` to optionally use TQ hybrid decode.
+- **TurboQuantTritonBackend** (alias: TurboQuantRocmBackend): Extends `TritonAttentionBackend`. Registered as TRITON_ATTN override. Provides `TurboQuantTritonImpl` as the implementation class.
+- **TurboQuantTritonImpl** (alias: TurboQuantRocmImpl): Extends `TritonAttentionImpl`. Each instance owns per-layer TQ state (CompressedKVStore, KVCaptureEngine) **initialized eagerly in __init__** (required for HIP graph compatibility). Overrides `do_kv_cache_update()` to capture KV into compressed store, and `forward()` to optionally use TQ hybrid decode.
 
 ### Per-Layer State (lives in worker process)
 
@@ -55,24 +55,28 @@ Decode (single token):
 
 ### Registration Flow
 
-**IMPORTANT:** Override ROCM_ATTN, NOT CUSTOM:
+**CRITICAL:** Override TRITON_ATTN, NOT ROCM_ATTN or CUSTOM:
 ```python
 from vllm.v1.attention.backends.registry import register_backend, AttentionBackendEnum
-register_backend(AttentionBackendEnum.ROCM_ATTN, "turboquant.backends.vllm_rocm.TurboQuantRocmBackend")
+register_backend(AttentionBackendEnum.TRITON_ATTN, "turboquant.backends.vllm_rocm.TurboQuantTritonBackend")
 ```
 
-This must execute in every worker process (via sitecustomize.py). No `--attention-backend` flag needed.
+This must execute in every worker process (via sitecustomize.py in PYTHONPATH). No `--attention-backend` flag needed.
+
+**Why TRITON_ATTN, not ROCM_ATTN or CUSTOM:**
+- On ROCm, vLLM selects TRITON_ATTN (not ROCM_ATTN) for standard attention layers in `_get_backend_priorities()`
+- ROCM_ATTN is only selected if `use_prefill_decode_attention=True`, which is not the default
+- CUSTOM + `--attention-backend CUSTOM` forces ALL layers through system 1, crashing GDN layers
+- TRITON_ATTN is the actual default for standard layers on ROCm → overriding it correctly captures only full-attention layers
 
 ### vLLM Dual Backend Routing
 
 vLLM has TWO separate backend routing systems:
-1. **AttentionBackendEnum** (standard attention) → `get_attn_backend()` → ROCM_ATTN on ROCm
+1. **AttentionBackendEnum** (standard attention) → `get_attn_backend()` → TRITON_ATTN on ROCm
 2. **MambaAttentionBackendEnum** (mamba/GDN/linear) → `get_mamba_attn_backend()` → GDN_ATTN for GDN layers
 
-Qwen3.5-9B's 8 full-attention layers use system 1 (ROCM_ATTN → now TQ).
+Qwen3.5-9B's 8 full-attention layers use system 1 (TRITON_ATTN → now TQ).
 Qwen3.5-9B's 24 GDN layers use system 2 (GDN_ATTN → unchanged).
-
-Using CUSTOM + `--attention-backend CUSTOM` breaks this because it forces ALL layers through system 1.
 
 ### Memory Budget
 
@@ -85,7 +89,14 @@ Per full-attention layer overhead:
 
 ### HIP Graph Compatibility
 
-FULL_DECODE_ONLY captures decode forward passes into HIP graphs. If TQ Triton kernels are graph-capturable, hybrid decode benefits from graph mode. If not, hybrid decode must run in eager mode while capture_only can still use graph mode (since it delegates to standard forward).
+FULL_DECODE_ONLY captures decode forward passes into HIP graphs. TQ capture_only mode IS compatible with FULL_DECODE_ONLY graphs (35 graphs captured, verified working). 
+
+**Requirements for HIP graph compatibility:**
+1. All random tensor generation must specify `device='cpu'` explicitly (e.g., `torch.randn(..., device='cpu')`)
+2. Tensors used in forward() operations must be pre-registered as module buffers via `register_buffer()`, not created dynamically during forward
+3. TQ state (CompressedKVStore, KVCaptureEngine) must be initialized eagerly in `__init__`, not lazily during first forward pass
+
+For hybrid mode, TQ Triton kernel graph compatibility is TBD (to be assessed in milestone 2).
 
 ## Existing Infrastructure
 

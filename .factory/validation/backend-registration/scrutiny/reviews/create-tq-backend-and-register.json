@@ -1,0 +1,45 @@
+{
+  "featureId": "create-tq-backend-and-register",
+  "reviewedAt": "2026-03-30T07:30:00.000Z",
+  "commitId": "d4fa1b7e7",
+  "transcriptSkeletonReviewed": false,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "The feature successfully creates TurboQuantTritonBackend (extending TritonAttentionBackend rather than RocmAttentionBackend) and TurboQuantTritonImpl. The registration approach is correct: overriding TRITON_ATTN (not CUSTOM) via sitecustomize.py is the right solution for Qwen3.5-9B's hybrid architecture. The implementation is clean and well-documented. One notable evolution from the initial handoff: the worker discovered that ROCM_ATTN/CUSTOM overrides crash GDN layers, and correctly pivoted to TRITON_ATTN. The final implementation is coherent and has been validated working. Backward-compatibility aliases (TurboQuantRocmBackend, TurboQuantRocmImpl) are provided. All assertions VAL-REG-001 through VAL-REG-005 were addressed.",
+    "issues": [
+      {
+        "file": "/opt/turboquant/turboquant/backends/vllm_rocm.py",
+        "line": 155,
+        "severity": "non_blocking",
+        "description": "Class-level _layer_counter in TurboQuantTritonImpl is shared across all instances and persists between model loads. If vLLM ever reloads the model without restarting the process, the counter will increment incorrectly, leading to incorrect layer_idx assignments. This doesn't affect current operation but could be a footgun in testing or multi-model scenarios."
+      },
+      {
+        "file": "/opt/turboquant/turboquant/backends/vllm_rocm.py",
+        "line": 270,
+        "severity": "non_blocking",
+        "description": "In do_kv_cache_update(), the detection of decode vs prefill uses num_tokens <= 1 as the threshold. This would incorrectly treat a batch of 1 prefill token as a decode step. In practice this is unlikely with vLLM's batching, but for robustness the check should examine attn_metadata or use a flag passed from the attention layer instead."
+      },
+      {
+        "file": "/root/benchmark-scripts/launch-tq-backend.sh",
+        "line": 76,
+        "severity": "non_blocking",
+        "description": "The launch script uses --enforce-eager which bypasses FULL_DECODE_ONLY graph mode. The comment says 'graph mode tested separately', but the services.yaml entry for vllm-turboquant uses this script which always runs eager mode. A separate launch script or a GRAPH_MODE environment variable would be needed to test graph mode from services.yaml."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "conventions",
+      "observation": "AGENTS.md says to override ROCM_ATTN but the actual implementation correctly uses TRITON_ATTN override. The AGENTS.md guidance is outdated and contradicts what works. Workers reading AGENTS.md for future hybrid-decode or benchmarking milestones will try ROCM_ATTN first, hit the same crash, and have to rediscover that TRITON_ATTN is the correct override.",
+      "evidence": "AGENTS.md line 'CORRECT approach: Override ROCM_ATTN instead' vs vllm_rocm.py docstring 'CRITICAL: This backend is registered via TRITON_ATTN override'. Commits 6c64563b7 and d4fa1b7e7 both document this discovery."
+    },
+    {
+      "area": "library",
+      "observation": "tq-backend-implementation.md documents the implementation but says it extends RocmAttentionBackend - this is now outdated. The actual final implementation extends TritonAttentionBackend. Future workers referencing this doc will get misleading information about the class hierarchy.",
+      "evidence": ".factory/library/tq-backend-implementation.md section 'TurboQuantRocmBackend: Extends RocmAttentionBackend from vllm.v1.attention.backends.rocm_attn' vs actual vllm_rocm.py which imports from triton_attn."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Feature passed review. TurboQuantTritonBackend correctly overrides TRITON_ATTN (not CUSTOM or ROCM_ATTN) to handle Qwen3.5-9B's hybrid architecture. The implementation is well-structured with eager TQ state init (later completed in fix-tq-graph-mode-init feature), proper mode control, and backward compatibility aliases. Minor non-blocking issues: class-level layer counter persistence, decode detection via token count instead of metadata flag, and launch script always using eager mode. Two shared-state observations: AGENTS.md has outdated ROCM_ATTN guidance, and library doc has outdated class hierarchy description."
+}
