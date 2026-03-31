@@ -16,7 +16,8 @@ Benchmark results for vLLM on 4x AMD Instinct MI100 (gfx908) GPUs.
 |---|---:|---:|---:|---:|---:|---:|
 | Baseline (enforce-eager) | 228 | 412 | 822 | 50.2 ms | 49.6 ms | 880 ms |
 | FULL_DECODE_ONLY + prefix cache | 248 | 478 | 884 | 13.6 ms | 15.8 ms | 715 ms |
-| **+ custom all-reduce** | **250** | **486** | **910** | **11.3 ms** | **12.1 ms** | **119 ms** |
+| + custom all-reduce | 250 | 486 | 910 | 11.3 ms | 12.1 ms | 119 ms |
+| **+ Triton MI100 tuning** | **250** | **485** | **909** | **10.5 ms** | **11.9 ms** | **120 ms** |
 | TQ capture_only + graphs | 239 | 447 | — | 30.6 ms | 52.1 ms | 4107 ms |
 | TQ hybrid + graphs | 233 | 448 | — | 31.2 ms | 33.0 ms | 854 ms |
 
@@ -26,11 +27,13 @@ Benchmark results for vLLM on 4x AMD Instinct MI100 (gfx908) GPUs.
 |---|---:|---:|---:|---:|
 | Baseline (enforce-eager) | 22.0 | 42.8 | 82.7 | 50.2 ms |
 | FULL_DECODE_ONLY + prefix cache | 55.1 | 89.8 | 319 | 11.0 ms |
-| **+ custom all-reduce** | **87.9** | **168.7** | **260** | **8.9 ms** |
+| + custom all-reduce | 87.9 | 168.7 | 260 | 8.9 ms |
+| **+ Triton MI100 tuning** | **87.6** | **167.8** | **308** | **9.0 ms** |
 | TQ hybrid + graphs | 31.0 | — | — | 24.2 ms |
 
 ### Key Findings
 
+- **Triton MI100 tuning**: decode TILE_SIZE 16→32, prefill BLOCK 128→64, NUM_PAR_SOFTMAX_SEGMENTS 16→8, MIN_LAUNCH_GRID_SIZE_2D 128→64. Gives -7% TPOT at c=1 synthetic, **+18.5% throughput at c=4 coding agent** (260→308 tok/s). Neutral at lower concurrency.
 - **Custom all-reduce** (quickreduce for gfx908): additional -17% TPOT on synthetic, +60-88% throughput on coding agent workloads
 - **FULL_DECODE_ONLY graph mode** is the biggest single win: -72% TPOT, +16% throughput over eager baseline
 - **Prefix caching** provides 85-99% TTFT reduction on cache hits
@@ -64,6 +67,7 @@ Summary of what works on MI100 (gfx908):
 |---|---|---|---|
 | FULL_DECODE_ONLY graphs | **Works** | +16% throughput, -72% TPOT | Recommended for production |
 | Prefix caching | **Works** | 85-99% TTFT reduction | Recommended, stacks with graphs |
+| Triton MI100 tile tuning | **Works** | -7% TPOT, +18.5% c=4 throughput | Decode TILE 32, prefill BLOCK 64, 8 softmax segments |
 | TurboQuant KV compression | **Works** (Triton kernels) | -6% to -49% throughput | Not recommended for Qwen3.5-9B |
 | MTP speculative decoding | **Partial** | -25% throughput (eager only) | Incompatible with graph mode |
 | INT4 AWQ | **Works** (Triton) | Enables larger models | `VLLM_USE_TRITON_AWQ=1` auto-set on ROCm, `--dtype float16` required |
@@ -99,20 +103,34 @@ Summary of what works on MI100 (gfx908):
 
 ## Future Optimization TODOs
 
-### Triton Kernel Block-Size Tuning for MI100
+### ~~Triton Kernel Block-Size Tuning for MI100~~ (DONE)
 
-The Triton unified attention kernel (`triton_unified_attention.py`) and prefill kernel (`triton_prefill_attention.py`) use `BLOCK_M`/`BLOCK_N`/`BLOCK_DMODEL` constants that are auto-tuned but likely optimized for MI300X's memory hierarchy. MI100 has different characteristics:
+Implemented in `triton_unified_attention.py`, `triton_prefill_attention.py`, and `triton_attn.py`:
+- Decode TILE_SIZE: 16 → 32 (larger tiles reduce iteration count over KV cache)
+- Prefill BLOCK: 128 → 64 (fits in 64KB LDS with head_dim=256)
+- NUM_PAR_SOFTMAX_SEGMENTS: 16 → 8 (tuned for MI100's 120 CUs)
+- MIN_LAUNCH_GRID_SIZE_2D: 128 → 64 (allows 2D kernel for smaller batches on MI100)
 
-- **HBM2 bandwidth:** 1.2 TB/s (vs 5.3 TB/s on MI300X)
-- **LDS size:** 64 KB per CU (same as MI300X)
-- **Compute:** 184.6 TFLOPS FP16 (vs 1307 TFLOPS on MI300X)
-- **Compute-to-bandwidth ratio:** Much lower than MI300X, meaning MI100 is more memory-bound
+Result: -7% TPOT at c=1, +18.5% throughput at c=4 coding agent workloads.
 
-Tuning approach:
-1. Profile existing Triton kernels with `TRITON_PRINT_AUTOTUNING=1` to see which configs are selected
-2. Test smaller `BLOCK_N` sizes (64 vs 128) to improve L2 cache hit rates on MI100's smaller cache
-3. Benchmark the 2D vs 3D kernel threshold (`seq_threshold_3D` in `TritonAttentionMetadataBuilder`)
-4. Consider reducing `NUM_PAR_SOFTMAX_SEGMENTS` from 16 since MI100 has fewer CUs (120 vs 304)
+### ROCM_ATTN Backend with Prefill-Decode Split
+
+The `ROCM_ATTN` backend uses C++ paged attention for decode (gfx908-optimized MFMA path in `attention.cu`) and Triton for prefill. This split may be faster for decode-heavy workloads. Enable with:
+```
+--attention-config '{"use_prefill_decode_attention": true}'
+```
+
+### Scheduler Tuning
+
+Test `--max-num-seqs 4` or `--max-num-seqs 8` for coding agent workloads (2-4 users). May reduce scheduling overhead and improve per-request latency.
+
+### KV Cache Block Size
+
+Test `--block-size 32` (default is 16). MI100's HBM2 may benefit from larger block sizes for better memory access patterns.
+
+### AITER Unified Attention
+
+Test `VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION=1` to try the AITER unified attention backend, which may have ROCm-specific optimizations.
 
 ### Upstream Rebase
 
@@ -130,4 +148,4 @@ Rebase strategy:
 4. Re-test FULL_DECODE_ONLY graph mode + prefix caching
 5. Benchmark to verify no regressions
 
-*Last updated: 2026-03-31 | Results from missions: MI100 Throughput Optimization, TurboQuant Backend*
+*Last updated: 2026-03-31 | Results from missions: MI100 Throughput Optimization, TurboQuant Backend, Triton MI100 Tile Tuning*
