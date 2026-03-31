@@ -101,19 +101,15 @@ FULL_DECODE_ONLY captures decode forward passes into HIP graphs. Both TQ capture
 3. TQ state (CompressedKVStore, KVCaptureEngine) must be initialized eagerly in `__init__`, not lazily during first forward pass
 4. The hybrid decode path uses PyTorch matmuls (`_matmul_attend` in score.py) which are graph-compatible
 
-**Recommended production config:**
+**Recommended production config for Qwen3.5-9B on MI100:**
+
+**DO NOT use TurboQuant in production.** Benchmarking (2026-03-31) showed TQ hybrid causes 5-11% synthetic throughput regression and 42-49% coding throughput regression, with TPOT doubling. VRAM savings of 10.8% do not compensate. Use the optimized baseline instead:
+
 ```bash
-TURBOQUANT_MODE=hybrid \
-    /opt/vllm-env/bin/python3 -m vllm.entrypoints.openai.api_server \
-    --model /models/Qwen3.5-9B \
-    --tensor-parallel-size 4 \
-    --max-model-len 32768 \
-    --port 8000 \
-    --enable-prefix-caching \
-    --gpu-memory-utilization 0.80 \
-    --language-model-only \
-    --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'
+/root/launch-vllm-optimized.sh  # FULL_DECODE_ONLY + prefix caching, no TQ
 ```
+
+See `.factory/library/benchmarking-results.md` and `docs/turboquant-production-recommendation.md` for full data.
 
 ## Existing Infrastructure
 
