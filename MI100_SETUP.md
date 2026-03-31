@@ -318,8 +318,7 @@ exec /opt/vllm-env/bin/python3 -m vllm.entrypoints.openai.api_server \
   --port 8000 \
   --trust-remote-code \
   --enforce-eager \
-  --language-model-only \
-  --disable-custom-all-reduce
+  --language-model-only
 ```
 
 ```bash
@@ -342,7 +341,7 @@ chmod +x /root/launch-vllm.sh
 |------|-----|
 | `--dtype float16` | ExllamaLinearKernel (INT4 dequant) requires float16 activations |
 | `--enforce-eager` | Disable torch.compile graph capture (not stable on MI100) |
-| `--disable-custom-all-reduce` | Avoid flashinfer all-reduce (CUDA-only) |
+| ~~`--disable-custom-all-reduce`~~ | No longer needed: quickreduce custom all-reduce now supports gfx908 |
 | `--language-model-only` | Skip loading vision encoder (saves memory for text-only use) |
 
 ## 12. Test Inference

@@ -786,8 +786,11 @@ class RocmPlatform(Platform):
 
     @classmethod
     def use_custom_allreduce(cls) -> bool:
-        # We only enable custom allreduce for MI300 series
-        return any(gfx in _GCN_ARCH for gfx in ["gfx94", "gfx95"])
+        # Enable custom allreduce for all GFX9 (CDNA) accelerators.
+        # quickreduce supports gfx908 (CDNA1), gfx90a (CDNA2), and
+        # gfx942/gfx950 (CDNA3/4) via architecture-specific memory
+        # ordering (see csrc/quickreduce/base.h MUBUF_ACQUIRE).
+        return _ON_GFX9
 
     @classmethod
     def opaque_attention_op(cls) -> bool:

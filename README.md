@@ -31,6 +31,9 @@ This is a fork of [vllm-project/vllm](https://github.com/vllm-project/vllm) (`v0
 - **FP8 emulation kernel** (`MI100FP8ScaledMMLinearKernel`) -- dequantizes FP8 to FP16 and uses rocBLAS, since MI100 lacks native FP8 hardware
 - **MI100 platform detection** -- `on_mi100()`, `_ON_MI100`, gfx908 added to `_ON_GFX9` family
 - **Pixtral chunked attention** -- memory-efficient attention for vision transformer
+- **Custom all-reduce for gfx908** -- quickreduce XGMI-aware all-reduce now enabled for MI100 multi-GPU TP
+- **C++ paged attention for gfx908** -- hand-optimized HIP paged attention kernel with MFMA, BF16 uses FP16 MFMA fallback
+- **INT4 quantization** -- AWQ (Triton) and GPTQ (Exllama) confirmed working on gfx908 with `--dtype float16`
 
 ### Quick Start
 
