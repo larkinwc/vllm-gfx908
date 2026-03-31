@@ -1,0 +1,54 @@
+{
+  "milestone": "graph-config",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 7,
+    "passed": 7,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-GRAPH-001",
+    "VAL-GRAPH-002",
+    "VAL-GRAPH-003",
+    "VAL-GRAPH-004",
+    "VAL-GRAPH-005",
+    "VAL-GRAPH-006",
+    "VAL-GRAPH-007"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null,
+  "details": {
+    "VAL-GRAPH-001": {
+      "result": "pass",
+      "description": "Server starts without enforce-eager using FULL_DECODE_ONLY graph mode. Health check 200 OK, curl chat completion returned coherent Python function code. Confirmed via live test on server_val_config_tuned_20260329_133659.log."
+    },
+    "VAL-GRAPH-002": {
+      "result": "pass",
+      "description": "Server logs explicitly show 'cudagraph_mode: <CUDAGraphMode.FULL_DECODE_ONLY: (2, 0)>' in engine init. 35/35 decode graphs captured: 'Capturing CUDA graphs (decode, FULL): 100%'. Mode is FULL_DECODE_ONLY (not NONE)."
+    },
+    "VAL-GRAPH-003": {
+      "result": "pass",
+      "description": "Graph mode c1 throughput: 248.21 tok/s vs enforce-eager baseline c1: 228.28 tok/s. Ratio=108.7% (>= 95% threshold). TPOT improved from 50.19ms to 14.17ms (-71.8%)."
+    },
+    "VAL-GRAPH-004": {
+      "result": "pass",
+      "description": "100 requests across 4 concurrent users: 100/100 successful (success_rate=1.0), 0 failures, no crashes, no OOM, no HTTP 5xx. Wall clock 92.57s. Evidence: stability_test_config_tuned.json."
+    },
+    "VAL-GRAPH-005": {
+      "result": "pass",
+      "description": "Live test: cache-miss TTFT=4316ms, cache-hit TTFT=625ms, ratio=0.145 (<<0.80). Prior test: 15622ms vs 137ms, ratio=0.009. Prefix caching dramatically reduces TTFT on repeated system prompts."
+    },
+    "VAL-GRAPH-006": {
+      "result": "pass",
+      "description": "With --max-model-len 32768: VRAM usage ~93% per GPU (29.76-29.82 GB / 31.98 GB). Default max-model-len 262144 would require 8x more KV cache memory (OOM on MI100 32GB GPUs). Reduced max-model-len clearly frees VRAM for KV cache blocks."
+    },
+    "VAL-GRAPH-007": {
+      "result": "pass",
+      "description": "Combined config-tuned (FULL_DECODE_ONLY + prefix-caching + max-model-len 32768) at c2: 478.10 tok/s vs baseline eager at c2: 411.87 tok/s. Improvement: +16.1%. All benchmarks show improvement over enforce-eager baseline."
+    }
+  }
+}

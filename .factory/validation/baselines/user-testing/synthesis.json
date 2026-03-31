@@ -1,0 +1,17 @@
+{
+  "milestone": "baselines",
+  "round": 2,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": ["VAL-BASE-007"],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": ".factory/validation/baselines/user-testing/synthesis-round1.json",
+  "notes": "Re-run testing only the previously failed VAL-BASE-007. The fix-synthetic-report-aggregation feature correctly updated generate_baseline_report.py to extract mean_ttft_ms and mean_tpot_ms from vllm bench serve flat JSON output. Verification confirmed baseline-report.json now has non-zero TTFT/TPOT values for all models and concurrency levels. All 8 VAL-BASE-* assertions are now passing."
+}

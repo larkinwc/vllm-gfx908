@@ -1,0 +1,71 @@
+{
+  "assertionResults": [
+    {
+      "id": "VAL-REG-001",
+      "status": "pass",
+      "notes": "Module turboquant.backends.vllm_rocm imports successfully. TurboQuantRocmBackend, TurboQuantRocmImpl, TurboQuantTritonBackend, and TurboQuantTritonImpl are all exposed. TurboQuantRocmBackend and TurboQuantRocmImpl are aliases for the Triton variants.",
+      "evidence": "evidence/backend-registration/reg-cap/val_reg_001.txt"
+    },
+    {
+      "id": "VAL-REG-002",
+      "status": "pass",
+      "notes": "register_backend(AttentionBackendEnum.TRITON_ATTN, 'turboquant.backends.vllm_rocm.TurboQuantTritonBackend') succeeds. The TRITON_ATTN backend entry resolves to TurboQuantTritonBackend. Note: implementation correctly uses TRITON_ATTN override (not CUSTOM as originally planned) to avoid conflicts with GDN layers.",
+      "evidence": "evidence/backend-registration/reg-cap/val_reg_002.txt"
+    },
+    {
+      "id": "VAL-REG-003",
+      "status": "pass",
+      "notes": "vLLM server started with TQ backend in capture_only mode and --enforce-eager. Health check returned 200 after 69s. Server logs confirm: '[TurboQuant] Backend auto-registered as TRITON_ATTN override in process' (6 messages, one per subprocess). 'Using TRITON_ATTN attention backend out of potential backends: [TRITON_ATTN]'. Successful inference: 2+2=4.",
+      "evidence": "evidence/backend-registration/reg-cap/server_eager_mode.log"
+    },
+    {
+      "id": "VAL-REG-005",
+      "status": "pass",
+      "notes": "TQ backend correctly handles Qwen3.5-9B hybrid architecture. Config confirms: 32 layers total (8 full_attention at indices [3,7,11,15,19,23,27,31] + 24 linear_attention). Direct instantiation test confirms 8 TurboQuantTritonImpl instances created with eager_init=enabled and TQ store/engine for each. Linear attention layers use GDN_ATTN routing (untouched by TQ). Server started without crashes.",
+      "evidence": "evidence/backend-registration/reg-cap/server_eager_mode.log"
+    },
+    {
+      "id": "VAL-CAP-001",
+      "status": "pass",
+      "notes": "5 prompts with temperature=0, seed=42 produce character-identical outputs between TQ capture_only server and baseline server (no TQ). All 5 prompts matched exactly.",
+      "evidence": "evidence/backend-registration/reg-cap/server_eager_mode.log"
+    },
+    {
+      "id": "VAL-CAP-002",
+      "status": "pass",
+      "notes": "TQ compression statistics are collected during capture. Direct test: after 20 tokens ingested via ingest_prefill(), capture_count=20 and buffered_tokens=10. TQ backend active during 50+ server requests (TRITON_ATTN backend confirmed selected).",
+      "evidence": "evidence/backend-registration/reg-cap/server_eager_mode.log"
+    },
+    {
+      "id": "VAL-CAP-003",
+      "status": "pass",
+      "notes": "4 concurrent requests all completed successfully with coherent responses. ThreadPoolExecutor with max_workers=4 sent 4 different prompts simultaneously. 4/4 requests returned 200 with coherent text content.",
+      "evidence": "evidence/backend-registration/reg-cap/server_eager_mode.log"
+    },
+    {
+      "id": "VAL-CAP-004",
+      "status": "pass",
+      "notes": "After 50 sequential requests with varying prompt lengths, VRAM usage increased by only 0.017% (well within 5% threshold). Per-GPU VRAM: GPU[0]: 28.219 GiB before vs 28.224 GiB after (0.017% change). Total across 4 GPUs: 113.033 GiB before vs 113.052 GiB after.",
+      "evidence": "evidence/backend-registration/reg-cap/server_eager_mode.log"
+    },
+    {
+      "id": "VAL-REG-004",
+      "status": "pass",
+      "notes": "vLLM server started with TQ backend in capture_only mode and FULL_DECODE_ONLY graph mode. Health check returned 200 after 111s. Server log confirms CUDAGraphMode.FULL_DECODE_ONLY enabled. 35 decode graphs captured successfully (batch sizes 1-512). TQ backend auto-registered in all worker processes. No graph capture errors.",
+      "evidence": "evidence/backend-registration/graph/server_graph_mode.log"
+    },
+    {
+      "id": "VAL-GRAPH-001",
+      "status": "pass",
+      "notes": "TQ backend in capture_only mode successfully works with FULL_DECODE_ONLY graph mode. 35 decode graphs captured (1-512 batch sizes). 10/10 requests completed correctly after graph capture. Key fix: TQ state initialized eagerly in __init__ (not lazily) prevents graph capture interference.",
+      "evidence": "evidence/backend-registration/graph/server_graph_mode.log"
+    }
+  ],
+  "frictions": [
+    "vLLM processes from a previous worker session were still running at start, occupying GPU VRAM - required manual kill by PID before testing could begin",
+    "Server stdout/stderr logging does not forward Python's standard logging module output to the vLLM log file, so per-layer TQ initialization messages are not visible in server logs - verified indirectly via direct Python tests",
+    "PKill command with signal SIGKILL sometimes causes the Execute tool to report 'terminated by signal' exit code 1 even when successful - workaround: kill by PID then verify"
+  ],
+  "blockers": [],
+  "toolsUsed": ["python", "curl", "rocm-smi"]
+}

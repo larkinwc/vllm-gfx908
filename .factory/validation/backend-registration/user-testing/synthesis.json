@@ -1,0 +1,34 @@
+{
+  "milestone": "backend-registration",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 10,
+    "passed": 10,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-REG-001",
+    "VAL-REG-002",
+    "VAL-REG-003",
+    "VAL-REG-004",
+    "VAL-REG-005",
+    "VAL-CAP-001",
+    "VAL-CAP-002",
+    "VAL-CAP-003",
+    "VAL-CAP-004",
+    "VAL-GRAPH-001"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [
+    {
+      "target": "user-testing.md",
+      "description": "Added 'Flow Validator Guidance: API' section with detailed pre-flight checks, launch commands, health check scripts, stop commands, known quirks, and API request examples for this GPU-bound testing surface",
+      "source": "setup"
+    }
+  ],
+  "previousRound": null,
+  "notes": "All 10 backend-registration milestone assertions passed. Key achievements: (1) TQ backend registers via TRITON_ATTN override correctly handling Qwen3.5-9B's 8 full-attention + 24 GDN layers; (2) Eager mode server starts in ~69s with TQ active; (3) capture_only outputs are character-identical to baseline; (4) VRAM stable at 0.017% change over 50 requests; (5) FULL_DECODE_ONLY graph mode works with TQ backend - 35 graphs captured (1-512 batch sizes), 10/10 requests succeed. The graph mode fix (eager init of TQ state in __init__) was validated successfully."
+}

@@ -1,0 +1,32 @@
+{
+  "milestone": "mtp",
+  "round": 1,
+  "status": "fail",
+  "assertionsSummary": {
+    "total": 6,
+    "passed": 5,
+    "failed": 1,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-MTP-001",
+    "VAL-MTP-002",
+    "VAL-MTP-004",
+    "VAL-MTP-005",
+    "VAL-MTP-006"
+  ],
+  "failedAssertions": [
+    {
+      "id": "VAL-MTP-003",
+      "reason": "TPOT with MTP enabled (54.84ms) is 9.3% WORSE than non-MTP eager baseline (50.19ms). The assertion requires TPOT <= 100% of non-MTP TPOT (lower TPOT = better). MTP is incompatible with FULL_DECODE_ONLY HIP graph mode on MI100/gfx908 (RuntimeError during graph capture), forcing --enforce-eager fallback. In eager mode, graph optimizations are lost, and the draft model overhead is not compensated by the 85% acceptance rate. Best performance on MI100 is graph mode WITHOUT MTP (TPOT 14.17ms)."
+    }
+  ],
+  "blockedAssertions": [],
+  "appliedUpdates": [],
+  "previousRound": null,
+  "notes": {
+    "graphModeMTPIncompatibility": "MTP speculative decoding is fundamentally incompatible with FULL_DECODE_ONLY HIP graph mode on MI100/gfx908. When starting vLLM with both --compilation-config '{\"cudagraph_mode\":\"FULL_DECODE_ONLY\"}' and --speculative-config, the server crashes with RuntimeError during graph capture/warmup. The MTP feature works correctly in --enforce-eager mode.",
+    "recommendation": "MTP on MI100 should NOT be used in production. FULL_DECODE_ONLY graph mode (without MTP) provides +68-72% TPOT improvement. MTP eager mode provides -9.3% TPOT regression. The optimal config for MI100 remains graph mode + prefix caching from the graph-config milestone.",
+    "crossMilestoneImpact": "VAL-CROSS-001 (MTP + HIP graphs) is documented as incompatible. This will need to be addressed in combined optimization milestone (VAL-COMBO-001) - MTP should be disabled in the production config."
+  }
+}

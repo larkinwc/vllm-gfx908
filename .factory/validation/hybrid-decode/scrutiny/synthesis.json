@@ -1,0 +1,74 @@
+{
+  "milestone": "hybrid-decode",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "/opt/vllm-env/bin/python3 -m pytest tests/transformers_utils/ --ignore=tests/transformers_utils/test_config.py -v --timeout=60",
+      "exitCode": 0,
+      "details": "31/31 tests passed in 8.25s"
+    },
+    "lint": {
+      "passed": true,
+      "command": "/opt/vllm-env/bin/python3 -m pre_commit run ruff-check --all-files",
+      "exitCode": 0,
+      "details": "ruff-check: Passed"
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "/opt/vllm-env/bin/python3 -m pre_commit run mypy-3.10 --all-files --hook-stage manual",
+      "exitCode": 0,
+      "details": "mypy-3.10: Passed"
+    }
+  },
+  "reviewsSummary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Updated hybrid-decode-validation.md 'Known Limitations' section to remove outdated statement that TQ hybrid Triton kernels 'may not be HIP graph compatible'. The graph-mode-compatibility-test feature confirmed FULL_DECODE_ONLY graph capture works (35 graphs captured). Also corrected the Configuration section which incorrectly stated --enforce-eager is required.",
+      "sourceFeature": "graph-mode-compatibility-test"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Add guidance: When validating 'stats show X happening', integration tests must assert that X is non-zero at the implementation level (e.g., via stats counters in test assertions), not just that the server responded successfully. VAL-HYB-003 passed solely because requests worked, not because compressed KV reads were confirmed.",
+      "evidence": "hybrid-decode-implementation VAL-HYB-003: test_hyb_003_compressed_kv_reads() conditionally passes if 'requests working in hybrid mode', which is always true when the server is running. This provides no evidence that the hybrid decode path was actually invoked.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "Add library doc note about graph compatibility detection relying on log string matching",
+      "reason": "This is an implementation detail of the test script, not actionable library knowledge. Already captured in the review report."
+    },
+    {
+      "observation": "Add library doc note that Triton kernels in decode path need verification",
+      "reason": "The tq-hybrid-graph-compatibility.md already provides a clear explanation of why graph capture works (PyTorch matmuls in decode path). Adding further uncertainty would be unhelpful without concrete evidence of a problem."
+    }
+  ],
+  "featuresReviewed": [
+    {
+      "featureId": "hybrid-decode-implementation",
+      "reviewFile": ".factory/validation/hybrid-decode/scrutiny/reviews/hybrid-decode-implementation.json",
+      "status": "pass",
+      "issueCount": 4,
+      "blockingCount": 0
+    },
+    {
+      "featureId": "graph-mode-compatibility-test",
+      "reviewFile": ".factory/validation/hybrid-decode/scrutiny/reviews/graph-mode-compatibility-test.json",
+      "status": "pass",
+      "issueCount": 4,
+      "blockingCount": 0
+    }
+  ],
+  "previousRound": null
+}

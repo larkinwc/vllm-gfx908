@@ -1,0 +1,56 @@
+{
+  "milestone": "benchmarking",
+  "round": 1,
+  "status": "pass",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "/opt/vllm-env/bin/python3 -m pytest tests/transformers_utils/ --ignore=tests/transformers_utils/test_config.py -v --timeout=60",
+      "exitCode": 0
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "/opt/vllm-env/bin/python3 -m pre_commit run mypy-3.10 --all-files --hook-stage manual",
+      "exitCode": 0
+    },
+    "lint": {
+      "passed": true,
+      "command": "/opt/vllm-env/bin/python3 -m pre_commit run ruff-check --all-files",
+      "exitCode": 0
+    }
+  },
+  "reviewsSummary": {
+    "total": 2,
+    "passed": 2,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [
+    {
+      "target": "library",
+      "description": "Created .factory/library/benchmarking-results.md documenting final TQ benchmark results: TQ hybrid causes 5-11% synthetic throughput regression and 42-49% coding regression vs optimized baseline. Includes result file locations, TTFT anomaly note for capture_only, VRAM data, and when TQ could help.",
+      "sourceFeature": "full-benchmark-comparison + production-recommendation-and-report"
+    },
+    {
+      "target": "library",
+      "description": "Updated .factory/library/architecture.md 'Recommended production config' section: removed stale recommendation to use TQ hybrid, replaced with clear 'DO NOT use TQ in production' note with data reference and pointer to optimized baseline launch script.",
+      "sourceFeature": "production-recommendation-and-report"
+    }
+  ],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Add GPU recovery procedure: When GPU is in stuck state with stale VRAM allocation from zombie processes (symptoms: new server fails to start, VRAM reads >80% with no running processes), run: `pkill -9 -f 'vllm.entrypoints'; pkill -9 -f 'VLLM::'; sleep 10; rocm-smi --showmeminfo vram` and wait for VRAM to reclaim before retrying.",
+      "evidence": "The production-recommendation-and-report worker (session 85f0ca05) could not run the VAL-CROSS-001 lifecycle test because GPU was stuck with 83% VRAM from zombie processes. The handoff explicitly recommends adding this to mission-worker-base. This pattern also appeared in a prior benchmark worker session.",
+      "isSystemic": true
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "Benchmark result file naming convention is inconsistent (some files have date suffix, others don't)",
+      "reason": "ambiguous — this is an artifact of different worker sessions using slightly different naming, not a documented convention. Fixing it would require modifying existing result files (which AGENTS.md prohibits). Not actionable."
+    }
+  ],
+  "previousRound": null
+}

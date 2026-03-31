@@ -1,0 +1,67 @@
+{
+  "groupId": "mtp-assertions",
+  "milestone": "mtp",
+  "assertions": ["VAL-MTP-001", "VAL-MTP-002", "VAL-MTP-003", "VAL-MTP-004", "VAL-MTP-005", "VAL-MTP-006"],
+  "testingSurface": "CLI/API",
+  "tool": "curl + custom Python benchmark scripts",
+  "evidence": {
+    "serverLogs": [
+      "/root/benchmark-results/server_mtp_eager_n1_20260329_135608.log",
+      "/root/benchmark-results/server_mtp_eager_n2_20260329_140150.log",
+      "/root/benchmark-results/server_mtp_eager_n3_20260329_140541.log",
+      "/root/benchmark-results/server_mtp_graph_n1_20260329_134449.log"
+    ],
+    "benchmarkResults": [
+      "/root/benchmark-results/mtp_eager_n1_c1.json",
+      "/root/benchmark-results/mtp_eager_n2_c1.json",
+      "/root/benchmark-results/mtp_eager_n3_c1.json",
+      "/root/benchmark-results/mtp_eager_n1_stability_c4.json",
+      "/root/benchmark-results/mtp_results.json"
+    ]
+  },
+  "results": [
+    {
+      "assertionId": "VAL-MTP-001",
+      "status": "pass",
+      "notes": "vLLM started with --speculative-config '{\"method\":\"mtp\",\"num_speculative_tokens\":1}' and server logs confirm MTP is active. Log lines show: 'Resolved architecture: Qwen3_5MTP', 'Detected MTP model. Sharing target model embedding weights with the draft model.', SpecDecoding metrics: 'Mean acceptance length: 1.84, Accepted throughput: 54.30 tokens/s, Drafted throughput: 64.90 tokens/s'. Note: MTP is incompatible with FULL_DECODE_ONLY graph mode on MI100/gfx908 (RuntimeError during graph capture/warmup), but works correctly with --enforce-eager.",
+      "evidence": "Server log line: INFO eagle.py Detected MTP model. Sharing target model embedding weights with the draft model. SpecDecoding metrics showing 83.7% acceptance rate."
+    },
+    {
+      "assertionId": "VAL-MTP-002",
+      "status": "pass",
+      "notes": "With MTP enabled (num_speculative_tokens=1), 10/10 coding prompts returned coherent, syntactically valid code. All responses show Python/TypeScript/SQL code completions appropriate to prompts. No garbled tokens or repetition loops observed.",
+      "evidence": "mtp_eager_n1_c1.json: 10/10 successful requests, all response_previews show coherent task analysis and code generation. Sample: 'The user wants me to improve an existing Python function that calculates the average...'"
+    },
+    {
+      "assertionId": "VAL-MTP-003",
+      "status": "fail",
+      "notes": "TPOT with MTP enabled (54.84ms) is WORSE than non-MTP eager baseline (50.19ms). The assertion requires TPOT <= 100% of non-MTP TPOT. Actual ratio: 54.84/50.19 = 109.3% (9.3% higher, i.e., slower). MTP on MI100 underperforms because: (1) MTP is incompatible with HIP graph mode, forcing eager mode which loses graph benefits; (2) The draft model overhead is not compensated by the 85% acceptance rate. Graph mode alone provides 68-72% TPOT improvement (14.17ms vs 50.19ms) which MTP cannot match.",
+      "evidence": "mtp_results.json comparison: baseline_eager avg_tpot_ms=50.19, mtp_eager_n1 avg_tpot_ms=54.84, delta_tpot=+9.3%. mtp_eager_n1_c1.json summary: avg_tpot_ms=54.84."
+    },
+    {
+      "assertionId": "VAL-MTP-004",
+      "status": "pass",
+      "notes": "All three configurations (num_speculative_tokens=1,2,3) started successfully and produced valid responses. Results: n=1 avg_tpot_ms=54.84, n=2 avg_tpot_ms=59.19, n=3 avg_tpot_ms=61.76. All 10/10 requests successful for each configuration. Optimal is n=1 as higher values increase TTFT significantly due to longer speculation chains.",
+      "evidence": "mtp_eager_n1_c1.json (10/10 OK, tpot=54.84ms), mtp_eager_n2_c1.json (10/10 OK, tpot=59.19ms), mtp_eager_n3_c1.json (10/10 OK, tpot=61.76ms)"
+    },
+    {
+      "assertionId": "VAL-MTP-005",
+      "status": "pass",
+      "notes": "With MTP enabled (n=1), 52 requests across 4 concurrent users completed with 100% success rate (52/52). Wall clock: 131.13 seconds. No server crashes, no timeouts, no HTTP errors. All requests well within 30s timeout (max individual total_time_ms ~20s for first request in each user queue).",
+      "evidence": "mtp_eager_n1_stability_c4.json: total_requests=52, successful_requests=52, failed_requests=0, success_rate=1.0, wall_clock_seconds=131.13"
+    },
+    {
+      "assertionId": "VAL-MTP-006",
+      "status": "pass",
+      "notes": "VRAM usage with MTP enabled is 90.3% per GPU across all 4 GPUs, well below the 97% threshold. This leaves headroom for 4 concurrent users with 32k context.",
+      "evidence": "mtp_results.json: mtp_eager_n1 vram_percent=90.3"
+    }
+  ],
+  "frictions": [
+    "MTP speculative decoding is incompatible with FULL_DECODE_ONLY HIP graph mode on MI100/gfx908 - causes RuntimeError during graph capture/warmup",
+    "MTP with --enforce-eager works but underperforms compared to graph mode without MTP",
+    "Higher num_speculative_tokens (2,3) significantly increases TTFT (1811ms, 1644ms vs 624ms for n=1) due to longer speculation overhead"
+  ],
+  "blockers": [],
+  "toolsUsed": ["curl", "custom Python benchmark script (coding_agent_bench.py)", "rocm-smi", "grep (server log inspection)"]
+}

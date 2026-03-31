@@ -1,0 +1,56 @@
+{
+  "featureId": "run-baseline-benchmarks",
+  "reviewedAt": "2026-03-29T17:00:00Z",
+  "commitId": "fb121c5c9",
+  "transcriptSkeletonReviewed": true,
+  "diffReviewed": true,
+  "status": "fail",
+  "codeReview": {
+    "summary": "The benchmark suite ran successfully with all benchmarks completing and reproducibility passing. However, a significant metric correctness bug was found in coding_agent_bench.py: the aggregate_decode_tok_per_s calculation uses the sum of per-request decode times as the denominator instead of wall clock time, causing the aggregate throughput to be reported as per-user throughput regardless of concurrency. At concurrency=4, the true aggregate is ~82 tok/s for Qwen3.5-9B but the script reports ~22 tok/s (same as concurrency=1). This undermines one of the core metrics the mission tracks. Additionally, the final baseline-report.json omits GPU memory utilization which is required by VAL-BASE-007. A minor code change (template_llama2.jinja) was committed to the vLLM repo in the worktree but remains untracked in /root/vllm-gfx908-src where vLLM is actually installed.",
+    "issues": [
+      {
+        "file": "/root/benchmark-scripts/coding_agent_bench.py",
+        "line": 391,
+        "severity": "blocking",
+        "description": "Bug in aggregate_decode_tok_per_s calculation: uses sum(per-request decode_time_ms) as denominator instead of wall clock time. Formula: `aggregate_decode_tok_per_s = total_decode_tokens / (total_decode_time / 1000)` where total_decode_time = sum(r.decode_time_ms for all requests). For concurrent requests, each request's decode_time_ms adds up independently (e.g., 4 users each taking 120s = sum of 480s), making the aggregate equal to per-user throughput. True aggregate should use wall clock: `total_decode_tokens / (end_time - start_time)`. Verification: at concurrency=4, Qwen3.5-9B: total_tokens=10232, wall_clock=124.6s gives true_aggregate=82.1 tok/s, but reported=21.68 tok/s (same as concurrency=1). This makes cross-concurrency throughput comparisons meaningless."
+      },
+      {
+        "file": "/root/benchmark-results/baseline-report.json",
+        "line": null,
+        "severity": "non_blocking",
+        "description": "Missing GPU memory utilization data in the report. VAL-BASE-007 requires 'GPU memory utilization' in the baseline report. GPU stats ARE captured in separate .txt files (e.g., Qwen3.5-9B_coding_c4_gpu_stats_20260329_105459.txt showing VRAM%=93%), but these are not merged into baseline-report.json. The data exists; it just wasn't integrated into the report structure."
+      },
+      {
+        "file": "/root/benchmark-results/baseline-report.json",
+        "line": null,
+        "severity": "non_blocking",
+        "description": "The report lacks 'prefill tok/s' as a distinct metric. VAL-BASE-007 requires 'prefill tok/s, decode tok/s'. The vllm bench serve output doesn't directly expose prefill tok/s as a separate metric; the TTFT data is a proxy. For the baseline report to fully satisfy VAL-BASE-007, either the synthetic benchmarks need to extract prefill throughput, or this metric needs to be approximated from input_tokens/TTFT."
+      },
+      {
+        "file": "vllm/transformers_utils/chat_templates/template_llama2.jinja",
+        "line": 21,
+        "severity": "non_blocking",
+        "description": "The template's add_generation_prompt block adds only ' ' (a space), not '[INST] ' which would be the standard Llama-2 generation prompt prefix. When add_generation_prompt=True, the standard Llama-2 format starts a user turn with '[INST] '. The current template adds a trailing space after the last message instead, which may cause inconsistent formatting when used for chat completions. However, the benchmarks ran successfully so this did not cause runtime failures for the current workload types."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "knowledge",
+      "observation": "The coding_agent_bench.py aggregate_decode_tok_per_s metric is computed as mean per-request throughput (not system aggregate throughput) for concurrency > 1. When comparing baseline vs. optimized configurations at multiple concurrency levels, this metric will incorrectly show no improvement in aggregate throughput. Future optimization workers should be aware of this when interpreting benchmark results. The correct metric to use for system throughput at concurrency N is: total_decode_tokens / total_wall_clock_time, which for Qwen3.5-9B at concurrency 4 would show ~82 tok/s instead of ~22 tok/s.",
+      "evidence": "coding_agent_bench.py line 391: aggregate_decode_tok_per_s = total_decode_tokens / (total_decode_time / 1000). For concurrency=4, Qwen3.5-9B: reported=21.68 vs true=82.1 tok/s (3.8x discrepancy)"
+    },
+    {
+      "area": "knowledge",
+      "observation": "GPU memory is tracked via separate .txt files (rocm-smi snapshots) but is not integrated into the baseline-report.json. When optimization workers need to reference baseline GPU memory utilization, they will need to look at these .txt files separately. Qwen3.5-9B uses 93% VRAM across all 4 GPUs; Llama-2-7b-hf uses approximately the same (both models + KV cache fill available VRAM with the current max-model-len settings).",
+      "evidence": "/root/benchmark-results/*_gpu_stats_*.txt files - e.g. Qwen3.5-9B_coding_c4_gpu_stats shows VRAM%=93% on all 4 GPUs"
+    },
+    {
+      "area": "conventions",
+      "observation": "The template_llama2.jinja file was committed to the worktree (chatty-books-share-1774757984587) as commit fb121c5c9, but it exists as an untracked file in /root/vllm-gfx908-src which is the actually installed vLLM source. This means the file is in both places but only version-controlled in the worktree branch. The run_all_baselines.sh hardcodes the path to /root/vllm-gfx908-src - this works now but could break if someone cleans up untracked files in the source.",
+      "evidence": "git -C /root/vllm-gfx908-src status shows template_llama2.jinja as 'Untracked files'. vLLM editable install location is /root/vllm-gfx908-src per pip show vllm."
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "Feature FAIL due to blocking bug in coding_agent_bench.py: the aggregate_decode_tok_per_s metric is incorrectly computed as per-user throughput regardless of concurrency. At concurrency=4, the true system aggregate is ~82 tok/s for Qwen3.5-9B but 21.68 tok/s is reported. This invalidates the aggregate throughput dimension of the baseline measurements and will cause incorrect comparisons in optimization milestones. Non-blocking: missing GPU memory in the structured report JSON (data exists in separate txt files), and minor template add_generation_prompt formatting issue."
+}

@@ -669,8 +669,10 @@ class TransformerBlock(nn.Module):
         cu_seqlens: torch.Tensor | None = None,
     ) -> torch.Tensor:
         r = self.attention.forward(
-            self.attention_norm(x), mask=mask, freqs_cis=freqs_cis,
-            cu_seqlens=cu_seqlens
+            self.attention_norm(x),
+            mask=mask,
+            freqs_cis=freqs_cis,
+            cu_seqlens=cu_seqlens,
         )
         h = x + r
         r = self.feed_forward.forward(self.ffn_norm(h))

@@ -1,0 +1,61 @@
+{
+  "milestone": "combined",
+  "round": 1,
+  "status": "pass",
+  "assertionsSummary": {
+    "total": 11,
+    "passed": 11,
+    "failed": 0,
+    "blocked": 0
+  },
+  "passedAssertions": [
+    "VAL-COMBO-001",
+    "VAL-COMBO-002",
+    "VAL-COMBO-003",
+    "VAL-COMBO-004",
+    "VAL-COMBO-005",
+    "VAL-COMBO-006",
+    "VAL-CROSS-001",
+    "VAL-CROSS-002",
+    "VAL-CROSS-003",
+    "VAL-CROSS-004",
+    "VAL-CROSS-005"
+  ],
+  "failedAssertions": [],
+  "blockedAssertions": [],
+  "appliedUpdates": [
+    {
+      "target": "user-testing.md",
+      "description": "Added 'Flow Validator Guidance: combined' section with per-assertion notes, key references, and known behaviors for CROSS-001 and CROSS-003",
+      "source": "setup"
+    },
+    {
+      "target": "user-testing.md",
+      "description": "Added friction: vllm bench serve --concurrency flag doesn't exist; use --request-rate instead",
+      "source": "flow-report"
+    },
+    {
+      "target": "user-testing.md",
+      "description": "Added friction: rocm-smi --all --json output doesn't include temperature data; use --showtemp instead for monitoring",
+      "source": "flow-report"
+    }
+  ],
+  "testingDetails": {
+    "server_config": "FULL_DECODE_ONLY graph mode + prefix-caching + max-model-len=32768 + max-num-batched-tokens=8192",
+    "model": "/models/Qwen3.5-9B",
+    "server_startup_time_seconds": 80,
+    "benchmarks_run": [
+      "vllm bench serve at c=2 (VAL-COMBO-002)",
+      "sustained load test 200 requests at c=4 (VAL-COMBO-003, VAL-CROSS-005)",
+      "prefix caching timing test (VAL-CROSS-002)",
+      "server restart timing test (VAL-CROSS-004)"
+    ],
+    "assertions_verified_from_evidence": [
+      "VAL-COMBO-005 (final-report.json file inspection)",
+      "VAL-COMBO-006 (optimized_llama2_synthetic_c2_*.json file inspection)",
+      "VAL-CROSS-001 (server_mtp_graph_n1_*.log hipErrorCapturedEvent evidence)",
+      "VAL-CROSS-003 (turboquant_integration_*.json FAIL evidence)"
+    ]
+  },
+  "previousRound": null
+}

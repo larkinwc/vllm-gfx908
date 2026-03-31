@@ -1,0 +1,60 @@
+{
+  "milestone": "combined",
+  "round": 1,
+  "status": "pass",
+  "generatedAt": "2026-03-29T21:35:00Z",
+  "validatorsRun": {
+    "test": {
+      "passed": true,
+      "command": "/opt/vllm-env/bin/python3 -m pytest tests/transformers_utils/ --ignore=tests/transformers_utils/test_config.py -v --timeout=60",
+      "exitCode": 0,
+      "notes": "31 tests passed. tests/distributed/ excluded (requires RANK env var at collection time, pre-existing infra issue unrelated to this milestone). combined milestone Python changes are purely cosmetic ruff formatting fixes (mi100.py, pixtral.py, rocm.py, default_loader.py) with no functional impact."
+    },
+    "lint": {
+      "passed": true,
+      "command": "/opt/vllm-env/bin/python3 -m pre_commit run ruff-check --all-files && /opt/vllm-env/bin/python3 -m pre_commit run ruff-format --all-files",
+      "exitCode": 0,
+      "notes": "ruff-check and ruff-format both pass. All vLLM package changes in this milestone are formatting fixes that satisfy ruff style requirements."
+    },
+    "typecheck": {
+      "passed": true,
+      "command": "/opt/vllm-env/bin/python3 -m pre_commit run mypy-3.10 --all-files --hook-stage manual",
+      "exitCode": 0,
+      "notes": "mypy-3.10 passes with no new type errors."
+    }
+  },
+  "reviewsSummary": {
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "failedFeatures": []
+  },
+  "blockingIssues": [],
+  "appliedUpdates": [],
+  "suggestedGuidanceUpdates": [
+    {
+      "target": "AGENTS.md",
+      "suggestion": "Add guidance: optimization workers should limit commits to changes directly required by the feature. Cosmetic/style code changes (ruff formatting) should be batched or avoided unless directly relevant.",
+      "evidence": "The combined-optimization-and-production feature commit included vLLM package style changes (mi100.py, pixtral.py, rocm.py, default_loader.py) that were cosmetic ruff formatting fixes unrelated to the combined optimization work. While low-risk and passing all validators, mixing concerns in commits makes review harder and traceability more difficult.",
+      "isSystemic": false
+    }
+  ],
+  "rejectedObservations": [
+    {
+      "observation": "library/environment.md update for TORCH_COMPILE_DISABLE requirement",
+      "reason": "already-documented - environment.md already contains 'Must keep even in graph mode (avoids gfx908 cluster_dims error)' note"
+    },
+    {
+      "observation": "library/combined-optimization-results.md creation",
+      "reason": "already-documented - file was created by the worker and comprehensively documents the results"
+    }
+  ],
+  "featureReviews": {
+    "combined-optimization-and-production": {
+      "status": "pass",
+      "reviewFile": ".factory/validation/combined/scrutiny/reviews/combined-optimization-and-production.json",
+      "summary": "Feature well-implemented. Combined optimization config (FULL_DECODE_ONLY graph mode + prefix caching) delivers +16% synthetic throughput at c2 (478 vs 412 tok/s), +245% coding agent throughput at c2 (144 vs 42 tok/s), TPOT reduced 68-75%. Production launch script /root/launch-vllm-optimized.sh well-documented. 200/200 sustained load test passed. All VAL-COMBO assertions fulfilled. vLLM package code changes are purely cosmetic ruff formatting fixes."
+    }
+  },
+  "previousRound": null
+}

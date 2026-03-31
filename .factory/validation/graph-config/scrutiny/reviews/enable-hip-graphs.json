@@ -1,0 +1,44 @@
+{
+  "featureId": "enable-hip-graphs",
+  "reviewedAt": "2026-03-29T18:35:00.000Z",
+  "commitId": "c7c1d15ce",
+  "transcriptSkeletonReviewed": false,
+  "diffReviewed": true,
+  "status": "pass",
+  "codeReview": {
+    "summary": "Feature successfully enabled FULL_DECODE_ONLY HIP graph mode on MI100 (gfx908). The implementation is documented in .factory/library/graph-mode-results.md. No vLLM Python code was changed — this was a configuration/operational feature. The worker correctly identified that TORCH_COMPILE_DISABLE=1 must be kept (to avoid gfx908 torch.compile cluster_dims error), while still enabling HIP graph capture via the compilation-config JSON flag. The launch script /root/benchmark-scripts/launch-graphs.sh is well-structured with proper MI100 environment variables. Benchmark results confirm all three validation assertions pass: server starts without enforce-eager (VAL-GRAPH-001), FULL_DECODE_ONLY graph mode activates in logs (VAL-GRAPH-002), and throughput improvement of +8.7% at c1 and +16.1% at c2 far exceeds the >=95% threshold (VAL-GRAPH-003).",
+    "issues": [
+      {
+        "file": "/root/benchmark-scripts/launch-graphs.sh",
+        "line": null,
+        "severity": "non_blocking",
+        "description": "The launch script uses 'set -e' but pipes server output with '2>&1 | tee', which masks exit codes. If the server fails to start, the script will exit 0 (tee succeeds). The launch-config-tuned.sh version runs the server in background and uses a health check loop, which is a better pattern. This is cosmetic for the bare graph script since it's the foreground (non-daemonized) version."
+      },
+      {
+        "file": "/root/benchmark-scripts/launch-graphs.sh",
+        "line": null,
+        "severity": "non_blocking",
+        "description": "The launch-graphs.sh script (unlike launch-config-tuned.sh) runs the server in the foreground (no & backgrounding) and has no health check loop or daemonization. This is inconsistent with launch-config-tuned.sh's approach and could confuse operators. Consider making both scripts consistent in how they daemonize."
+      }
+    ]
+  },
+  "sharedStateObservations": [
+    {
+      "area": "library",
+      "observation": "The graph-mode-results.md correctly documents the FULL_DECODE_ONLY discovery. One missing item: the observation that piecewise compilation was NOT attempted (the worker went directly to FULL_DECODE_ONLY per the task description). It would be useful to document whether piecewise was tried and failed, or was skipped. The handoff notes piecewise was not tried because FULL_DECODE_ONLY worked first. Architecture.md mentions 'Key question: Can piecewise compilation work on gfx908?' — the answer remains unknown after this feature.",
+      "evidence": "Handoff says worker tried order (1) FULL_DECODE_ONLY first, found it worked, did not attempt (2) or (3). graph-mode-results.md documents FULL_DECODE_ONLY results but doesn't explicitly say piecewise was not tried."
+    },
+    {
+      "area": "skills",
+      "observation": "optimization-worker skill had the worker follow the procedure (followedProcedure: true, deviations: []). The skill procedure is working correctly for this task type.",
+      "evidence": "Handoff skillFeedback: followedProcedure=true, deviations=[]"
+    },
+    {
+      "area": "knowledge",
+      "observation": "A key finding is that HIP graph capture on MI100 takes ~32-34 seconds and adds ~40 seconds to startup (total ~100s vs ~60s for eager). This cold start cost is not documented in architecture.md or environment.md, and is relevant for production deployment decisions (e.g., readiness probe timeout should be >100s). The graph storage overhead (0.16 GiB) is also not documented.",
+      "evidence": "graph-mode-results.md: 'Graph capture took ~32-34 seconds', 'Total initialization time: ~100 seconds (vs ~60 seconds for eager)', 'Memory overhead: 0.16 GiB for graph storage'"
+    }
+  ],
+  "addressesFailureFrom": null,
+  "summary": "PASS. The enable-hip-graphs feature correctly enabled FULL_DECODE_ONLY graph mode on MI100 and produced measurable throughput improvements (+8.7% at c1, +16.1% at c2) with dramatic TPOT reductions (-68-72%). All three validation assertions (VAL-GRAPH-001, VAL-GRAPH-002, VAL-GRAPH-003) are met. Two non-blocking issues noted: the foreground launch script lacks health check loop (unlike the tuned version), and piecewise mode compatibility remains undocumented. Shared state gaps: graph startup time and memory overhead should be added to library docs."
+}

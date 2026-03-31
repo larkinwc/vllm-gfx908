@@ -1,0 +1,38 @@
+commands:
+  install: /opt/vllm-env/bin/pip install -e /opt/turboquant
+  test: /opt/vllm-env/bin/python3 -m pytest tests/transformers_utils/ --ignore=tests/transformers_utils/test_config.py -v --timeout=60
+  lint: /opt/vllm-env/bin/python3 -m pre_commit run ruff-check --all-files
+  typecheck: /opt/vllm-env/bin/python3 -m pre_commit run mypy-3.10 --all-files --hook-stage manual
+  benchmark-synthetic: /opt/vllm-env/bin/python3 -m vllm.entrypoints.cli.main bench serve --model /models/Qwen3.5-9B --num-prompts 100 --request-rate 2 --dataset-name random --save-result
+
+services:
+  vllm-baseline:
+    start: >
+      TORCH_COMPILE_DISABLE=1
+      /opt/vllm-env/bin/python3 -m vllm.entrypoints.openai.api_server
+      --model /models/Qwen3.5-9B
+      --tensor-parallel-size 4
+      --enforce-eager
+      --max-model-len 32768
+      --port 8000
+      --enable-prefix-caching
+      --gpu-memory-utilization 0.93
+      --language-model-only
+    stop: pkill -9 -f 'vllm.entrypoints' 2>/dev/null; pkill -9 -f 'VLLM::' 2>/dev/null; sleep 2
+    healthcheck: curl -sf http://localhost:8000/health
+    port: 8000
+    depends_on: []
+
+  vllm-optimized:
+    start: /root/launch-vllm-optimized.sh
+    stop: pkill -9 -f 'vllm.entrypoints' 2>/dev/null; pkill -9 -f 'VLLM::' 2>/dev/null; sleep 2
+    healthcheck: curl -sf http://localhost:8000/health
+    port: 8000
+    depends_on: []
+
+  vllm-turboquant:
+    start: /root/benchmark-scripts/launch-tq-backend.sh
+    stop: pkill -9 -f 'vllm.entrypoints' 2>/dev/null; pkill -9 -f 'VLLM::' 2>/dev/null; sleep 2
+    healthcheck: curl -sf http://localhost:8000/health
+    port: 8000
+    depends_on: []

@@ -1,0 +1,35 @@
+{
+  "group_id": "val-base-007-r2",
+  "milestone": "baselines",
+  "round": 2,
+  "assertions": {
+    "VAL-BASE-007": {
+      "status": "pass",
+      "evidence": "baseline-report.json at /root/benchmark-results/baseline-report.json contains all required fields. TP size=4. For both Qwen3.5-9B and Llama-2-7b-hf, all concurrency levels (1, 2, 4) have non-zero TTFT mean, TPOT mean, decode tok/s, and total token throughput. GPU memory utilization data present for all concurrency levels and both models. The fix-synthetic-report-aggregation feature correctly updated generate_baseline_report.py to extract mean_ttft_ms and mean_tpot_ms from the vllm bench serve flat JSON output.",
+      "details": {
+        "report_file": "/root/benchmark-results/baseline-report.json",
+        "tp_size": 4,
+        "models_verified": ["Qwen3.5-9B", "Llama-2-7b-hf"],
+        "concurrency_levels": [1, 2, 4],
+        "Qwen3.5-9B": {
+          "c1": {"ttft_mean_ms": 880.28, "tpot_mean_ms": 50.19, "decode_tok_s": 228.28, "total_tps": 1141.38},
+          "c2": {"ttft_mean_ms": 217.38, "tpot_mean_ms": 49.60, "decode_tok_s": 411.87, "total_tps": 2059.35},
+          "c4": {"ttft_mean_ms": 264.81, "tpot_mean_ms": 55.32, "decode_tok_s": 687.72, "total_tps": 3438.62}
+        },
+        "Llama-2-7b-hf": {
+          "c1": {"ttft_mean_ms": 147.86, "tpot_mean_ms": 28.31, "decode_tok_s": 238.65, "total_tps": 1192.32},
+          "c2": {"ttft_mean_ms": 82.68, "tpot_mean_ms": 27.13, "decode_tok_s": 448.04, "total_tps": 2238.45},
+          "c4": {"ttft_mean_ms": 83.02, "tpot_mean_ms": 26.53, "decode_tok_s": 800.51, "total_tps": 3999.38}
+        },
+        "gpu_memory_present": true,
+        "gpu_memory_keys": ["coding_c1", "synthetic_c1", "coding_c2", "synthetic_c2", "coding_c4", "synthetic_c4", "idle"],
+        "ttft_was_zero_in_round1": true,
+        "fix_applied": "generate_baseline_report.py updated to use mean_ttft_ms and mean_tpot_ms keys from vllm bench serve JSON output"
+      }
+    }
+  },
+  "frictions": [],
+  "blockers": [],
+  "toolsUsed": ["python3", "json"],
+  "notes": "File-based validation only. No vLLM server required. VAL-BASE-007 confirmed passing after fix-synthetic-report-aggregation feature corrected the metric extraction logic."
+}

@@ -3,6 +3,7 @@
 > **MI100 Users**: This fork adds support for AMD Instinct MI100 (gfx908) GPUs.
 > For full setup instructions -- BIOS, drivers, ROCm 7.12, native build, and launch config --
 > see **[MI100_SETUP.md](MI100_SETUP.md)**.
+> For performance benchmarks and optimization results, see **[BENCH.md](BENCH.md)**.
 
 ---
 
