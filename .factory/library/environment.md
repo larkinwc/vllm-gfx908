@@ -22,7 +22,7 @@
 
 ## Environment Variables
 
-- `HF_TOKEN=<set via environment variable>`
+- `HF_TOKEN` -- set via environment variable (required for gated models)
 - `TORCH_COMPILE_DISABLE=1` (required for gfx908 to avoid torch.compile issues)
 - `VLLM_TORCH_COMPILE_CONFIG` -- set to config path for graph mode
 - `VLLM_USE_V1=1` -- v1 engine (default in 0.18.1)
