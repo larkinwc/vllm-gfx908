@@ -865,17 +865,20 @@ def _get_tile_size(
     element_size: int,
     is_prefill: bool,
 ) -> int:
-    """Select tile size with Gemma3-specific optimization.
+    """Select tile size with architecture-specific optimization.
 
-    For Gemma3, use 32 for both prefill and decode to better utilize
-    the larger head dimension (128/256). For other models, use
-    the default vLLM behavior.
+    MI100 (gfx908) uses larger decode tiles to reduce iteration count
+    over KV cache blocks, better amortizing per-tile overhead given
+    its lower HBM2 bandwidth (1.2 TB/s vs 5.3 TB/s on MI300X).
     """
     if _is_gemma3_attention(head_size, sliding_window):
-        # Gemma3: use 32 for decode (default is 16)
         return 32
 
-    # Default behavior
+    if current_platform.is_rocm():
+        from vllm.platforms.rocm import on_mi100
+        if on_mi100():
+            return 32
+
     if is_prefill:
         return 32
     return 16 if element_size >= 2 else 32

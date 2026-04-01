@@ -38,9 +38,16 @@ from vllm.v1.kv_cache_interface import AttentionSpec
 logger = init_logger(__name__)
 
 
-# constants
-MIN_LAUNCH_GRID_SIZE_2D = 128  # Minimum launch grid size of 2D kernel
-NUM_PAR_SOFTMAX_SEGMENTS = 16  # Number of parallel tiled softmax segments
+# MI100 (gfx908) has 120 CUs vs 304 on MI300X. Use smaller grid threshold
+# and fewer softmax segments to avoid over-partitioning on small batch sizes.
+def _get_mi100_tuned_constants():
+    if current_platform.is_rocm():
+        from vllm.platforms.rocm import on_mi100
+        if on_mi100():
+            return 64, 8
+    return 128, 16
+
+MIN_LAUNCH_GRID_SIZE_2D, NUM_PAR_SOFTMAX_SEGMENTS = _get_mi100_tuned_constants()
 
 
 @dataclass
