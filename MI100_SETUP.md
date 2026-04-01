@@ -308,7 +308,7 @@ export PATH=/opt/rocm/core-7.12/bin:$PATH
 export ROCM_PATH=/opt/rocm/core-7.12
 export PYTORCH_ROCM_ARCH=gfx908
 export TORCH_COMPILE_DISABLE=1
-export VLLM_ROCM_USE_SKINNY_GEMM=0
+export VLLM_ROCM_USE_SKINNY_GEMM=1
 
 exec /opt/vllm-env/bin/python3 -m vllm.entrypoints.openai.api_server \
   --model /models/Qwen3.5-27B-AWQ-BF16-INT4 \
@@ -331,7 +331,7 @@ chmod +x /root/launch-vllm.sh
 | Variable | Value | Why |
 |----------|-------|-----|
 | `TORCH_COMPILE_DISABLE=1` | Disable torch.compile/inductor | Avoids `KernelMetadata.cluster_dims` error on gfx908 |
-| `VLLM_ROCM_USE_SKINNY_GEMM=0` | Disable skinny GEMM kernels | `wvSplitK` kernels are MI300X-only, crash on gfx908 |
+| `VLLM_ROCM_USE_SKINNY_GEMM=1` | Enable skinny GEMM kernels | `wvSplitK`/`LLMM1` now compiled for gfx908 (compile guard added) |
 | `VLLM_ROCM_USE_AITER=1` | Enable AITER Triton kernels | Triton-based kernels that work on gfx908 |
 | `PYTORCH_ROCM_ARCH=gfx908` | Target GPU architecture | Ensures correct code generation |
 
@@ -384,8 +384,8 @@ ROCm 7.12 = ABI mismatch. Use `torch+rocm7.2` with ROCm 7.x host.
 
 ### skinny_gemms.hip:530 Device-side assertion
 
-The skinny GEMM kernels (`wvSplitK`) are written for MI300X (gfx942). Set
-`VLLM_ROCM_USE_SKINNY_GEMM=0` to disable them on MI100.
+The skinny GEMM kernels (`wvSplitK`) originally excluded gfx908 from the compile
+guard. The fork adds `__gfx908__` support; set `VLLM_ROCM_USE_SKINNY_GEMM=1`.
 
 ### Exllama only supports float16 activations
 

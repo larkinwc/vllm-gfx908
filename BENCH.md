@@ -18,7 +18,8 @@ Benchmark results for vLLM on 4x AMD Instinct MI100 (gfx908) GPUs.
 | FULL_DECODE_ONLY + prefix cache | 248 | 478 | 884 | 13.6 ms | 15.8 ms | 715 ms |
 | + custom all-reduce | 250 | 486 | 910 | 11.3 ms | 12.1 ms | 119 ms |
 | + Triton MI100 tuning | 250 | 485 | 909 | 10.5 ms | 11.9 ms | 120 ms |
-| **+ block-size 32** | **250** | **486** | **914** | **10.3 ms** | **11.6 ms** | **96 ms** |
+| + block-size 32 | 250 | 486 | 914 | 10.3 ms | 11.6 ms | 96 ms |
+| **+ skinny GEMM (gfx908)** | **251** | **488** | **916** | **8.8 ms** | **11.1 ms** | **93 ms** |
 | TQ capture_only + graphs | 239 | 447 | — | 30.6 ms | 52.1 ms | 4107 ms |
 | TQ hybrid + graphs | 233 | 448 | — | 31.2 ms | 33.0 ms | 854 ms |
 | ROCM_ATTN (prefill-decode split) | 248 | 480 | 891 | 13.0 ms | 14.7 ms | 128 ms |
@@ -31,13 +32,15 @@ Benchmark results for vLLM on 4x AMD Instinct MI100 (gfx908) GPUs.
 | FULL_DECODE_ONLY + prefix cache | 55.1 | 89.8 | 319 | 11.0 ms | — |
 | + custom all-reduce | 87.9 | 168.7 | 260 | 8.9 ms | — |
 | + Triton MI100 tuning | 87.6 | 167.8 | 308 | 9.0 ms | 130 ms |
-| **+ block-size 32** | **88.1** | **172.2** | **338** | **9.1 ms** | **73 ms** |
+| + block-size 32 | 88.1 | 172.2 | 338 | 9.1 ms | 73 ms |
+| **+ skinny GEMM (gfx908)** | **112.6** | **209.4** | **386** | **6.6 ms** | **74 ms** |
 | TQ hybrid + graphs | 31.0 | — | — | 24.2 ms | — |
 | ROCM_ATTN (prefill-decode split) | 82.8 | 159.5 | 295 | 9.6 ms | 133 ms |
 
 ### Key Findings
 
-- **Block-size 32**: Increasing KV cache block size from 16 to 32 gives **-44% TTFT** on coding agent (130→73ms), **+9.6% throughput at c=4** (308→338 tok/s), and **-14% TPOT at c=4** synthetic (16.8→14.4ms). Improves prefix cache hit efficiency and reduces pointer chasing in attention kernels.
+- **Skinny GEMM (gfx908)**: Adding `__gfx908__` to the compile guard in `skinny_gemms.cu` enables `wvSplitK` and `LLMM1` kernels for MI100. These optimize small-M GEMM shapes (batch=1-4 decode steps). Gives **-27% TPOT** on coding agent (9.1→6.6ms), **+28% throughput at c=1** (88→113 tok/s), **+14% at c=4** (338→386 tok/s). The single largest per-optimization win after CUDA graphs.
+- **Block-size 32**: Increasing KV cache block size from 16 to 32 gives **-44% TTFT** on coding agent (130→73ms), **+9.6% throughput at c=4** (308→338 tok/s). Improves prefix cache hit efficiency and reduces pointer chasing in attention kernels.
 - **Triton MI100 tuning**: decode TILE_SIZE 16→32, prefill BLOCK 128→64, NUM_PAR_SOFTMAX_SEGMENTS 16→8, MIN_LAUNCH_GRID_SIZE_2D 128→64. Gives -7% TPOT at c=1 synthetic, +18.5% throughput at c=4 coding agent (260→308 tok/s).
 - **Custom all-reduce** (quickreduce for gfx908): additional -17% TPOT on synthetic, +60-88% throughput on coding agent workloads
 - **FULL_DECODE_ONLY graph mode** is the biggest single win: -72% TPOT, +16% throughput over eager baseline
@@ -75,6 +78,7 @@ Summary of what works on MI100 (gfx908):
 |---|---|---|---|
 | FULL_DECODE_ONLY graphs | **Works** | +16% throughput, -72% TPOT | Recommended for production |
 | Prefix caching | **Works** | 85-99% TTFT reduction | Recommended, stacks with graphs |
+| Skinny GEMM (gfx908) | **Works** | -27% TPOT, +28% c=1 throughput | `VLLM_ROCM_USE_SKINNY_GEMM=1`, added `__gfx908__` guard |
 | Block-size 32 | **Works** | -44% TTFT, +9.6% c=4 throughput | `--block-size 32`, recommended |
 | Triton MI100 tile tuning | **Works** | -7% TPOT, +18.5% c=4 throughput | Decode TILE 32, prefill BLOCK 64, 8 softmax segments |
 | Custom all-reduce | **Works** | Reduced TP comm latency | quickreduce supports gfx908 CDNA1 memory ordering |
@@ -161,4 +165,4 @@ Rebase strategy:
 4. Re-test FULL_DECODE_ONLY graph mode + prefix caching
 5. Benchmark to verify no regressions
 
-*Last updated: 2026-03-31 | Results from missions: MI100 Throughput Optimization, TurboQuant Backend, Triton MI100 Tile Tuning, Block-Size & Backend Sweep*
+*Last updated: 2026-04-01 | Results from missions: MI100 Throughput Optimization, TurboQuant Backend, Triton MI100 Tile Tuning, Block-Size & Backend Sweep, Skinny GEMM gfx908*
