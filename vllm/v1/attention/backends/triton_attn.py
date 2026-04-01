@@ -49,6 +49,78 @@ def _get_mi100_tuned_constants():
 
 MIN_LAUNCH_GRID_SIZE_2D, NUM_PAR_SOFTMAX_SEGMENTS = _get_mi100_tuned_constants()
 
+# Flash-Decoding adaptive split-K constants for MI100.
+# Maximum number of KV-dimension splits for the 3D decode kernel.
+# Must be a power of 2. Larger values = more parallelism for long sequences
+# but more buffer memory. 64 splits * TILE_SIZE=32 = handles up to ~2048
+# tiles, sufficient for sequences up to 65K tokens.
+MAX_FLASH_DECODING_SPLITS = 64
+
+# Valid split counts (powers of 2) to limit Triton recompilation.
+# Each unique split count triggers a separate Triton JIT compilation.
+FLASH_DECODING_SPLIT_COUNTS = [8, 16, 32, 64]
+
+# Minimum tiles per split. Below this threshold, splits are too fine-grained
+# and the reduce overhead dominates.
+MIN_TILES_PER_SPLIT = 4
+
+
+def _compute_flash_decoding_splits(
+    max_seq_len: int,
+    num_seqs: int,
+    num_kv_heads: int,
+    tile_size: int,
+    target_cus: int = 120,
+) -> int:
+    """Compute optimal number of KV splits for Flash-Decoding on MI100.
+
+    Flash-Decoding splits the KV sequence dimension across multiple thread
+    blocks to increase GPU occupancy during decode (query_len=1). The 3D
+    kernel grid is (num_q_blocks, num_kv_heads, num_splits), so we need
+    enough splits to fill the target CUs.
+
+    Args:
+        max_seq_len: Maximum KV sequence length in the batch.
+        num_seqs: Number of sequences (batch size) in the decode batch.
+        num_kv_heads: Number of KV attention heads.
+        tile_size: TILE_SIZE used by the 3D kernel.
+        target_cus: Target number of CUs to fill (120 for MI100).
+
+    Returns:
+        Number of splits, rounded up to nearest valid power of 2.
+    """
+    # Total number of KV tiles across the longest sequence
+    num_tiles = (max_seq_len + tile_size - 1) // tile_size
+
+    # Can't split more than the number of tiles
+    max_possible_splits = max(1, num_tiles // MIN_TILES_PER_SPLIT)
+
+    # Current grid occupancy without KV splitting:
+    # grid = num_seqs * num_kv_heads (the q_blocks and kv_head dims)
+    base_grid = num_seqs * num_kv_heads
+
+    # Target splits to fill CUs
+    if base_grid >= target_cus:
+        # Already enough parallelism, use minimum splits
+        ideal_splits = 8
+    else:
+        # Need more splits to fill CUs
+        ideal_splits = max(8, (target_cus + base_grid - 1) // base_grid)
+
+    # Cap at max possible (can't have more splits than tiles/MIN_TILES)
+    ideal_splits = min(ideal_splits, max_possible_splits)
+
+    # Cap at MAX_FLASH_DECODING_SPLITS
+    ideal_splits = min(ideal_splits, MAX_FLASH_DECODING_SPLITS)
+
+    # Round up to nearest valid power-of-2 split count
+    for split_count in FLASH_DECODING_SPLIT_COUNTS:
+        if split_count >= ideal_splits:
+            return split_count
+
+    return FLASH_DECODING_SPLIT_COUNTS[-1]
+
+
 
 @dataclass
 class TritonAttentionMetadata:
@@ -70,6 +142,7 @@ class TritonAttentionMetadata:
 
     seq_threshold_3D: int
     num_par_softmax_segments: int
+    max_flash_decoding_splits: int
     softmax_segm_output: torch.Tensor
     softmax_segm_max: torch.Tensor
     softmax_segm_expsum: torch.Tensor
@@ -173,25 +246,32 @@ class TritonAttentionMetadataBuilder(AttentionMetadataBuilder[TritonAttentionMet
                 key=lambda x: abs(x - self.seq_threshold_3D),
             )
 
+        # Flash-Decoding: allocate segment buffers at MAX split count.
+        # The actual split count is computed dynamically per-batch based
+        # on sequence length, but buffers must be pre-allocated at the
+        # maximum size for CUDA graph compatibility.
+        self.max_flash_decoding_splits = MAX_FLASH_DECODING_SPLITS
         self.num_par_softmax_segments = NUM_PAR_SOFTMAX_SEGMENTS
         headdim_padded = next_power_of_2(self.headdim)
         self.softmax_segm_output = torch.empty(
             (
                 self.seq_threshold_3D,
                 self.num_heads_q,
-                self.num_par_softmax_segments,
+                self.max_flash_decoding_splits,
                 headdim_padded,
             ),
             dtype=torch.float32,
             device=device,
         )
         self.softmax_segm_max = torch.empty(
-            (self.seq_threshold_3D, self.num_heads_q, self.num_par_softmax_segments),
+            (self.seq_threshold_3D, self.num_heads_q,
+             self.max_flash_decoding_splits),
             dtype=torch.float32,
             device=device,
         )
         self.softmax_segm_expsum = torch.empty(
-            (self.seq_threshold_3D, self.num_heads_q, self.num_par_softmax_segments),
+            (self.seq_threshold_3D, self.num_heads_q,
+             self.max_flash_decoding_splits),
             dtype=torch.float32,
             device=device,
         )
@@ -254,6 +334,7 @@ class TritonAttentionMetadataBuilder(AttentionMetadataBuilder[TritonAttentionMet
             prefix_scheduler_metadata=prefix_scheduler_metadata,
             seq_threshold_3D=self.seq_threshold_3D,
             num_par_softmax_segments=self.num_par_softmax_segments,
+            max_flash_decoding_splits=self.max_flash_decoding_splits,
             softmax_segm_output=self.softmax_segm_output,
             softmax_segm_max=self.softmax_segm_max,
             softmax_segm_expsum=self.softmax_segm_expsum,
@@ -523,6 +604,7 @@ class TritonAttentionImpl(AttentionImpl):
             v_descale=layer._v_scale.expand(descale_shape),
             seq_threshold_3D=seq_threshold_3D,
             num_par_softmax_segments=num_par_softmax_segments,
+            max_flash_decoding_splits=attn_metadata.max_flash_decoding_splits,
             softmax_segm_output=softmax_segm_output,
             softmax_segm_max=softmax_segm_max,
             softmax_segm_expsum=softmax_segm_expsum,
