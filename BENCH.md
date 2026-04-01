@@ -84,6 +84,7 @@ Summary of what works on MI100 (gfx908):
 | Custom all-reduce | **Works** | Reduced TP comm latency | quickreduce supports gfx908 CDNA1 memory ordering |
 | INT4 AWQ | **Works** (Triton) | Enables larger models | `VLLM_USE_TRITON_AWQ=1` auto-set on ROCm, `--dtype float16` required |
 | INT4 GPTQ | **Works** (Exllama) | Enables larger models | Marlin CUDA-only, falls back to Exllama on ROCm; `--dtype float16` |
+| TunableOp GEMM tuning | **Works** | +13.4% throughput (c=1), -88% TTFT | `PYTORCH_TUNABLEOP_ENABLED=1`, 200 shapes tuned per GPU |
 | FP8 quantization | **Emulated** | Software dequant path | MI100 lacks native FP8 hardware |
 | ROCM_ATTN (prefill-decode) | **Works** | -5% throughput regression | Triton unified is faster on MI100 |
 | max-num-seqs tuning | **Works** | Neutral (coding), -33% (bursty) | Not recommended for production |
@@ -145,9 +146,43 @@ Tested `--max-num-seqs 8`. Neutral for coding agents (real concurrency stays wit
 
 `VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION=1` fails with `ModuleNotFoundError: No module named 'aiter'`. The AITER package is not available for gfx908. Would need to build from AMD's aiter repo with gfx908 support.
 
-### GEMM Kernel Profiling
+### ~~GEMM Kernel Profiling + TunableOp Autotuning~~ (DONE)
 
-Profile individual GEMM operations (linear layers, attention QKV projection) with `rocprof` to identify if there are bottlenecks in the linear algebra path. MI100 GEMM utilization may be suboptimal for the Qwen3.5-9B tensor shapes with TP=4.
+Implemented PyTorch TunableOp (`PYTORCH_TUNABLEOP_ENABLED=1`) to auto-tune rocBLAS GEMM kernels for the exact Qwen3.5-9B tensor shapes with TP=4. The tuning process:
+
+1. Set `PYTORCH_TUNABLEOP_ENABLED=1 PYTORCH_TUNABLEOP_TUNING=1` during server startup
+2. TunableOp explores rocBLAS algorithm candidates for each unique GEMM shape encountered during graph capture and warmup
+3. Tuned results are saved to per-GPU CSV files (`tunableop_results{0-3}.csv`)
+4. Subsequent runs load cached results for zero-overhead replay
+
+**Shape analysis (Qwen3.5-9B, TP=4, FP16):**
+- ~200 unique GEMM shapes per GPU (793 total across 4 GPUs)
+- 97.1% of shapes tuned with non-default (optimized) rocBLAS algorithms
+- Largest shapes: 6144x8192x4096 (QKV projection), 4096x8192x3072 (FFN), 62080x256x4096 (vocab)
+- Tuning selects optimal rocBLAS solutions per shape (identified by hash, e.g., `Gemm_Rocblas_-606081500`)
+
+**Benchmark results (without skinny GEMM, FULL_DECODE_ONLY graphs):**
+
+| Metric | No TunableOp | TunableOp | Delta |
+|---|---:|---:|---:|
+| c=1 throughput (tok/s) | 63.1 | 71.6 | **+13.4%** |
+| c=1 TTFT (ms) | 684 | 81 | **-88.2%** |
+| c=1 TPOT (ms) | 11.2 | 11.7 | +4.4% |
+
+**Production usage:**
+```bash
+# Add to launch script environment:
+export PYTORCH_TUNABLEOP_ENABLED=1
+export PYTORCH_TUNABLEOP_TUNING=0          # Replay only (zero overhead)
+export PYTORCH_TUNABLEOP_FILENAME=/root/tunableop-results/tunableop_results.csv
+```
+
+**Tools:**
+- `benchmarks/kernels/tunableop_gemm_tuning.py` — Automated tuning pipeline (record, tune, generate launch script)
+- `benchmarks/kernels/profile_gemm_kernels.py` — rocprofv3 GEMM profiling (triage, deep PMC counters, bottleneck classification)
+- `benchmarks/kernels/run_gemm_optimization.sh` — Full orchestration script
+
+**Note:** TunableOp improvement stacks with skinny GEMM when both are available. The +13.4% throughput measured here is from TunableOp alone (skinny GEMM was disabled due to C extension compatibility). With both optimizations, expected combined uplift is 15-30%.
 
 ### Upstream Rebase
 
@@ -165,4 +200,4 @@ Rebase strategy:
 4. Re-test FULL_DECODE_ONLY graph mode + prefix caching
 5. Benchmark to verify no regressions
 
-*Last updated: 2026-04-01 | Results from missions: MI100 Throughput Optimization, TurboQuant Backend, Triton MI100 Tile Tuning, Block-Size & Backend Sweep, Skinny GEMM gfx908*
+*Last updated: 2026-04-01 | Results from missions: MI100 Throughput Optimization, TurboQuant Backend, Triton MI100 Tile Tuning, Block-Size & Backend Sweep, Skinny GEMM gfx908, GEMM TunableOp Autotuning*
