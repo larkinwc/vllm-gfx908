@@ -77,9 +77,15 @@ Wikitext-2 test set perplexity (lower is better), 50 chunks of 512 tokens, TP=4.
 - AWQ INT4 (W4A16, group_size=32) works because asymmetric group quantization has finer granularity than symmetric per-channel INT8.
 - MI100's 185 TOPS INT8 MFMA hardware remains untapped for this model. W8A8 INT8 would work on standard transformer architectures (Llama, Mistral, etc.) that don't have GatedDeltaNet layers.
 
-### CUDA Graph Bug on gfx908
+### CUDA Graph Bug on gfx908 (CONFIRMED -- ALL MODELS)
 
-FULL_DECODE_ONLY CUDA graphs cause degenerate `!` token repetition on Qwen3.5-9B (both FP16 and quantized). The model produces correct output with `--enforce-eager`. This appears to be a torch.compile/dynamo tracing issue on gfx908 -- possibly related to the GatedDeltaNet `linear_attention` custom op not being traced correctly through CUDA graph capture. Requires investigation.
+**FULL_DECODE_ONLY CUDA/HIP graphs produce incorrect output on ALL models on gfx908 (MI100).** This is NOT specific to Qwen3.5-9B or GatedDeltaNet -- Llama-2-7B is also affected. The model produces correct output with `--enforce-eager`.
+
+**Root cause:** Known HIP graph replay bug ([PyTorch #155684](https://github.com/pytorch/pytorch/issues/155684)). HIP graphs on ROCm silently produce wrong results for operations that NVIDIA CUDA would reject with `operation not permitted when stream is capturing`. During graph capture, certain operations (dynamic indexing, data-dependent control flow) are captured but replay with incorrect results. CUDA correctly raises errors for these operations; HIP does not.
+
+**Impact:** All previous CUDA graph benchmark numbers in this document measured throughput of *incorrect* output. The throughput numbers are valid for measuring token generation speed but the generated tokens were garbage. Use `--enforce-eager` for correct inference on gfx908.
+
+**Workaround:** Always use `--enforce-eager` on MI100 (gfx908). The launch script has been updated.
 
 ---
 
@@ -126,7 +132,7 @@ Summary of what works on MI100 (gfx908):
 
 | Optimization | Status | Impact | Notes |
 |---|---|---|---|
-| FULL_DECODE_ONLY graphs | **Works** | +16% throughput, -72% TPOT | Recommended for production |
+| FULL_DECODE_ONLY graphs | **BROKEN** | Produces incorrect output | HIP graph replay bug ([PyTorch #155684](https://github.com/pytorch/pytorch/issues/155684)). Use `--enforce-eager`. |
 | Prefix caching | **Works** | 85-99% TTFT reduction | Recommended, stacks with graphs |
 | Skinny GEMM (gfx908) | **Works** | -27% TPOT, +28% c=1 throughput | `VLLM_ROCM_USE_SKINNY_GEMM=1`, added `__gfx908__` guard |
 | Adaptive Flash-Decoding | **Works** | +35% c=1 throughput (152 tok/s) | Built directly into Triton unified attn |
