@@ -677,6 +677,22 @@ class RocmPlatform(Platform):
         compilation_config = vllm_config.compilation_config
         parallel_config = vllm_config.parallel_config
 
+        # gfx908 (MI100): custom all-reduce uses IPC shared memory that
+        # produces silently incorrect results during HIP graph replay.
+        # Disable it so graphs fall back to pynccl which works correctly.
+        if (
+            compilation_config.cudagraph_mode != CUDAGraphMode.NONE
+            and not parallel_config.disable_custom_all_reduce
+        ):
+            device_cap = cls.get_device_capability()
+            if device_cap is not None and device_cap.major == 9 and device_cap.minor == 0:
+                logger.warning_once(
+                    "gfx908 (MI100): disabling custom all-reduce for CUDA "
+                    "graph compatibility. Custom all-reduce IPC shared memory "
+                    "produces incorrect results during HIP graph replay."
+                )
+                parallel_config.disable_custom_all_reduce = True
+
         if compilation_config.cudagraph_mode.has_full_cudagraphs():
             # decode context parallel does not support full cudagraphs
             if parallel_config.decode_context_parallel_size > 1:

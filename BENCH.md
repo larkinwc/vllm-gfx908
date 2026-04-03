@@ -61,6 +61,67 @@ Benchmark results for vLLM on 4x AMD Instinct MI100 (gfx908) GPUs.
 
 ---
 
+## Qwen3.5-9B Quantization Comparison
+
+Wikitext-2 test set perplexity (lower is better), 50 chunks of 512 tokens, TP=4.
+
+| Model Variant | Perplexity | NLL | Model Size | PPL Degradation | Generation Quality |
+|---|---:|---:|---:|---:|---|
+| **FP16 (baseline)** | **9.78** | 2.2808 | 18.0 GB | — | OK |
+| **W8A8 INT8 (GPTQ)** | **10.02** | 2.3047 | 10.2 GB | +2.5% | **BROKEN** |
+| **AWQ INT4 (W4A16)** | **10.25** | 2.3277 | 10.6 GB | +4.8% | OK |
+
+**Key findings:**
+- **W8A8 INT8 GPTQ fails on Qwen3.5-9B** despite acceptable perplexity (10.02). Generation degenerates into gibberish/repetition. The GatedDeltaNet hybrid architecture (24 linear_attn + 8 full_attn layers) has GPTQ reconstruction errors of 50-124 on `in_proj_qkv` and MLP layers, which is catastrophic for autoregressive generation even though average token-level loss appears OK.
+- **Perplexity alone is insufficient** to validate quantization quality -- always test generation end-to-end.
+- AWQ INT4 (W4A16, group_size=32) works because asymmetric group quantization has finer granularity than symmetric per-channel INT8.
+- MI100's 185 TOPS INT8 MFMA hardware remains untapped for this model. W8A8 INT8 would work on standard transformer architectures (Llama, Mistral, etc.) that don't have GatedDeltaNet layers.
+
+### CUDA Graph Fix on gfx908 (RESOLVED)
+
+**CUDA/HIP graphs NOW WORK on gfx908 (MI100)** after disabling custom all-reduce.
+
+**Root cause:** vLLM's custom all-reduce uses IPC shared memory for inter-GPU communication. During HIP graph capture on gfx908, the IPC buffer addresses captured in the graph become stale or incorrect on replay, producing silently wrong results. Standard NCCL (pynccl) all-reduce works correctly in HIP graphs.
+
+**Fix:** Set `--disable-custom-all-reduce` when using CUDA graphs on gfx908. This falls back to pynccl for all-reduce, which works correctly with HIP graph capture/replay. The ROCm platform code now auto-detects gfx908 and disables custom all-reduce when CUDA graphs are enabled.
+
+**Throughput comparison (Llama-2-7B, TP=4, 10x100 tokens):**
+
+| Mode | Throughput | Correct | Improvement |
+|---:|---:|---|---:|
+| enforce-eager | 383 tok/s | Yes | baseline |
+| torch.compile only | 368 tok/s | Yes | -4% |
+| FULL_DECODE_ONLY + disable_custom_ar | **700 tok/s** | **Yes** | **+83%** |
+| PIECEWISE + disable_custom_ar | **859 tok/s** | **Yes** | **+124%** |
+
+---
+
+## Llama-2-7B Quantization Comparison
+
+### Perplexity (wikitext-2, 50 chunks of 512 tokens, TP=4)
+
+| Model Variant | Perplexity | Model Size | PPL Degradation | Generation Quality |
+|---|---:|---:|---:|---|
+| **FP16 (baseline)** | **7.59** | 12.6 GB | — | OK |
+| **W8A8 INT8 (GPTQ)** | **8.01** | 6.5 GB | +5.5% | OK |
+
+### Serving Throughput (enforce-eager, TP=4, 50 prompts, 128 in/128 out)
+
+| Variant | Output tok/s | TPOT median | TTFT median | Notes |
+|---|---:|---:|---:|---|
+| FP16 | 225.6 | 26.5 ms | 77.3 ms | |
+| W8A8 INT8 | 219.7 | 32.3 ms | 98.4 ms | -2.6% throughput |
+
+**Key findings:**
+- W8A8 INT8 works correctly on Llama-2-7B (standard transformer) -- coherent generation, valid perplexity
+- MI100 INT8 MFMA kernel (`MI100Int8ScaledMMLinearKernel`) validated end-to-end on real inference
+- Throughput is ~neutral because Llama-2-7B at TP=4 is too small to be weight-bandwidth-limited (only 1.6 GB/GPU FP16)
+- INT8 quantize/dequant overhead offsets the bandwidth savings at this model size
+- Larger models (13B+, 70B) where weight bandwidth is the bottleneck would see more benefit
+- CUDA graphs disabled (gfx908 bug) -- with graphs the INT8 path would have lower kernel launch overhead
+
+---
+
 ## Llama-2-7B (FP16)
 
 ### Synthetic Benchmarks
@@ -78,7 +139,7 @@ Summary of what works on MI100 (gfx908):
 
 | Optimization | Status | Impact | Notes |
 |---|---|---|---|
-| FULL_DECODE_ONLY graphs | **Works** | +16% throughput, -72% TPOT | Recommended for production |
+| FULL_DECODE_ONLY graphs | **Works** | +83% throughput | Requires `--disable-custom-all-reduce` (auto-detected for gfx908) |
 | Prefix caching | **Works** | 85-99% TTFT reduction | Recommended, stacks with graphs |
 | Skinny GEMM (gfx908) | **Works** | -27% TPOT, +28% c=1 throughput | `VLLM_ROCM_USE_SKINNY_GEMM=1`, added `__gfx908__` guard |
 | Adaptive Flash-Decoding | **Works** | +35% c=1 throughput (152 tok/s) | Built directly into Triton unified attn |
@@ -88,6 +149,7 @@ Summary of what works on MI100 (gfx908):
 | INT4 AWQ | **Works** (Triton) | Enables larger models | `VLLM_USE_TRITON_AWQ=1` auto-set on ROCm, `--dtype float16` required |
 | INT4 GPTQ | **Works** (Exllama) | Enables larger models | Marlin CUDA-only, falls back to Exllama on ROCm; `--dtype float16` |
 | TunableOp GEMM tuning | **Works** | +13.4% throughput (c=1), -88% TTFT | `PYTORCH_TUNABLEOP_ENABLED=1`, 200 shapes tuned per GPU |
+| **W8A8 INT8 (GPTQ)** | **Works (Llama), Failed (Qwen3.5)** | -48% weight memory, ~neutral throughput (7B) | Validated on Llama-2-7B (PPL +5.5%, coherent generation). Fails on Qwen3.5-9B GatedDeltaNet architecture. |
 | FP8 quantization | **Emulated** | Software dequant path | MI100 lacks native FP8 hardware |
 | ROCM_ATTN (prefill-decode) | **Works** | -5% throughput regression | Triton unified is faster on MI100 |
 | max-num-seqs tuning | **Works** | Neutral (coding), -33% (bursty) | Not recommended for production |
@@ -122,6 +184,34 @@ Summary of what works on MI100 (gfx908):
 ---
 
 ## Future Optimization TODOs
+
+### W8A8 INT8 Quantization (VALIDATED ON LLAMA-2-7B, FAILED ON QWEN3.5-9B)
+
+Implemented MI100-optimized INT8 W8A8 Triton kernel targeting gfx908's INT8 MFMA instructions (185 TOPS peak).
+
+**What was built (on w8a8 branch):**
+- `mi100_int8.py` — Triton INT8 GEMM with INT8×INT8→INT32 MFMA, gfx908-tuned tiles, L2 swizzle
+- `MI100Int8ScaledMMLinearKernel` — kernel selection integration (highest priority for ROCm INT8)
+- Benchmark, test, and quantization example scripts
+
+**Llama-2-7B results (standard transformer -- works):**
+- Perplexity: 8.01 vs 7.59 FP16 (+5.5% degradation)
+- Generation quality: coherent, structured output
+- GPTQ reconstruction errors: mean=10, max=58 (acceptable)
+- Serving throughput: ~neutral at TP=4 (model too small for bandwidth savings to show)
+- Weight size: 6.5 GB vs 12.6 GB FP16 (-48%)
+
+**Qwen3.5-9B results (GatedDeltaNet hybrid -- fails):**
+- Perplexity: 10.02 vs 9.78 FP16 (+2.5%) -- looks OK but misleading
+- Generation quality: completely broken (gibberish/repetition)
+- GPTQ reconstruction errors: mean=30+, max=124 (catastrophic)
+- Root cause: GatedDeltaNet `in_proj_qkv` weight distributions incompatible with symmetric per-channel INT8
+
+**Lessons learned:**
+1. Perplexity alone is insufficient to validate quantization -- always test end-to-end generation
+2. GatedDeltaNet layers resist INT8 quantization due to extreme weight value distributions
+3. AWQ INT4 (W4A16, group_size=32) works on Qwen3.5 because asymmetric group quant has finer granularity
+4. For W8A8 to show throughput gains, need larger models (13B+) where weight bandwidth dominates, and working CUDA graphs
 
 ### Triton Kernel Block-Size Tuning for MI100 (DONE)
 
@@ -216,4 +306,4 @@ Rebase strategy:
 4. Re-test FULL_DECODE_ONLY graph mode + prefix caching
 5. Benchmark to verify no regressions
 
-*Last updated: 2026-04-01 | Results from missions: MI100 Throughput Optimization, TurboQuant Backend, Triton MI100 Tile Tuning, Block-Size & Backend Sweep, Skinny GEMM gfx908, GEMM TunableOp Autotuning*
+*Last updated: 2026-04-01 | Results from missions: MI100 Throughput Optimization, TurboQuant Backend, Triton MI100 Tile Tuning, Block-Size & Backend Sweep, Skinny GEMM gfx908, GEMM TunableOp Autotuning, W8A8 INT8 Quantization*
