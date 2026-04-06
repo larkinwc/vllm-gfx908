@@ -298,51 +298,113 @@ huggingface-cli download Qwen/Qwen3.5-27B-AWQ-BF16-INT4 \
 
 ## 11. Launch vLLM
 
-Create a launch script (e.g. `/root/launch-vllm.sh`):
+MI100 auto-detection (`rocm.py`) handles most settings automatically:
+- torch.compile disabled (Inductor fusions unavailable on ROCm)
+- FULL_DECODE_ONLY CUDA graphs (PIECEWISE hangs at TP>1)
+- Custom all-reduce via XGMI enabled (validated on PyTorch 2.11+rocm7.2)
+- KV cache block_size=32
+
+The launch scripts below set only what isn't auto-detected.
+
+### TP=4: Max Performance (recommended for 9B+ models)
 
 ```bash
 #!/bin/bash
+# launch-tp4.sh -- Max performance on 4x MI100
 export LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib
-export VLLM_ROCM_USE_AITER=1
-export PATH=/opt/rocm/core-7.12/bin:$PATH
-export ROCM_PATH=/opt/rocm/core-7.12
 export PYTORCH_ROCM_ARCH=gfx908
-export TORCH_COMPILE_DISABLE=1
 export VLLM_ROCM_USE_SKINNY_GEMM=1
 
+# TunableOp: replay pre-tuned rocBLAS algorithm selections.
+# +14% throughput at batch>=8. Tune first with PYTORCH_TUNABLEOP_TUNING=1.
+export PYTORCH_TUNABLEOP_ENABLED=1
+export PYTORCH_TUNABLEOP_TUNING=0
+export PYTORCH_TUNABLEOP_FILENAME=/root/tunableop-results/tunableop_results%d.csv
+
 exec /opt/vllm-env/bin/python3 -m vllm.entrypoints.openai.api_server \
-  --model /models/Qwen3.5-27B-AWQ-BF16-INT4 \
-  --tensor-parallel-size 4 \
-  --max-model-len 8192 \
+  --model /models/Qwen3.5-9B \
   --dtype float16 \
-  --port 8000 \
+  --tensor-parallel-size 4 \
+  --max-model-len 65536 \
+  --block-size 32 \
+  --enable-prefix-caching \
   --trust-remote-code \
-  --enforce-eager \
-  --language-model-only
+  --language-model-only \
+  --port 8000
 ```
 
+**Expected decode throughput (Qwen3.5-9B FP16, TP=4):**
+
+| Scenario | Latency | Output tok/s | TPOT |
+|----------|---------|-------------|------|
+| batch=1, in=128, out=128 | 0.90s | 142 | 7.1 ms |
+| batch=8, in=128, out=128 | 1.28s | 800 | 10.0 ms |
+| Coding: in=8k, out=2k | 15.0s | 136 | 7.5 ms |
+| Coding: in=32k, out=4k | 34.1s | 120 | 7.5 ms |
+| 2 users: in=8k, out=2k | 17.0s | 240 combined | 8.3 ms |
+
+### TP=1: Single GPU (for models <= 20B params in FP16)
+
 ```bash
-chmod +x /root/launch-vllm.sh
-/root/launch-vllm.sh
+#!/bin/bash
+# launch-tp1.sh -- Single MI100, max decode speed (no NCCL overhead)
+export LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib
+export PYTORCH_ROCM_ARCH=gfx908
+export VLLM_ROCM_USE_SKINNY_GEMM=1
+export CUDA_VISIBLE_DEVICES=0
+
+exec /opt/vllm-env/bin/python3 -m vllm.entrypoints.openai.api_server \
+  --model /models/Qwen3.5-0.8B \
+  --dtype float16 \
+  --tensor-parallel-size 1 \
+  --max-model-len 32768 \
+  --block-size 32 \
+  --enable-prefix-caching \
+  --trust-remote-code \
+  --language-model-only \
+  --port 8000
 ```
+
+**Expected decode throughput (Qwen3.5-0.8B FP16, TP=1):**
+
+| Scenario | TPOT | Output tok/s |
+|----------|------|-------------|
+| batch=1, in=128, out=128 | 3.1 ms | 325 |
+
+TP=1 eliminates all NCCL overhead. Use for models that fit in a single 32 GB GPU.
 
 ### Environment Variables
 
-| Variable | Value | Why |
-|----------|-------|-----|
-| `TORCH_COMPILE_DISABLE=1` | Disable torch.compile/inductor | Avoids `KernelMetadata.cluster_dims` error on gfx908 |
-| `VLLM_ROCM_USE_SKINNY_GEMM=1` | Enable skinny GEMM kernels | `wvSplitK`/`LLMM1` now compiled for gfx908 (compile guard added) |
-| `VLLM_ROCM_USE_AITER=1` | Enable AITER Triton kernels | Triton-based kernels that work on gfx908 |
-| `PYTORCH_ROCM_ARCH=gfx908` | Target GPU architecture | Ensures correct code generation |
+| Variable | Default | Why |
+|----------|---------|-----|
+| `VLLM_ROCM_USE_SKINNY_GEMM=1` | Required | Enables `wvSplitK`/`LLMM1` decode GEMM kernels (gfx908 compile guard added) |
+| `PYTORCH_ROCM_ARCH=gfx908` | Required | Correct HIP code generation target |
+| `PYTORCH_TUNABLEOP_ENABLED=1` | Optional | Replay tuned rocBLAS algorithm selections (+14% at batch>=8) |
+| `PYTORCH_TUNABLEOP_FILENAME=...%d.csv` | Optional | Per-GPU tuning result files (one per TP rank) |
+| `VLLM_MI100_TORCH_COMPILE=1` | Optional | Re-enable torch.compile (disabled by default, adds overhead on ROCm) |
+| `VLLM_MI100_DISABLE_CUSTOM_AR=1` | Optional | Fall back to pynccl (custom AR is enabled by default, -17% if disabled) |
 
 ### Server Flags
 
 | Flag | Why |
 |------|-----|
-| `--dtype float16` | ExllamaLinearKernel (INT4 dequant) requires float16 activations |
-| `--enforce-eager` | Disable torch.compile graph capture (not stable on MI100) |
-| ~~`--disable-custom-all-reduce`~~ | No longer needed: quickreduce custom all-reduce now supports gfx908 |
-| `--language-model-only` | Skip loading vision encoder (saves memory for text-only use) |
+| `--dtype float16` | Required for INT4 models (ExllamaLinearKernel). Also fine for FP16 models. |
+| `--enable-prefix-caching` | 85-99% TTFT reduction on repeated prompts |
+| `--language-model-only` | Skip vision encoder loading (saves memory for text-only use) |
+| ~~`--enforce-eager`~~ | Not needed: FULL_DECODE_ONLY graphs auto-detected |
+| ~~`--disable-custom-all-reduce`~~ | Not needed: custom all-reduce works correctly on PyTorch 2.11+rocm7.2 |
+
+### TunableOp First-Time Tuning
+
+To generate tuning results for your specific model (run once, takes ~10 minutes):
+
+```bash
+export PYTORCH_TUNABLEOP_ENABLED=1
+export PYTORCH_TUNABLEOP_TUNING=1
+export PYTORCH_TUNABLEOP_FILENAME=/root/tunableop-results/tunableop_results%d.csv
+# Launch server normally, send ~50 requests, then stop.
+# Results are saved per-GPU. Set TUNING=0 for production.
+```
 
 ## 12. Test Inference
 
@@ -350,7 +412,7 @@ chmod +x /root/launch-vllm.sh
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "/models/Qwen3.5-27B-AWQ-BF16-INT4",
+    "model": "/models/Qwen3.5-9B",
     "messages": [{"role": "user", "content": "Hello, what model are you?"}],
     "max_tokens": 128,
     "temperature": 0.7
@@ -394,7 +456,8 @@ not `auto` (which defaults to bfloat16).
 
 ### InductorError: KernelMetadata has no attribute cluster_dims
 
-Set `TORCH_COMPILE_DISABLE=1`. The inductor backend does not support gfx908.
+This was fixed in PyTorch 2.11+rocm7.2. If you see this on an older PyTorch
+version, set `TORCH_COMPILE_DISABLE=1` or upgrade PyTorch.
 
 ### libtorch_cuda.so: cannot open shared object file
 
@@ -408,6 +471,56 @@ flashinfer (CUDA-only) is installed. Remove it:
 
 Verify XGMI topology with `rocm-smi --showtopo`. All GPUs should show 1-hop
 distance to each other. If not, check physical Infinity Bridge cables.
+
+### GPU memory not freed after kill -9
+
+`kill -9` leaves orphaned worker processes holding GPU memory. Always use
+graceful shutdown: `kill -15 $(lsof -ti :8000)`. If GPUs are stuck, reboot.
+
+## CK Flash Attention (Optional)
+
+The upstream ROCm flash-attention package excludes gfx908 from its allowed
+build targets, but the CK kernels compile and run correctly on MI100. This
+provides ~5x faster attention compute (34% vs 7% MFMA efficiency) for models
+that use standard quadratic attention (Llama, Mistral, etc.).
+
+**Note:** Qwen3.5 uses linear attention (GDN) and does NOT benefit from this.
+
+To build CK flash attention for MI100:
+
+```bash
+./scripts/build_ck_flash_attn_gfx908.sh
+```
+
+This clones ROCm/flash-attention, patches `setup.py` to allow gfx908, and
+builds the CK backend. Takes 30-60 minutes. Options:
+
+```bash
+# Custom clone directory and parallelism
+CLONE_DIR=/path/to/flash-attention MAX_JOBS=8 ./scripts/build_ck_flash_attn_gfx908.sh
+
+# Build only hdim=128 kernels (faster build, covers most models)
+./scripts/build_ck_flash_attn_gfx908.sh --opt-dim 128
+```
+
+Verify installation:
+
+```bash
+python3 -c "import flash_attn; print(flash_attn.__version__)"
+# Should print version without "falling back to Triton" warning
+```
+
+## Optimizations Tested and NOT Recommended
+
+| Optimization | Result | Reason |
+|---|---|---|
+| AWQ INT4 quantization | -8% to -16% slower | MI100 lacks native INT4 MFMA; Exllama dequant overhead exceeds bandwidth savings |
+| TP=2 (instead of TP=4) | -29% at batch=1 | Larger GEMMs per GPU outweigh NCCL savings |
+| torch.compile | -1% to -15% | Inductor fusions disabled on ROCm; compile overhead without benefit |
+| NCCL_ALGO=Ring | -5% | Default algorithm already optimal for XGMI topology |
+| NCCL_PROTO=Simple | -13% | LL (low latency) protocol already best for small messages |
+| MTP speculative decoding | -25% to -45% | Incompatible with HIP graph mode |
+| TurboQuant KV compression | -6% to -49% | Not worth it for Qwen3.5 (only 8/32 full attention layers) |
 
 ## Known Working Package Versions
 
