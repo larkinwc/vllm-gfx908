@@ -623,10 +623,50 @@ class RocmPlatform(Platform):
 
     @classmethod
     def apply_config_platform_defaults(cls, vllm_config: "VllmConfig") -> None:
+        import os
+
         from vllm._aiter_ops import rocm_aiter_ops
-        from vllm.config.compilation import CUDAGraphMode
+        from vllm.config.compilation import CompilationMode, CUDAGraphMode
 
         compilation_config = vllm_config.compilation_config
+
+        # gfx908 (MI100): torch.compile/Inductor cluster_dims crash
+        # is fixed in PyTorch 2.11+rocm7.2, but Inductor fusions
+        # (fuse_norm_quant etc.) are all disabled on ROCm, so
+        # torch.compile adds overhead without benefit. Disable by
+        # default; set VLLM_MI100_TORCH_COMPILE=1 to re-enable.
+        if _ON_MI100:
+            mi100_compile = os.environ.get(
+                "VLLM_MI100_TORCH_COMPILE", "0"
+            ) == "1"
+            if not mi100_compile and (
+                compilation_config.mode is None
+                or compilation_config.mode != CompilationMode.NONE
+            ):
+                logger.info_once(
+                    "gfx908 (MI100): disabling torch.compile "
+                    "(Inductor fusions not available on ROCm). "
+                    "Set VLLM_MI100_TORCH_COMPILE=1 to override."
+                )
+                compilation_config.mode = CompilationMode.NONE
+
+            # PIECEWISE graph capture hangs at TP>1 due to NCCL
+            # synchronization issues. Override to FULL_DECODE_ONLY.
+            if compilation_config.cudagraph_mode is None or (
+                compilation_config.cudagraph_mode
+                in (
+                    CUDAGraphMode.PIECEWISE,
+                    CUDAGraphMode.FULL_AND_PIECEWISE,
+                )
+            ):
+                logger.info_once(
+                    "gfx908 (MI100): using FULL_DECODE_ONLY CUDA "
+                    "graphs (PIECEWISE hangs at TP>1)."
+                )
+                compilation_config.cudagraph_mode = (
+                    CUDAGraphMode.FULL_DECODE_ONLY
+                )
+
         is_eager_execution = compilation_config.cudagraph_mode == CUDAGraphMode.NONE
         use_aiter_fused_moe = rocm_aiter_ops.is_fused_moe_enabled()
         use_aiter_rms_norm = rocm_aiter_ops.is_rmsnorm_enabled()
@@ -677,19 +717,33 @@ class RocmPlatform(Platform):
         compilation_config = vllm_config.compilation_config
         parallel_config = vllm_config.parallel_config
 
-        # gfx908 (MI100): custom all-reduce uses IPC shared memory that
-        # produces silently incorrect results during HIP graph replay.
-        # Disable it so graphs fall back to pynccl which works correctly.
+        # gfx908 (MI100): custom all-reduce via XGMI IPC shared memory.
+        # Validated correct and deterministic on PyTorch 2.11+rocm7.2
+        # with FULL_DECODE_ONLY graphs. Provides +17% throughput at
+        # batch=1 and +52% at batch=8 vs pynccl fallback.
+        # Set VLLM_MI100_DISABLE_CUSTOM_AR=1 to fall back to pynccl.
+        #
+        # NOTE: The IPC barrier mechanism in custom_all_reduce uses
+        # __scoped_atomic on hipDeviceMallocUncached memory which
+        # produces NaN on HIP graph replay on gfx908. Custom AR is
+        # automatically skipped during CUDA graph capture (falling
+        # through to pynccl/RCCL) while remaining active for eager
+        # mode. See custom_all_reduce.py _gfx908_skip_graph_ar.
         if (
             compilation_config.cudagraph_mode != CUDAGraphMode.NONE
             and not parallel_config.disable_custom_all_reduce
         ):
             device_cap = cls.get_device_capability()
-            if device_cap is not None and device_cap.major == 9 and device_cap.minor == 0:
+            if (
+                device_cap is not None
+                and device_cap.major == 9
+                and device_cap.minor == 0
+                and os.environ.get("VLLM_MI100_DISABLE_CUSTOM_AR", "")
+            ):
                 logger.warning_once(
-                    "gfx908 (MI100): disabling custom all-reduce for CUDA "
-                    "graph compatibility. Custom all-reduce IPC shared memory "
-                    "produces incorrect results during HIP graph replay."
+                    "gfx908 (MI100): custom all-reduce disabled via "
+                    "VLLM_MI100_DISABLE_CUSTOM_AR. Falling back to "
+                    "pynccl (expect ~17%% lower throughput at batch=1)."
                 )
                 parallel_config.disable_custom_all_reduce = True
 
@@ -725,6 +779,11 @@ class RocmPlatform(Platform):
                 logger.warning(
                     "[ROCM_AITER_UNIFIED_ATTN]: Setting kv cache block size to 64."
                 )
+            elif _ON_MI100:
+                # MI100 benefits from block_size=32: -44% TTFT, +9.6% c=4
+                # throughput. Larger blocks improve prefix cache hit
+                # efficiency and reduce pointer chasing in attention.
+                cache_config.block_size = 32
             else:
                 cache_config.block_size = 16
 

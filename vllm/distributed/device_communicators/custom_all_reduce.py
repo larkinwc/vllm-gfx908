@@ -51,6 +51,14 @@ def is_weak_contiguous(inp: torch.Tensor):
 class CustomAllreduce:
     _SUPPORTED_WORLD_SIZES = [2, 4, 6, 8]
 
+    @staticmethod
+    def _detect_gfx908() -> bool:
+        try:
+            from vllm.platforms.rocm import on_mi100
+            return on_mi100()
+        except ImportError:
+            return False
+
     # max_size: max supported allreduce size
     def __init__(
         self,
@@ -71,6 +79,11 @@ class CustomAllreduce:
         """
         self._IS_CAPTURING = False
         self.disabled = True
+        # gfx908: skip custom AR during graph capture (barrier NaN on replay)
+        self._gfx908_skip_graph_ar = (
+            current_platform.is_rocm()
+            and self._detect_gfx908()
+        )
 
         if not custom_ar:
             # disable because of missing custom allreduce library
@@ -232,6 +245,11 @@ class CustomAllreduce:
 
     def should_custom_ar(self, inp: torch.Tensor):
         if self.disabled:
+            return False
+        # gfx908: skip custom AR during graph capture/warmup so the
+        # captured graph uses pynccl/RCCL instead of the broken IPC
+        # barrier path.
+        if self._gfx908_skip_graph_ar and self._IS_CAPTURING:
             return False
         inp_size = inp.numel() * inp.element_size()
         # custom allreduce requires input byte size to be multiples of 16
