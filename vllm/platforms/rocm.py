@@ -169,7 +169,10 @@ def _get_gcn_arch() -> str:
         return _query_gcn_arch_from_amdsmi()
     except Exception as e:
         logger.debug("Failed to get GCN arch via amdsmi: %s", e)
-        logger.warning_once(
+        # NOTE: use plain warning (not warning_once) during module import:
+        # warning_once resolves log scope via vllm.distributed.parallel_state,
+        # which re-enters vllm.platforms and triggers a circular import.
+        logger.warning(
             "Failed to get GCN arch via amdsmi, falling back to torch.cuda. "
             "This will initialize CUDA and may cause "
             "issues if CUDA_VISIBLE_DEVICES is not set yet."
