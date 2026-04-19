@@ -128,6 +128,33 @@ class GGUFModelLoader(BaseModelLoader):
             # Gemma3 models use "gemma3_text" in HuggingFace but
             # "gemma3" in GGUF architecture naming
             model_type = "gemma3"
+        if model_type == "minimax_m2":
+            model_type = "minimax-m2"
+            # MiniMax-M2 uses merged expert weights; HF uses
+            # block_sparse_moe.experts.X.{w1,w2,w3} naming
+            for idx in range(config.num_hidden_layers):
+                gguf_to_hf_name_map[f"blk.{idx}.exp_probs_b.bias"] = (
+                    f"model.layers.{idx}.block_sparse_moe"
+                    f".e_score_correction_bias"
+                )
+                gguf_to_hf_name_map[f"blk.{idx}.ffn_down_exps.weight"] = (
+                    f"model.layers.{idx}.block_sparse_moe"
+                    f".experts.0.w2.weight"
+                )
+                gguf_to_hf_name_map[f"blk.{idx}.ffn_gate_exps.weight"] = (
+                    f"model.layers.{idx}.block_sparse_moe"
+                    f".experts.0.w1.weight"
+                )
+                gguf_to_hf_name_map[f"blk.{idx}.ffn_up_exps.weight"] = (
+                    f"model.layers.{idx}.block_sparse_moe"
+                    f".experts.0.w3.weight"
+                )
+                sideload_params.append(
+                    re.compile(
+                        f"model\\.layers\\.{idx}"
+                        r"\.block_sparse_moe\.experts\.[0-9]+\.w[123]\.weight"
+                    )
+                )
         if model_type in ("deepseek_v3", "deepseek_v2"):
             model_type = "deepseek2"
             # GGUF layer map assumes that we will have a merged expert weights

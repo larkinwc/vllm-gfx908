@@ -1180,6 +1180,30 @@ class FusedMoE(PluggableLayer):
         if full_load:
             shard_dim += 1
 
+        # For GGUF merged expert tensors with EP, slice the full
+        # [global_num_experts, ...] loaded_weight to only the experts local
+        # to this rank before materializing and copying. Without this,
+        # materialize uses the global expert count and every rank would try
+        # to allocate all experts -> OOM (and the expert selection logic
+        # would double-apply slicing).
+        if (
+            is_gguf_weight
+            and full_load
+            and self.use_ep
+            and loaded_weight.shape[0] == self.global_num_experts
+        ):
+            local_ids = torch.arange(
+                self.global_num_experts,
+                device=self._expert_map.device,
+                dtype=self._expert_map.dtype,
+            )
+            mask = self._expert_map >= 0
+            owned_global_ids = local_ids[mask]
+            local_ids_of_owned = self._expert_map[mask]
+            order = torch.argsort(local_ids_of_owned)
+            owned_global_ids = owned_global_ids[order].to(loaded_weight.device)
+            loaded_weight = loaded_weight.index_select(0, owned_global_ids)
+
         # Materialize GGUF UninitializedParameter accounting merged weights
         if is_gguf_weight and isinstance(param, UninitializedParameter):
             # To materialize a tensor, we must have full shape including

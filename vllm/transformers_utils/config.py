@@ -167,12 +167,29 @@ class HFConfigParser(ConfigParserBase):
         kwargs["local_files_only"] = huggingface_hub.constants.HF_HUB_OFFLINE
         trust_remote_code |= kwargs.get("trust_remote_code", False)
         kwargs = without_trust_remote_code(kwargs)
-        config_dict, _ = PretrainedConfig.get_config_dict(
-            model,
-            revision=revision,
-            code_revision=code_revision,
-            **kwargs,
-        )
+        try:
+            config_dict, _ = PretrainedConfig.get_config_dict(
+                model,
+                revision=revision,
+                code_revision=code_revision,
+                **kwargs,
+            )
+        except ValueError as e:
+            # transformers' GGUF parser may not support all architectures
+            # (e.g. minimax-m2). Load config.json from the GGUF directory
+            # directly; vLLM has its own GGUF loader that reads tensors.
+            if "is not supported yet" in str(e) and "gguf_file" in kwargs:
+                gguf_kwargs = {
+                    k: v for k, v in kwargs.items() if k != "gguf_file"
+                }
+                config_dict, _ = PretrainedConfig.get_config_dict(
+                    model,
+                    revision=revision,
+                    code_revision=code_revision,
+                    **gguf_kwargs,
+                )
+            else:
+                raise
         # Use custom model class if it's in our registry
         model_type = config_dict.get("model_type")
         if model_type is None:
@@ -234,6 +251,21 @@ class HFConfigParser(ConfigParserBase):
                         "`--trust-remote-code` flag in the CLI."
                     )
                     raise RuntimeError(err_msg) from e
+                if "is not supported yet" in str(e) and "gguf_file" in kwargs:
+                    # transformers' GGUF parser may not support all
+                    # architectures (e.g. minimax-m2). Fall back to loading
+                    # config.json from the GGUF directory; vLLM has its own
+                    # GGUF loader that reads tensors from the .gguf file.
+                    gguf_kwargs = {
+                        k: v for k, v in kwargs.items() if k != "gguf_file"
+                    }
+                    config = AutoConfig.from_pretrained(
+                        model,
+                        trust_remote_code=trust_remote_code,
+                        revision=revision,
+                        code_revision=code_revision,
+                        **gguf_kwargs,
+                    )
                 else:
                     raise e
         config = _maybe_remap_hf_config_attrs(config)
@@ -582,12 +614,23 @@ def maybe_override_with_speculators(
     else:
         gguf_model_repo = None
     kwargs["local_files_only"] = huggingface_hub.constants.HF_HUB_OFFLINE
-    config_dict, _ = PretrainedConfig.get_config_dict(
-        model if gguf_model_repo is None else gguf_model_repo,
-        revision=revision,
-        token=hf_token,
-        **without_trust_remote_code(kwargs),
-    )
+    try:
+        config_dict, _ = PretrainedConfig.get_config_dict(
+            model if gguf_model_repo is None else gguf_model_repo,
+            revision=revision,
+            token=hf_token,
+            **without_trust_remote_code(kwargs),
+        )
+    except ValueError as e:
+        # transformers' GGUF parser may not support all architectures
+        # (e.g. minimax-m2). Skip speculator detection in that case;
+        # vLLM's own GGUF loader handles the model separately.
+        if "is not supported yet" in str(e) and gguf_model_repo is not None:
+            logger.info(
+                "Skipping speculator detection for GGUF model: %s", e
+            )
+            return model, tokenizer, vllm_speculative_config
+        raise
     speculators_config = config_dict.get("speculators_config")
 
     if speculators_config is None:
@@ -720,8 +763,13 @@ def get_config(
             # Note that, this parameter is always false (HF default) on Qwen2 MoE.
             apply_gguf_default("norm_topk_prob", True)
 
-    # Special architecture mapping check for GGUF models
-    if _is_gguf:
+    # Special architecture mapping check for GGUF models. Only auto-fill the
+    # architectures field if the loaded config doesn't already declare one
+    # (e.g. when transformers' GGUF parser supplies a stub config without
+    # architectures). When `architectures` is already present (as in our
+    # vLLM-side fallback that loads config.json directly for unsupported
+    # GGUF model types like minimax_m2), keep what's there.
+    if _is_gguf and not config.architectures:
         if config.model_type not in MODEL_FOR_CAUSAL_LM_MAPPING_NAMES:
             raise RuntimeError(f"Can't get gguf config for {config.model_type}.")
         model_type = MODEL_FOR_CAUSAL_LM_MAPPING_NAMES[config.model_type]
