@@ -331,7 +331,7 @@ class MiniMaxM2Model(nn.Module):
             self.embed_tokens = VocabParallelEmbedding(
                 config.vocab_size,
                 config.hidden_size,
-                quant_config=None,
+                quant_config=quant_config,
                 prefix=f"{prefix}.embed_tokens",
             )
         else:
@@ -444,6 +444,44 @@ class MiniMaxM2Model(nn.Module):
                 weight_loader(param, loaded_weight, shard_id)
                 break
             else:
+                # Detect GGUF-style merged expert tensors.
+                # GGUF maps ffn_{gate,up,down}_exps to experts.0.{w1,w3,w2}
+                # with full shape [num_experts, ...]. The FusedMoE
+                # weight_loader materializes from the full 3D tensor.
+                is_merged_gguf_expert = (
+                    "block_sparse_moe.experts.0." in name
+                    and hasattr(loaded_weight, "shape")
+                    and loaded_weight.ndim == 3
+                    and loaded_weight.shape[0] == self.config.num_local_experts
+                )
+                if is_merged_gguf_expert:
+                    matched = False
+                    seen_shards: set[str] = set()
+                    target_name = name
+                    for mapping in expert_params_mapping:
+                        param_name, weight_name, _e_id, shard_id = mapping
+                        if weight_name not in name:
+                            continue
+                        if shard_id in seen_shards:
+                            continue
+                        seen_shards.add(shard_id)
+                        target_name = name.replace(weight_name, param_name)
+                        if is_pp_missing_parameter(target_name, self):
+                            matched = True
+                            break
+                        param = params_dict[target_name]
+                        weight_loader = param.weight_loader
+                        weight_loader(
+                            param,
+                            loaded_weight,
+                            target_name,
+                            shard_id=shard_id,
+                            expert_id=0,
+                        )
+                        matched = True
+                    if matched:
+                        loaded_params.add(target_name)
+                        continue
                 for mapping in expert_params_mapping:
                     param_name, weight_name, expert_id, shard_id = mapping
                     if weight_name not in name:
@@ -507,7 +545,9 @@ class MiniMaxM2ForCausalLM(nn.Module, SupportsLoRA, SupportsPP):
         )
         if get_pp_group().is_last_rank:
             self.lm_head = ParallelLMHead(
-                config.vocab_size, config.hidden_size, quant_config=None
+                config.vocab_size,
+                config.hidden_size,
+                quant_config=vllm_config.quant_config,
             )
         else:
             self.lm_head = PPMissingLayer()
