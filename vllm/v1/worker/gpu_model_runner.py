@@ -2294,8 +2294,14 @@ class GPUModelRunner(
                 cm.slot_mapping = slot_mappings[kv_cache_gid]
 
             if self.speculative_config and spec_decode_common_attn_metadata is None:
-                if isinstance(self.drafter, (EagleProposer, DFlashProposer)):
-                    if self.drafter.kv_cache_gid == kv_cache_gid:
+                # self.drafter is only created on the last PP rank (see __init__);
+                # non-last PP ranks don't draft, so fall through with no
+                # spec_decode-specific metadata on those ranks.
+                drafter = getattr(self, "drafter", None)
+                if drafter is None:
+                    pass
+                elif isinstance(drafter, (EagleProposer, DFlashProposer)):
+                    if drafter.kv_cache_gid == kv_cache_gid:
                         spec_decode_common_attn_metadata = cm
                 else:
                     spec_decode_common_attn_metadata = cm
