@@ -390,6 +390,13 @@ def _get_backend_priorities(
         backends.append(AttentionBackendEnum.ROCM_AITER_FA)
     if is_aiter_found_and_supported():
         backends.append(AttentionBackendEnum.ROCM_AITER_UNIFIED_ATTN)
+    # gfx908 (MI100) CK flash-attn — ~4x faster prefill than TRITON_ATTN
+    # for models with fp16/bf16 KV cache and block_size >= 128.
+    # Only kicks in if user explicitly selects --attention-backend ROCM_CK_FA;
+    # we don't default to it because its supported-config envelope is
+    # narrower than Triton's.
+    if _ON_MI100:
+        backends.append(AttentionBackendEnum.ROCM_CK_FA)
     backends.append(AttentionBackendEnum.TRITON_ATTN)
     backends.append(AttentionBackendEnum.TURBOQUANT)
 
