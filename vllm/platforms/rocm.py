@@ -661,16 +661,33 @@ class RocmPlatform(Platform):
         return True
 
     @classmethod
-    @with_amdsmi_context
     @lru_cache(maxsize=8)
     def get_device_name(cls, device_id: int = 0) -> str:
-        physical_device_id = cls.device_id_to_physical_device_id(device_id)
-        handle = amdsmi_get_processor_handles()[physical_device_id]
-        asic_info = amdsmi_get_gpu_asic_info(handle)
-        asic_info_device_id: str = asic_info["device_id"]
-        if asic_info_device_id in _ROCM_DEVICE_ID_NAME_MAP:
-            return _ROCM_DEVICE_ID_NAME_MAP[asic_info_device_id]
-        return asic_info["market_name"]
+        # Fast path: amdsmi asic info -> canonical name from our map or
+        # the vendor "market_name". On hosts where amdsmi is partially
+        # broken (e.g. missing librocm_sysdeps_drm_amdgpu.so.1 so the
+        # ASIC query returns AMDSMI_STATUS_NOT_SUPPORTED), fall back to
+        # torch.cuda.get_device_name. This keeps fused_moe's tuned-
+        # config lookup (keyed on device name) from crashing on boxes
+        # that can still run the kernels just fine.
+        try:
+            amdsmi_init()
+            try:
+                physical_device_id = cls.device_id_to_physical_device_id(device_id)
+                handle = amdsmi_get_processor_handles()[physical_device_id]
+                asic_info = amdsmi_get_gpu_asic_info(handle)
+                asic_info_device_id: str = asic_info["device_id"]
+                if asic_info_device_id in _ROCM_DEVICE_ID_NAME_MAP:
+                    return _ROCM_DEVICE_ID_NAME_MAP[asic_info_device_id]
+                return asic_info["market_name"]
+            finally:
+                amdsmi_shut_down()
+        except Exception as e:
+            logger.debug(
+                "amdsmi get_device_name failed (%s); falling back to torch.cuda",
+                e,
+            )
+            return torch.cuda.get_device_name(device_id)
 
     @classmethod
     @with_amdsmi_context
