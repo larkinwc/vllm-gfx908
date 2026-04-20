@@ -657,6 +657,28 @@ class GGUFMoEMethod(FusedMoEMethodBase):
                 "fused GGUF MoE method."
             )
 
+        # Expert-parallel: the GGUF MoE kernels (ggml_moe_a8 / _vec) index
+        # directly into w13_qweight / w2_qweight by expert id. Under EP each
+        # rank only holds `local_num_experts` experts, so we remap global
+        # topk_ids -> local via `_expert_map` (-1 marks non-owned). For
+        # non-owned positions we set the weight to zero and point the id at
+        # a valid local index (0). The model's explicit all-reduce across
+        # the TP group sums partial contributions back into the full MoE
+        # output. See MiniMaxM2MoE.forward which calls
+        # tensor_model_parallel_all_reduce after FusedMoE.forward.
+        if getattr(layer, "use_ep", False) and layer._expert_map is not None:
+            expert_map = layer._expert_map
+            local_topk_ids = expert_map[topk_ids]
+            owned_mask = local_topk_ids >= 0
+            # Route non-owned tokens to local expert 0 with weight 0 so
+            # they contribute nothing but don't break the kernel's index.
+            safe_topk_ids = torch.where(
+                owned_mask, local_topk_ids, torch.zeros_like(local_topk_ids)
+            )
+            safe_topk_weights = topk_weights * owned_mask.to(topk_weights.dtype)
+            topk_ids = safe_topk_ids
+            topk_weights = safe_topk_weights
+
         return fused_moe_gguf(
             x,
             layer.w13_qweight,

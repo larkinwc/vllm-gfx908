@@ -778,6 +778,7 @@ class RocmPlatform(Platform):
 
         compilation_config = vllm_config.compilation_config
         parallel_config = vllm_config.parallel_config
+        cache_config = vllm_config.cache_config
 
         # gfx908 (MI100): custom all-reduce via XGMI IPC shared memory.
         # Validated correct and deterministic on PyTorch 2.11+rocm7.2

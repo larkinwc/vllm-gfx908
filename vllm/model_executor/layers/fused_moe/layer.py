@@ -1153,7 +1153,35 @@ class FusedMoE(PluggableLayer):
             and "input_scale" in weight_name
         )
 
-        if expert_id == -1 and not use_global_sf:
+        # GGUF qweight_type is a single per-layer enum (GGUF tensor_type)
+        # that is identical across experts in that MoE layer. The MoE
+        # per-expert loop only calls this loader with expert_id=0, so for
+        # EP ranks that don't own global expert 0 we must still run the
+        # qweight_type setter below or the GGUF kernels see weight_type=0
+        # (UNQUANTIZED) and fall into `x @ qweight.T` with the raw packed
+        # byte tensor -> "mat1/mat2 shape mismatch" crash.
+        is_gguf_weight_type = getattr(param, "is_gguf_weight_type", False)
+
+        # GGUF merged full-load under EP: loader passes a single
+        # [global_num_experts, ...] tensor with expert_id=0. For ranks that
+        # don't own global expert 0, `expert_id` is -1 and the early-return
+        # below would skip materialize/copy entirely -> w13_qweight stays
+        # UninitializedParameter and the next forward() explodes. This path
+        # slices to local experts + materializes full param.data further
+        # down, so we must not short-circuit here.
+        is_merged_gguf_full_load = (
+            getattr(param, "is_gguf_weight", False)
+            and self.use_ep
+            and loaded_weight.dim() == 3
+            and loaded_weight.shape[0] == self.global_num_experts
+        )
+
+        if (
+            expert_id == -1
+            and not use_global_sf
+            and not is_merged_gguf_full_load
+            and not is_gguf_weight_type
+        ):
             # Failed to load this param since it's not local to this rank
             return False if return_success else None
         # Hereafter, `expert_id` is local physical id
