@@ -720,10 +720,16 @@ class RocmPlatform(Platform):
                 )
                 compilation_config.mode = CompilationMode.NONE
 
-            # PIECEWISE graph capture hangs at TP>1 due to NCCL
-            # synchronization issues. Override to FULL_DECODE_ONLY.
-            if compilation_config.cudagraph_mode is None or (
-                compilation_config.cudagraph_mode
+            # PIECEWISE graph capture historically hangs at TP>1 due to NCCL
+            # synchronization issues. Override to FULL_DECODE_ONLY by default.
+            # Set VLLM_MI100_ALLOW_PIECEWISE=1 to allow the caller's choice
+            # through (useful for re-testing after upstream PP/graph fixes).
+            allow_piecewise = os.environ.get(
+                "VLLM_MI100_ALLOW_PIECEWISE", "0"
+            ) == "1"
+            if not allow_piecewise and (
+                compilation_config.cudagraph_mode is None
+                or compilation_config.cudagraph_mode
                 in (
                     CUDAGraphMode.PIECEWISE,
                     CUDAGraphMode.FULL_AND_PIECEWISE,
@@ -731,7 +737,8 @@ class RocmPlatform(Platform):
             ):
                 logger.info_once(
                     "gfx908 (MI100): using FULL_DECODE_ONLY CUDA "
-                    "graphs (PIECEWISE hangs at TP>1)."
+                    "graphs (PIECEWISE hangs at TP>1). "
+                    "Set VLLM_MI100_ALLOW_PIECEWISE=1 to override."
                 )
                 compilation_config.cudagraph_mode = (
                     CUDAGraphMode.FULL_DECODE_ONLY
