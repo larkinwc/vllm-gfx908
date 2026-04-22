@@ -962,6 +962,61 @@ class FusedMoE(PluggableLayer):
         )
         expert_data.copy_(loaded_weight)
 
+    def _validate_gguf_block_alignment(
+        self,
+        shard_id: str,
+        shard_dim: int,
+        pre_split_dim: int,
+        post_split_dim: int,
+    ) -> None:
+        """Verify that a GGUF k/i-quant TP split lands on block boundaries.
+
+        The packed-byte inner dim of a GGUF quantized expert tensor encodes
+        ``elements_per_row = bytes_per_row * block_size / type_size``. If the
+        TP split divides ``bytes_per_row`` mid-block, dequant reads garbage
+        and produces NaN with no other diagnostic. Detect that and raise
+        a clear error guiding the user to a valid TP factor.
+        """
+        # Only the inner (packed-byte) dim is k/i-quant block-sensitive.
+        # full_load=True 3D path: shard_dim==2 is the packed dim.
+        if shard_dim != 2:
+            return
+        type_param_name = "w2_qweight_type" if shard_id == "w2" else "w13_qweight_type"
+        type_param = getattr(self, type_param_name, None)
+        if type_param is None:
+            return
+        weight_type = int(getattr(type_param, "weight_type", 0))
+        if weight_type == 0:
+            return  # Type metadata not yet populated.
+        try:
+            import gguf
+        except ImportError:
+            return
+        try:
+            block_size, type_size = gguf.GGML_QUANT_SIZES[weight_type]
+        except (KeyError, AttributeError):
+            return
+        if type_size <= 1 or pre_split_dim % type_size != 0:
+            # Whole tensor isn't an integer number of blocks, can't validate
+            return
+        if post_split_dim % type_size != 0:
+            blocks_total = pre_split_dim // type_size
+            try:
+                qtype_name = gguf.GGMLQuantizationType(weight_type).name
+            except Exception:
+                qtype_name = f"type_id={weight_type}"
+            raise ValueError(
+                f"GGUF MoE TP split is not block-aligned for shard_id="
+                f"{shard_id!r}, quant={qtype_name} (block_size={block_size}, "
+                f"type_size={type_size} bytes). Per-expert packed bytes="
+                f"{pre_split_dim} ({blocks_total} blocks); "
+                f"tp_size={self.tp_size} -> {post_split_dim} bytes/rank, "
+                f"which is not a multiple of {type_size}. This would "
+                f"corrupt dequant and produce NaN. Choose a tp_size that "
+                f"divides {blocks_total} evenly (e.g. factors: "
+                f"{sorted(d for d in range(1, blocks_total + 1) if blocks_total % d == 0)})."
+            )
+
     def _load_w2(
         self,
         expert_data: torch.Tensor,
@@ -1098,7 +1153,35 @@ class FusedMoE(PluggableLayer):
             and "input_scale" in weight_name
         )
 
-        if expert_id == -1 and not use_global_sf:
+        # GGUF qweight_type is a single per-layer enum (GGUF tensor_type)
+        # that is identical across experts in that MoE layer. The MoE
+        # per-expert loop only calls this loader with expert_id=0, so for
+        # EP ranks that don't own global expert 0 we must still run the
+        # qweight_type setter below or the GGUF kernels see weight_type=0
+        # (UNQUANTIZED) and fall into `x @ qweight.T` with the raw packed
+        # byte tensor -> "mat1/mat2 shape mismatch" crash.
+        is_gguf_weight_type = getattr(param, "is_gguf_weight_type", False)
+
+        # GGUF merged full-load under EP: loader passes a single
+        # [global_num_experts, ...] tensor with expert_id=0. For ranks that
+        # don't own global expert 0, `expert_id` is -1 and the early-return
+        # below would skip materialize/copy entirely -> w13_qweight stays
+        # UninitializedParameter and the next forward() explodes. This path
+        # slices to local experts + materializes full param.data further
+        # down, so we must not short-circuit here.
+        is_merged_gguf_full_load = (
+            getattr(param, "is_gguf_weight", False)
+            and self.use_ep
+            and loaded_weight.dim() == 3
+            and loaded_weight.shape[0] == self.global_num_experts
+        )
+
+        if (
+            expert_id == -1
+            and not use_global_sf
+            and not is_merged_gguf_full_load
+            and not is_gguf_weight_type
+        ):
             # Failed to load this param since it's not local to this rank
             return False if return_success else None
         # Hereafter, `expert_id` is local physical id
@@ -1180,6 +1263,30 @@ class FusedMoE(PluggableLayer):
         if full_load:
             shard_dim += 1
 
+        # For GGUF merged expert tensors with EP, slice the full
+        # [global_num_experts, ...] loaded_weight to only the experts local
+        # to this rank before materializing and copying. Without this,
+        # materialize uses the global expert count and every rank would try
+        # to allocate all experts -> OOM (and the expert selection logic
+        # would double-apply slicing).
+        if (
+            is_gguf_weight
+            and full_load
+            and self.use_ep
+            and loaded_weight.shape[0] == self.global_num_experts
+        ):
+            local_ids = torch.arange(
+                self.global_num_experts,
+                device=self._expert_map.device,
+                dtype=self._expert_map.dtype,
+            )
+            mask = self._expert_map >= 0
+            owned_global_ids = local_ids[mask]
+            local_ids_of_owned = self._expert_map[mask]
+            order = torch.argsort(local_ids_of_owned)
+            owned_global_ids = owned_global_ids[order].to(loaded_weight.device)
+            loaded_weight = loaded_weight.index_select(0, owned_global_ids)
+
         # Materialize GGUF UninitializedParameter accounting merged weights
         if is_gguf_weight and isinstance(param, UninitializedParameter):
             # To materialize a tensor, we must have full shape including
@@ -1189,7 +1296,22 @@ class FusedMoE(PluggableLayer):
             # w1 and w3 are merged per expert.
             if shard_id in {"w1", "w3"}:
                 final_shape[1] *= 2
+            pre_split = final_shape[shard_dim]
             final_shape[shard_dim] = final_shape[shard_dim] // self.tp_size
+            # Block-alignment check: if we're splitting the packed-byte
+            # inner dim of a GGUF k-quant / i-quant tensor, the per-rank
+            # byte count MUST be an integer multiple of the GGUF block's
+            # type_size. Otherwise the dequant kernel reads mis-aligned
+            # blocks and produces NaN (silent corruption observed with
+            # MiniMax-M2 IQ3_XXS at TP=4: intermediate_size=1536 with
+            # QK_K=256 gives 1536/256 = 6 blocks per expert row; TP=4
+            # splits mid-block).
+            self._validate_gguf_block_alignment(
+                shard_id=shard_id,
+                shard_dim=shard_dim,
+                pre_split_dim=pre_split,
+                post_split_dim=final_shape[shard_dim],
+            )
             param.materialize(final_shape, dtype=loaded_weight.dtype)
 
         expert_data = param.data if full_load else param.data[expert_id]

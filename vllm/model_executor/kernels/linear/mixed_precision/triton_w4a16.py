@@ -209,7 +209,7 @@ def triton_w4a16_gemm(
     zeros_ptr = qzeros if has_zp else b_q
 
     if current_platform.is_rocm():
-        from vllm.platforms.rocm import on_gfx1x
+        from vllm.platforms.rocm import on_gfx1x, on_mi100
 
         if on_gfx1x():
             # Tuned for RDNA 3.5 (gfx1151, 40 CUs, 32-wide wavefronts).
@@ -219,6 +219,16 @@ def triton_w4a16_gemm(
                 BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 32
             else:
                 BLOCK_M, BLOCK_N, BLOCK_K = 128, 32, 64
+        elif on_mi100():
+            # Tuned for MI100 (gfx908, 120 CUs, 64-wide wavefronts, 64KB LDS,
+            # no async LDS copy — num_stages>2 doesn't help and can hurt).
+            # Decode hot path is M=1..16; MoE tune showed BM=16, BK=32 wins.
+            if M <= 16:
+                BLOCK_M, BLOCK_N, BLOCK_K = 16, 64, 32
+            elif M <= 64:
+                BLOCK_M, BLOCK_N, BLOCK_K = 32, 64, 32
+            else:
+                BLOCK_M, BLOCK_N, BLOCK_K = 64, 128, 32
         else:
             # Tuned for MI300 (gfx942, 304 CUs, 64-wide wavefronts).
             if M <= 32:
@@ -245,6 +255,15 @@ def triton_w4a16_gemm(
 
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
 
+    launch_kwargs: dict = {}
+    if current_platform.is_rocm():
+        from vllm.platforms.rocm import on_mi100
+
+        if on_mi100():
+            # gfx908 has no async LDS copy — keep num_stages=2.
+            launch_kwargs["num_warps"] = 4
+            launch_kwargs["num_stages"] = 2
+
     triton_w4a16_gemm_kernel[grid](
         a,
         b_q,
@@ -266,6 +285,7 @@ def triton_w4a16_gemm(
         BLOCK_M=BLOCK_M,
         BLOCK_N=BLOCK_N,
         BLOCK_K=BLOCK_K,
+        **launch_kwargs,
     )
     return c
 

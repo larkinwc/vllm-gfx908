@@ -1231,12 +1231,33 @@ def multi_thread_pt_weights_iterator(
             del state
 
 
+def _get_gguf_shard_files(gguf_file: str) -> list[str]:
+    """Get all shard files for a split GGUF, or just [gguf_file] if not split."""
+    import glob as _glob
+    basename = os.path.basename(gguf_file)
+    # Match pattern like *-00001-of-00003.gguf
+    m = re.search(r"-\d+-of-(\d+)\.gguf$", basename)
+    if m:
+        n_shards = int(m.group(1))
+        # Build glob pattern to find all shards
+        prefix = re.sub(r"-\d+-of-\d+\.gguf$", "", basename)
+        parent = os.path.dirname(gguf_file)
+        shard_files = sorted(
+            _glob.glob(os.path.join(parent, f"{prefix}-*-of-*.gguf"))
+        )
+        if len(shard_files) == n_shards:
+            return shard_files
+    return [gguf_file]
+
+
 def get_gguf_extra_tensor_names(
     gguf_file: str | Path, gguf_to_hf_name_map: dict[str, str]
 ) -> list[str]:
-    reader = gguf.GGUFReader(gguf_file)
     expected_gguf_keys = set(gguf_to_hf_name_map.keys())
-    exact_gguf_keys = set([tensor.name for tensor in reader.tensors])
+    exact_gguf_keys: set[str] = set()
+    for shard in _get_gguf_shard_files(gguf_file):
+        reader = gguf.GGUFReader(shard)
+        exact_gguf_keys.update(tensor.name for tensor in reader.tensors)
     extra_keys = expected_gguf_keys - exact_gguf_keys
     return [gguf_to_hf_name_map[key] for key in extra_keys]
 
@@ -1247,12 +1268,15 @@ def get_gguf_weight_type_map(
     """
     Return GGUF mapped weight's name and its quant type
     """
-    reader = gguf.GGUFReader(gguf_file)
-    return {
-        gguf_to_hf_name_map[tensor.name]: tensor.tensor_type.name
-        for tensor in reader.tensors
-        if tensor.name in gguf_to_hf_name_map
-    }
+    result: dict[str, str] = {}
+    for shard in _get_gguf_shard_files(gguf_file):
+        reader = gguf.GGUFReader(shard)
+        result.update({
+            gguf_to_hf_name_map[tensor.name]: tensor.tensor_type.name
+            for tensor in reader.tensors
+            if tensor.name in gguf_to_hf_name_map
+        })
+    return result
 
 
 def gguf_quant_weights_iterator(
@@ -1266,38 +1290,39 @@ def gguf_quant_weights_iterator(
     Otherwise it would cause issue when loading weights with for packed
     layer with different quant types.
     """
+    shard_files = _get_gguf_shard_files(gguf_file)
 
-    reader = gguf.GGUFReader(gguf_file)
+    # First pass: yield all weight types across all shards
+    for shard in shard_files:
+        reader = gguf.GGUFReader(shard)
+        for tensor in reader.tensors:
+            if tensor.name in gguf_to_hf_name_map:
+                weight_type = tensor.tensor_type
+                name = gguf_to_hf_name_map[tensor.name]
 
-    for tensor in reader.tensors:
-        if tensor.name in gguf_to_hf_name_map:
-            weight_type = tensor.tensor_type
-            name = gguf_to_hf_name_map[tensor.name]
+                if weight_type.name not in ("F32", "BF16", "F16"):
+                    weight_type_name = name.replace("weight", "qweight_type")
+                    weight_type = torch.tensor(weight_type)
+                    yield weight_type_name, weight_type
 
-            if weight_type.name not in ("F32", "BF16", "F16"):
-                weight_type_name = name.replace("weight", "qweight_type")
-                weight_type = torch.tensor(weight_type)
-                yield weight_type_name, weight_type
-
-    for tensor in reader.tensors:
-        if tensor.name in gguf_to_hf_name_map:
-            weight = tensor.data
-            weight_type = tensor.tensor_type
-            name = gguf_to_hf_name_map[tensor.name]
-            if weight_type.name not in ("F32", "BF16", "F16"):
-                name = name.replace("weight", "qweight")
-            if weight_type.name == "BF16" and tensor.data.dtype == np.uint8:
-                # BF16 is currently the only "quantization" type that isn't
-                # actually quantized but is read as a raw byte tensor.
-                # Reinterpret as `torch.bfloat16` tensor.
-                weight = weight.view(np.uint16)
-                if reader.byte_order == "S":
-                    # GGUF endianness != system endianness
-                    weight = weight.byteswap()
-                param = torch.tensor(weight).view(torch.bfloat16)
-            else:
-                param = torch.tensor(weight)
-            yield name, param
+    # Second pass: yield all weight data across all shards
+    for shard in shard_files:
+        reader = gguf.GGUFReader(shard)
+        for tensor in reader.tensors:
+            if tensor.name in gguf_to_hf_name_map:
+                weight = tensor.data
+                weight_type = tensor.tensor_type
+                name = gguf_to_hf_name_map[tensor.name]
+                if weight_type.name not in ("F32", "BF16", "F16"):
+                    name = name.replace("weight", "qweight")
+                if weight_type.name == "BF16" and tensor.data.dtype == np.uint8:
+                    weight = weight.view(np.uint16)
+                    if reader.byte_order == "S":
+                        weight = weight.byteswap()
+                    param = torch.tensor(weight).view(torch.bfloat16)
+                else:
+                    param = torch.tensor(weight)
+                yield name, param
 
 
 def gguf_quant_weights_iterator_multi(

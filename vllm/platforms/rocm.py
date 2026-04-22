@@ -169,7 +169,10 @@ def _get_gcn_arch() -> str:
         return _query_gcn_arch_from_amdsmi()
     except Exception as e:
         logger.debug("Failed to get GCN arch via amdsmi: %s", e)
-        logger.warning_once(
+        # NOTE: use plain warning (not warning_once) during module import:
+        # warning_once resolves log scope via vllm.distributed.parallel_state,
+        # which re-enters vllm.platforms and triggers a circular import.
+        logger.warning(
             "Failed to get GCN arch via amdsmi, falling back to torch.cuda. "
             "This will initialize CUDA and may cause "
             "issues if CUDA_VISIBLE_DEVICES is not set yet."
@@ -387,6 +390,13 @@ def _get_backend_priorities(
         backends.append(AttentionBackendEnum.ROCM_AITER_FA)
     if is_aiter_found_and_supported():
         backends.append(AttentionBackendEnum.ROCM_AITER_UNIFIED_ATTN)
+    # gfx908 (MI100) CK flash-attn — ~4x faster prefill than TRITON_ATTN
+    # for models with fp16/bf16 KV cache and block_size >= 128.
+    # Only kicks in if user explicitly selects --attention-backend ROCM_CK_FA;
+    # we don't default to it because its supported-config envelope is
+    # narrower than Triton's.
+    if _ON_MI100:
+        backends.append(AttentionBackendEnum.ROCM_CK_FA)
     backends.append(AttentionBackendEnum.TRITON_ATTN)
     backends.append(AttentionBackendEnum.TURBOQUANT)
 
@@ -658,16 +668,33 @@ class RocmPlatform(Platform):
         return True
 
     @classmethod
-    @with_amdsmi_context
     @lru_cache(maxsize=8)
     def get_device_name(cls, device_id: int = 0) -> str:
-        physical_device_id = cls.device_id_to_physical_device_id(device_id)
-        handle = amdsmi_get_processor_handles()[physical_device_id]
-        asic_info = amdsmi_get_gpu_asic_info(handle)
-        asic_info_device_id: str = asic_info["device_id"]
-        if asic_info_device_id in _ROCM_DEVICE_ID_NAME_MAP:
-            return _ROCM_DEVICE_ID_NAME_MAP[asic_info_device_id]
-        return asic_info["market_name"]
+        # Fast path: amdsmi asic info -> canonical name from our map or
+        # the vendor "market_name". On hosts where amdsmi is partially
+        # broken (e.g. missing librocm_sysdeps_drm_amdgpu.so.1 so the
+        # ASIC query returns AMDSMI_STATUS_NOT_SUPPORTED), fall back to
+        # torch.cuda.get_device_name. This keeps fused_moe's tuned-
+        # config lookup (keyed on device name) from crashing on boxes
+        # that can still run the kernels just fine.
+        try:
+            amdsmi_init()
+            try:
+                physical_device_id = cls.device_id_to_physical_device_id(device_id)
+                handle = amdsmi_get_processor_handles()[physical_device_id]
+                asic_info = amdsmi_get_gpu_asic_info(handle)
+                asic_info_device_id: str = asic_info["device_id"]
+                if asic_info_device_id in _ROCM_DEVICE_ID_NAME_MAP:
+                    return _ROCM_DEVICE_ID_NAME_MAP[asic_info_device_id]
+                return asic_info["market_name"]
+            finally:
+                amdsmi_shut_down()
+        except Exception as e:
+            logger.debug(
+                "amdsmi get_device_name failed (%s); falling back to torch.cuda",
+                e,
+            )
+            return torch.cuda.get_device_name(device_id)
 
     @classmethod
     @with_amdsmi_context
@@ -717,10 +744,21 @@ class RocmPlatform(Platform):
                 )
                 compilation_config.mode = CompilationMode.NONE
 
-            # PIECEWISE graph capture hangs at TP>1 due to NCCL
-            # synchronization issues. Override to FULL_DECODE_ONLY.
-            if compilation_config.cudagraph_mode is None or (
-                compilation_config.cudagraph_mode
+            # PIECEWISE graph capture runs correctly at TP>1 as of 2026-04-20,
+            # but is not a perf win on MI100: c=1 neutral, c=8 regresses -9.7%
+            # end-to-end on REAP-172B-AWQ (mixed prefill-decode batches use the
+            # slower piecewise graphs instead of the unified FULL decode graph).
+            # Inductor compile also increases peak memory — at default settings
+            # max_model_len must drop from 65536 to ~32768 to fit KV cache.
+            # Keep FULL_DECODE_ONLY as the default. Set
+            # VLLM_MI100_ALLOW_PIECEWISE=1 to opt in when re-testing or when
+            # upstream graph-piece fusion improves.
+            allow_piecewise = os.environ.get(
+                "VLLM_MI100_ALLOW_PIECEWISE", "0"
+            ) == "1"
+            if not allow_piecewise and (
+                compilation_config.cudagraph_mode is None
+                or compilation_config.cudagraph_mode
                 in (
                     CUDAGraphMode.PIECEWISE,
                     CUDAGraphMode.FULL_AND_PIECEWISE,
@@ -728,7 +766,9 @@ class RocmPlatform(Platform):
             ):
                 logger.info_once(
                     "gfx908 (MI100): using FULL_DECODE_ONLY CUDA "
-                    "graphs (PIECEWISE hangs at TP>1)."
+                    "graphs (PIECEWISE regresses c=8 -9.7% at TP>1 and "
+                    "needs lower max_model_len to fit KV cache). "
+                    "Set VLLM_MI100_ALLOW_PIECEWISE=1 to override."
                 )
                 compilation_config.cudagraph_mode = (
                     CUDAGraphMode.FULL_DECODE_ONLY
@@ -775,6 +815,7 @@ class RocmPlatform(Platform):
 
         compilation_config = vllm_config.compilation_config
         parallel_config = vllm_config.parallel_config
+        cache_config = vllm_config.cache_config
 
         # gfx908 (MI100): custom all-reduce via XGMI IPC shared memory.
         # Validated correct and deterministic on PyTorch 2.11+rocm7.2
