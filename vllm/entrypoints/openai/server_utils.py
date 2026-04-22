@@ -69,7 +69,10 @@ class AuthenticationMiddleware:
         return token_match
 
     def __call__(self, scope: Scope, receive: Receive, send: Send) -> Awaitable[None]:
-        if scope["type"] not in ("http", "websocket") or scope["method"] == "OPTIONS":
+        if (
+            scope["type"] not in ("http", "websocket")
+            or scope.get("method") == "OPTIONS"
+        ):
             # scope["type"] can be "lifespan" or "startup" for example,
             # in which case we don't need to do anything
             return self.app(scope, receive, send)
@@ -371,7 +374,7 @@ async def generation_error_handler(req: Request, exc: GenerationError):
 
 async def exception_handler(req: Request, exc: Exception):
     if req.app.state.args.log_error_stack:
-        logger.exception(
+        logger.error(
             "Exception caught. Request id: %s",
             req.state.request_metadata.request_id
             if hasattr(req.state, "request_metadata")

@@ -6,26 +6,27 @@ OpenAI: https://platform.openai.com/docs/api-reference/embeddings
 Cohere: https://docs.cohere.com/reference/embed
 """
 
-import base64
 import builtins
 import struct
 import time
 from collections.abc import Sequence
 from typing import Literal, TypeAlias
 
+import pybase64 as base64
 from pydantic import BaseModel, Field
 
 from vllm import PoolingParams
 from vllm.config import ModelConfig
 from vllm.entrypoints.openai.engine.protocol import OpenAIBaseModel, UsageInfo
-from vllm.entrypoints.pooling.base.protocol import (
+from vllm.renderers import TokenizeParams
+from vllm.utils import random_uuid
+
+from ..base.protocol import (
     ChatRequestMixin,
     CompletionRequestMixin,
     EmbedRequestMixin,
     PoolingBasicRequestMixin,
 )
-from vllm.renderers import TokenizeParams
-from vllm.utils import random_uuid
 
 # ---------------------------------------------------------------------------
 # OpenAI /v1/embeddings — request models
