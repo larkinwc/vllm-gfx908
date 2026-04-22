@@ -744,10 +744,15 @@ class RocmPlatform(Platform):
                 )
                 compilation_config.mode = CompilationMode.NONE
 
-            # PIECEWISE graph capture historically hangs at TP>1 due to NCCL
-            # synchronization issues. Override to FULL_DECODE_ONLY by default.
-            # Set VLLM_MI100_ALLOW_PIECEWISE=1 to allow the caller's choice
-            # through (useful for re-testing after upstream PP/graph fixes).
+            # PIECEWISE graph capture runs correctly at TP>1 as of 2026-04-20,
+            # but is not a perf win on MI100: c=1 neutral, c=8 regresses -9.7%
+            # end-to-end on REAP-172B-AWQ (mixed prefill-decode batches use the
+            # slower piecewise graphs instead of the unified FULL decode graph).
+            # Inductor compile also increases peak memory — at default settings
+            # max_model_len must drop from 65536 to ~32768 to fit KV cache.
+            # Keep FULL_DECODE_ONLY as the default. Set
+            # VLLM_MI100_ALLOW_PIECEWISE=1 to opt in when re-testing or when
+            # upstream graph-piece fusion improves.
             allow_piecewise = os.environ.get(
                 "VLLM_MI100_ALLOW_PIECEWISE", "0"
             ) == "1"
@@ -761,7 +766,8 @@ class RocmPlatform(Platform):
             ):
                 logger.info_once(
                     "gfx908 (MI100): using FULL_DECODE_ONLY CUDA "
-                    "graphs (PIECEWISE hangs at TP>1). "
+                    "graphs (PIECEWISE regresses c=8 -9.7% at TP>1 and "
+                    "needs lower max_model_len to fit KV cache). "
                     "Set VLLM_MI100_ALLOW_PIECEWISE=1 to override."
                 )
                 compilation_config.cudagraph_mode = (
