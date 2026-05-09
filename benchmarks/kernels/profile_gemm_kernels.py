@@ -3,7 +3,8 @@
 GEMM Kernel Profiling for MI100 (gfx908) using rocprofv3
 
 Profiles vLLM inference to identify GEMM bottlenecks and measure MFMA utilization.
-Implements the agentic profiling loop from ml-research/kernel-tuning/agentic-profiling-loop.md.
+Implements the agentic profiling loop from
+ml-research/kernel-tuning/agentic-profiling-loop.md.
 
 Phases:
   1. TRIAGE:  kernel-trace summary to identify hottest kernels
@@ -33,10 +34,8 @@ import os
 import re
 import subprocess
 import sys
-import time
 from datetime import datetime
 from pathlib import Path
-
 
 VLLM_PYTHON = "/opt/vllm-env/bin/python3"
 ROCPROFV3 = "/opt/rocm/bin/rocprofv3"
@@ -58,7 +57,9 @@ def check_server_health():
         return False
 
 
-def send_inference_request(prompt="Write a Python function to sort a list.", max_tokens=128):
+def send_inference_request(
+    prompt="Write a Python function to sort a list.", max_tokens=128
+):
     import urllib.request
     payload = json.dumps({
         "model": os.path.basename(DEFAULT_MODEL),
@@ -178,11 +179,18 @@ def parse_kernel_trace(trace_dir):
         with open(csv_file) as f:
             reader = csv.DictReader(f)
             for row in reader:
-                name = row.get("Kernel_Name", row.get("kernel_name", row.get("Name", "")))
-                duration_ns = int(row.get("Duration_ns", row.get("duration", row.get("DurationNs", 0))))
+                name = row.get(
+                    "Kernel_Name", row.get("kernel_name", row.get("Name", ""))
+                )
+                duration_ns = int(row.get(
+                    "Duration_ns", row.get("duration", row.get("DurationNs", 0))
+                ))
                 if name:
                     if name not in kernels:
-                        kernels[name] = {"name": name, "count": 0, "total_ns": 0, "durations": []}
+                        kernels[name] = {
+                            "name": name, "count": 0,
+                            "total_ns": 0, "durations": [],
+                        }
                     kernels[name]["count"] += 1
                     kernels[name]["total_ns"] += duration_ns
                     kernels[name]["durations"].append(duration_ns)
@@ -196,7 +204,10 @@ def parse_kernel_trace(trace_dir):
     print(f"Total unique kernels: {len(ranked)}")
     print()
 
-    print(f"{'Rank':<5} {'%Time':>6} {'Count':>7} {'Avg(us)':>10} {'Total(ms)':>10} {'Kernel Name'}")
+    print(
+        f"{'Rank':<5} {'%Time':>6} {'Count':>7}"
+        f" {'Avg(us)':>10} {'Total(ms)':>10} {'Kernel Name'}"
+    )
     print("-" * 100)
 
     gemm_kernels = []
@@ -210,7 +221,10 @@ def parse_kernel_trace(trace_dir):
                        "linear", "sgemm", "hgemm", "batched"])
 
         marker = " [GEMM]" if is_gemm else ""
-        print(f"{i+1:<5} {pct:>5.1f}% {k['count']:>7} {avg_us:>10.1f} {total_ms:>10.2f} {short_name}{marker}")
+        print(
+            f"{i+1:<5} {pct:>5.1f}% {k['count']:>7}"
+            f" {avg_us:>10.1f} {total_ms:>10.2f} {short_name}{marker}"
+        )
 
         if is_gemm:
             k["pct_time"] = pct
@@ -273,7 +287,9 @@ def run_deep_profile(output_dir, kernel_regex=None, top_n=3, ranked_kernels=None
         "--", VLLM_PYTHON, workload_script,
     ]
 
-    result = subprocess.run(cmd_mem, env=env, capture_output=True, text=True, timeout=600)
+    result = subprocess.run(
+        cmd_mem, env=env, capture_output=True, text=True, timeout=600
+    )
     if result.returncode != 0:
         print(f"  Memory counters pass failed: {result.stderr[:500]}")
         # Try without TCC counters (may not be available on all configurations)
@@ -286,7 +302,9 @@ def run_deep_profile(output_dir, kernel_regex=None, top_n=3, ranked_kernels=None
             "--output-directory", mem_dir,
             "--", VLLM_PYTHON, workload_script,
         ]
-        result = subprocess.run(cmd_mem_fallback, env=env, capture_output=True, text=True, timeout=600)
+        result = subprocess.run(
+            cmd_mem_fallback, env=env, capture_output=True, text=True, timeout=600
+        )
     print("  Done." if result.returncode == 0 else f"  Failed: {result.stderr[:300]}")
 
     # Compute counters pass
@@ -303,7 +321,9 @@ def run_deep_profile(output_dir, kernel_regex=None, top_n=3, ranked_kernels=None
         "--", VLLM_PYTHON, workload_script,
     ]
 
-    result = subprocess.run(cmd_compute, env=env, capture_output=True, text=True, timeout=600)
+    result = subprocess.run(
+        cmd_compute, env=env, capture_output=True, text=True, timeout=600
+    )
     if result.returncode != 0:
         print(f"  Compute counters pass failed: {result.stderr[:500]}")
         # Fallback to just wave count
@@ -316,7 +336,9 @@ def run_deep_profile(output_dir, kernel_regex=None, top_n=3, ranked_kernels=None
             "--output-directory", compute_dir,
             "--", VLLM_PYTHON, workload_script,
         ]
-        result = subprocess.run(cmd_waves, env=env, capture_output=True, text=True, timeout=600)
+        result = subprocess.run(
+            cmd_waves, env=env, capture_output=True, text=True, timeout=600
+        )
     print("  Done." if result.returncode == 0 else f"  Failed: {result.stderr[:300]}")
 
     return parse_deep_profile(deep_dir)
@@ -364,9 +386,13 @@ def parse_deep_profile(deep_dir):
         duration_s = duration_ns / 1e9
 
         if duration_s > 0 and (fetch + write) > 0:
-            bw_bytes_per_sec = (fetch + write) * 32 / duration_s  # 32 bytes per fetch unit
+            # 32 bytes per fetch unit
+            bw_bytes_per_sec = (fetch + write) * 32 / duration_s
             bw_util = bw_bytes_per_sec / MI100_PEAK_BW_BYTES_PER_SEC * 100
-            print(f"  Memory BW: {bw_bytes_per_sec/1e9:.1f} GB/s ({bw_util:.1f}% of peak)")
+            print(
+                f"  Memory BW: {bw_bytes_per_sec/1e9:.1f} GB/s"
+                f" ({bw_util:.1f}% of peak)"
+            )
 
         # L2 cache
         l2_hit = float(data.get("TCC_HIT_sum", 0))
@@ -383,7 +409,10 @@ def parse_deep_profile(deep_dir):
         if mfma_insts > 0 or valu_insts > 0:
             total_insts = mfma_insts + valu_insts
             mfma_pct = mfma_insts / total_insts * 100 if total_insts > 0 else 0
-            print(f"  MFMA Instructions: {mfma_insts:.0f} ({mfma_pct:.1f}% of VALU+MFMA)")
+            print(
+                f"  MFMA Instructions: {mfma_insts:.0f}"
+                f" ({mfma_pct:.1f}% of VALU+MFMA)"
+            )
             print(f"  VALU Instructions: {valu_insts:.0f}")
             print(f"  Wavefronts: {sq_waves:.0f}")
 
@@ -404,22 +433,43 @@ def classify_bottleneck(data):
 
     duration_s = duration_ns / 1e9
     bw_bytes_per_sec = (fetch + write) * 32 / duration_s if duration_s > 0 else 0
-    bw_util = bw_bytes_per_sec / MI100_PEAK_BW_BYTES_PER_SEC if MI100_PEAK_BW_BYTES_PER_SEC > 0 else 0
+    bw_util = (
+        bw_bytes_per_sec / MI100_PEAK_BW_BYTES_PER_SEC
+        if MI100_PEAK_BW_BYTES_PER_SEC > 0 else 0
+    )
 
     total_insts = mfma_insts + valu_insts
     mfma_pct = mfma_insts / total_insts if total_insts > 0 else 0
 
     if bw_util > 0.6 and mfma_pct < 0.3:
-        print(f"  Bottleneck: MEMORY-BOUND (BW {bw_util*100:.0f}%, MFMA {mfma_pct*100:.0f}%)")
-        print(f"  Recommendation: Already memory-bound. Consider quantization or KV compression.")
+        print(
+            f"  Bottleneck: MEMORY-BOUND"
+            f" (BW {bw_util*100:.0f}%, MFMA {mfma_pct*100:.0f}%)"
+        )
+        print(
+            "  Recommendation: Already memory-bound."
+            " Consider quantization or KV compression."
+        )
     elif mfma_pct > 0.5 and bw_util < 0.3:
-        print(f"  Bottleneck: COMPUTE-BOUND (BW {bw_util*100:.0f}%, MFMA {mfma_pct*100:.0f}%)")
-        print(f"  Recommendation: Adjust tile sizes or use larger MFMA variants.")
+        print(
+            f"  Bottleneck: COMPUTE-BOUND"
+            f" (BW {bw_util*100:.0f}%, MFMA {mfma_pct*100:.0f}%)"
+        )
+        print("  Recommendation: Adjust tile sizes or use larger MFMA variants.")
     elif mfma_pct < 0.3 and bw_util < 0.3:
-        print(f"  Bottleneck: LATENCY-BOUND (BW {bw_util*100:.0f}%, MFMA {mfma_pct*100:.0f}%)")
-        print(f"  Recommendation: Low utilization. Check occupancy, launch overhead, sync stalls.")
+        print(
+            f"  Bottleneck: LATENCY-BOUND"
+            f" (BW {bw_util*100:.0f}%, MFMA {mfma_pct*100:.0f}%)"
+        )
+        print(
+            "  Recommendation: Low utilization."
+            " Check occupancy, launch overhead, sync stalls."
+        )
     else:
-        print(f"  Bottleneck: BALANCED (BW {bw_util*100:.0f}%, MFMA {mfma_pct*100:.0f}%)")
+        print(
+            f"  Bottleneck: BALANCED"
+            f" (BW {bw_util*100:.0f}%, MFMA {mfma_pct*100:.0f}%)"
+        )
 
 
 def generate_report(output_dir, triage_results=None, deep_results=None):
