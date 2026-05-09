@@ -5,7 +5,9 @@
 # (v_mfma_i32_32x32x4i8, v_mfma_i32_16x16x16i8) at 185 TOPS peak.
 # Tile sizes tuned for 120 CUs, wavefront-64, 64KB LDS per CU.
 
+import contextlib
 import logging
+import os
 
 import torch
 
@@ -17,6 +19,10 @@ from vllm.model_executor.layers.quantization.utils.w8a8_utils import (
 from vllm.platforms import current_platform
 from vllm.triton_utils import tl, triton
 
+from .mi100_hipblaslt import (
+    mi100_hipblaslt_scaled_mm,
+    mi100_hipblaslt_supports,
+)
 from .ScaledMMLinearKernel import (
     Int8ScaledMMLinearKernel,
     Int8ScaledMMLinearLayerConfig,
@@ -24,6 +30,40 @@ from .ScaledMMLinearKernel import (
 
 logger = logging.getLogger(__name__)
 _mi100_int8_logged = False
+
+# M2 GEMM-shape logging instrumentation (env-flag gated).
+# Set VLLM_LOG_GEMM_SHAPES=1 to dump (M,N,K) tuples of every W8A8
+# linear call into VLLM_GEMM_SHAPES_OUT (default
+# /root/bench-int8-w4a16/tensilelite/gemm_shapes_w8a8.csv). Used by
+# scripts/mi100/dump_gemm_shapes.py to gather the input for TensileLite
+# tuning.
+_gemm_shape_log_path: str | None = None
+_gemm_shape_log_handle = None
+
+
+def _maybe_log_gemm_shape(M: int, N: int, K: int) -> None:
+    global _gemm_shape_log_path, _gemm_shape_log_handle
+    if os.environ.get("VLLM_LOG_GEMM_SHAPES") != "1":
+        return
+    if _gemm_shape_log_handle is None:
+        path = os.environ.get(
+            "VLLM_GEMM_SHAPES_OUT",
+            "/root/bench-int8-w4a16/tensilelite/gemm_shapes_w8a8.csv",
+        )
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        new_file = not os.path.exists(path)
+        # Append-mode so multi-rank workers can share the same file. The
+        # handle is held for the lifetime of the process — a context
+        # manager would defeat the purpose of streaming-append logging.
+        _gemm_shape_log_handle = open(path, "a", buffering=1)  # noqa: SIM115
+        _gemm_shape_log_path = path
+        if new_file:
+            _gemm_shape_log_handle.write("M,N,K,dtype,layout,pid\n")
+    # Logging must never break the forward path.
+    with contextlib.suppress(Exception):
+        _gemm_shape_log_handle.write(
+            f"{M},{N},{K},int8,row_col,{os.getpid()}\n"
+        )
 
 
 def is_weak_contiguous(x: torch.Tensor):
@@ -164,6 +204,16 @@ def mi100_int8_scaled_mm(
     assert N > 0 and K > 0 and M > 0
     assert weight.shape[0] == K
     assert input.dtype == torch.int8 and weight.dtype == torch.int8
+
+    _maybe_log_gemm_shape(M, N, K)
+
+    # M2 dispatch: prefer hipBLASLt for tuned shapes; otherwise fall through
+    # to the existing Triton kernel below. VLLM_DISABLE_HIPBLASLT=1 forces
+    # 100% Triton dispatch (validated by VAL-TENSILE-008).
+    if mi100_hipblaslt_supports(M, N, K):
+        return mi100_hipblaslt_scaled_mm(
+            input, weight, scale_a, scale_b, out_dtype, bias
+        )
 
     scale_a = scale_a.reshape(-1, 1) if scale_a.dim() <= 1 else scale_a
     scale_b = scale_b.reshape(-1, 1) if scale_b.dim() <= 1 else scale_b

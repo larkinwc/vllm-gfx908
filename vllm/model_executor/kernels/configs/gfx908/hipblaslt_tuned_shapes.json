@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "_comment": [
+    "M2 hipBLASLt tuned-shapes manifest for gfx908 (MI100).",
+    "Listed (M, N, K) tuples are routed through the hipBLASLt INT8 path",
+    "(torch._int_mm + fp32 epilogue scales) by",
+    "vllm/model_executor/kernels/linear/scaled_mm/mi100_int8.py.",
+    "Untuned shapes fall through to the existing Triton mi100_int8 kernel.",
+    "VLLM_DISABLE_HIPBLASLT=1 forces 100% Triton dispatch.",
+    "TensileLite logic YAMLs that hipBLASLt loads at runtime live at",
+    "$HIPBLASLT_TENSILE_LIBPATH (default",
+    "/root/bench-int8-w4a16/tensilelite/logic/gfx908/)."
+  ],
+  "rocm_version": "7.12",
+  "hipblaslt_commit": "rocm-7.2.0 (90de4d11b98e562dd8c5ac48dd273ee1d9a885e7 in /root/hipblaslt-src)",
+  "tensilelite_commit": "rocm-7.2.0 (in-tree under /root/hipblaslt-src/tensilelite)",
+  "arch": "gfx908",
+  "shape_source_csv": "/root/bench-int8-w4a16/tensilelite/gemm_shapes_w8a8_tp1.csv",
+  "logic_path_runtime": "/root/bench-int8-w4a16/tensilelite/logic/gfx908",
+  "shapes": [
+    {
+      "M": 512, "N": 4096, "K": 12288, "n_calls_observed": 2880,
+      "role": "down_proj_prefill"
+    },
+    {
+      "M": 512, "N": 24576, "K": 4096, "n_calls_observed": 2880,
+      "role": "gate_up_proj_prefill"
+    },
+    {
+      "M": 513, "N": 4096, "K": 12288, "n_calls_observed": 960,
+      "role": "down_proj_prefill_off1"
+    },
+    {
+      "M": 513, "N": 24576, "K": 4096, "n_calls_observed": 960,
+      "role": "gate_up_proj_prefill_off1"
+    },
+    {
+      "M": 512, "N": 4096, "K": 4096, "n_calls_observed": 720,
+      "role": "o_proj_prefill"
+    },
+    {
+      "M": 512, "N": 10240, "K": 4096, "n_calls_observed": 720,
+      "role": "qkv_proj_prefill"
+    },
+    {
+      "M": 513, "N": 4096, "K": 4096, "n_calls_observed": 240,
+      "role": "o_proj_prefill_off1"
+    },
+    {
+      "M": 513, "N": 10240, "K": 4096, "n_calls_observed": 240,
+      "role": "qkv_proj_prefill_off1"
+    }
+  ]
+}
