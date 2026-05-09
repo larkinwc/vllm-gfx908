@@ -160,7 +160,11 @@ _POSSIBLE_INT8_KERNELS: dict[PlatformEnum, list[type[Int8ScaledMMLinearKernel]]]
         CutlassInt8ScaledMMLinearKernel,
         TritonInt8ScaledMMLinearKernel,
     ],
-    PlatformEnum.ROCM: [AiterInt8ScaledMMLinearKernel, TritonInt8ScaledMMLinearKernel],
+    PlatformEnum.ROCM: [
+        MI100Int8ScaledMMLinearKernel,
+        AiterInt8ScaledMMLinearKernel,
+        TritonInt8ScaledMMLinearKernel,
+    ],
 }
 
 # in priority/performance order (when available)
