@@ -149,8 +149,12 @@ def render_roofline(omn_json: Path) -> list[str]:
         "",
         f"_{obj.get('note', '')}_",
         "",
-        "| Quant | Hot kernel | Calls | Kernel ms | Achieved HBM GB/s | %HBM peak | Achieved VALU TFLOPs (proxy) | %compute peak |",
-        "|------:|------------|------:|----------:|------------------:|----------:|----------------------------:|--------------:|",
+        "| Quant | Hot kernel | Calls | Kernel ms |"
+        " Achieved HBM GB/s | %HBM peak |"
+        " Achieved VALU TFLOPs (proxy) | %compute peak |",
+        "|------:|------------|------:|----------:|"
+        "------------------:|----------:|"
+        "----------------------------:|--------------:|",
     ]
     by_quant = obj.get("by_quant", {})
     if not by_quant:
@@ -226,7 +230,7 @@ def render_manifest(manifest_path: Path) -> list[str]:
     lines = [
         "### Harness manifest summary",
         "",
-        f"- Locked harness:        `/root/bench-int8-w4a16/baseline/run_baseline.sh`",
+        "- Locked harness:        `/root/bench-int8-w4a16/baseline/run_baseline.sh`",
         f"- vLLM commit:           `{m.get('vllm_commit', '')}`",
         f"- vLLM version:          {m.get('vllm_version', '')}",
         f"- ROCm:                  {m.get('rocm_version', '')}",
@@ -319,10 +323,7 @@ def replace_m1_section(text: str, new_section: str) -> str:
     pre, _, after = text.partition(M1_HEADER)
     # find next H2 header in `after`
     m = re.search(r"^## ", after[len(M1_HEADER):], re.MULTILINE)
-    if m:
-        post = after[len(M1_HEADER) + m.start():]
-    else:
-        post = ""
+    post = after[len(M1_HEADER) + m.start():] if m else ""
     # `pre` ends just before the M1 header.  Drop trailing whitespace.
     pre = pre.rstrip() + "\n\n"
     return pre + new_section + "\n\n" + post.lstrip()
@@ -342,10 +343,7 @@ def main() -> int:
         print(section)
         return 0
 
-    if args.report.is_file():
-        original = args.report.read_text()
-    else:
-        original = ""
+    original = args.report.read_text() if args.report.is_file() else ""
     updated = replace_m1_section(original, section)
     args.report.write_text(updated)
     n_lines = len(updated.splitlines())

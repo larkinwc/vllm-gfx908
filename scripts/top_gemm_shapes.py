@@ -102,8 +102,11 @@ def aggregate_csv(path: Path) -> tuple[dict[str, dict], int]:
         start_col = cols.get("start_timestamp") or cols.get("start_ns")
         end_col = cols.get("end_timestamp") or cols.get("end_ns")
         if not name_col or not start_col or not end_col:
-            print(f"  [warn] missing required columns in {path}; cols={list(cols.values())}",
-                  file=sys.stderr)
+            print(
+                f"  [warn] missing required columns in {path};"
+                f" cols={list(cols.values())}",
+                file=sys.stderr,
+            )
             return stats, 0
         for row in reader:
             try:

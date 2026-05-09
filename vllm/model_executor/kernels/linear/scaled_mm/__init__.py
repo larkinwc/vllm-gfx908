@@ -23,6 +23,9 @@ from vllm.model_executor.kernels.linear.scaled_mm.marlin import (
 from vllm.model_executor.kernels.linear.scaled_mm.mi100 import (
     MI100FP8ScaledMMLinearKernel,
 )
+from vllm.model_executor.kernels.linear.scaled_mm.mi100_int8 import (
+    MI100Int8ScaledMMLinearKernel,
+)
 from vllm.model_executor.kernels.linear.scaled_mm.pytorch import (
     ChannelWiseTorchFP8ScaledMMLinearKernel,
     PerTensorTorchFP8ScaledMMLinearKernel,
@@ -59,6 +62,7 @@ __all__ = [
     "PerTensorTorchFP8ScaledMMLinearKernel",
     "RowWiseTorchFP8ScaledMMLinearKernel",
     "MI100FP8ScaledMMLinearKernel",
+    "MI100Int8ScaledMMLinearKernel",
     "ROCmFP8ScaledMMLinearKernel",
     "TritonInt8ScaledMMLinearKernel",
     "Fp8BlockScaledMMLinearKernel",

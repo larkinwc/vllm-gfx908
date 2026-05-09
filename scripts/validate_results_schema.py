@@ -6,7 +6,8 @@ against `scripts/bench_schema.json`. Prints "<N> files validated, <K>
 failures" and exits non-zero on any failure.
 
 Usage:
-    /opt/vllm-env/bin/python3 scripts/validate_results_schema.py /root/bench-int8-w4a16/baseline/
+    /opt/vllm-env/bin/python3 scripts/validate_results_schema.py \
+        /root/bench-int8-w4a16/baseline/
 """
 from __future__ import annotations
 

@@ -22,8 +22,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
-import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -136,7 +134,8 @@ def main():
     }
     with open(args.out, "w") as f:
         json.dump(summary, f, indent=2)
-    print(json.dumps({k: v for k, v in summary.items() if k != "raw_counters"}, indent=2))
+    compact = {k: v for k, v in summary.items() if k != "raw_counters"}
+    print(json.dumps(compact, indent=2))
 
 
 if __name__ == "__main__":

@@ -50,6 +50,7 @@ HIP binary entry — i.e. Triton actually compiled the W4A16 kernel.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -148,9 +149,8 @@ def _wait_health(proc: subprocess.Popen, max_wait_sec: int, log_path: Path) -> b
                 f"http://127.0.0.1:{PORT}/health", timeout=2.0
             ) as r:
                 if r.status == 200:
-                    _log(
-                        f"server healthy after {int(max_wait_sec - (deadline - time.time()))}s",
-                    )
+                    elapsed = int(max_wait_sec - (deadline - time.time()))
+                    _log(f"server healthy after {elapsed}s")
                     return True
         except (urllib.error.URLError, ConnectionRefusedError, TimeoutError):
             pass
@@ -261,10 +261,8 @@ def _summarise_cache(cache_dir: Path) -> dict:
         if f.is_file():
             ext = f.suffix or "<noext>"
             by_ext[ext] = by_ext.get(ext, 0) + 1
-            try:
+            with contextlib.suppress(OSError):
                 total_bytes += f.stat().st_size
-            except OSError:
-                pass
     return {
         "cache_dir": str(cache_dir),
         "n_subdirs": n_dirs,
@@ -319,17 +317,13 @@ def main() -> int:
         return 0
     finally:
         _log("shutting down server")
-        try:
+        with contextlib.suppress(ProcessLookupError):
             os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        except ProcessLookupError:
-            pass
         try:
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
         _kill_orphans()
 
 

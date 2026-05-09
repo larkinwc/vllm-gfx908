@@ -32,7 +32,11 @@ from pathlib import Path
 # Kept inline (~10 entries) to remove an external runtime dependency.
 CODING_PROMPTS: list[dict] = [
     {
-        "system": "You are a senior software engineer. Write clean, efficient, and well-documented code. Follow best practices and include appropriate error handling.",
+        "system": (
+            "You are a senior software engineer. Write clean, efficient, and"
+            " well-documented code. Follow best practices and include"
+            " appropriate error handling."
+        ),
         "context": (
             "def calculate_average(numbers):\n"
             "    total = 0\n"
@@ -40,10 +44,16 @@ CODING_PROMPTS: list[dict] = [
             "        total += n\n"
             "    return total / len(numbers)"
         ),
-        "request": "Add type hints and error handling for empty lists. Also add a docstring explaining the function.",
+        "request": (
+            "Add type hints and error handling for empty lists."
+            " Also add a docstring explaining the function."
+        ),
     },
     {
-        "system": "You are a Python expert specializing in data processing. Provide optimized solutions with clear explanations.",
+        "system": (
+            "You are a Python expert specializing in data processing."
+            " Provide optimized solutions with clear explanations."
+        ),
         "context": (
             "class DataProcessor:\n"
             "    def __init__(self):\n"
@@ -53,10 +63,16 @@ CODING_PROMPTS: list[dict] = [
             "    def get_average(self):\n"
             "        return sum(self.data) / len(self.data)"
         ),
-        "request": "Add methods for filtering, sorting, and statistical analysis (mean, median, std). Include comprehensive docstrings.",
+        "request": (
+            "Add methods for filtering, sorting, and statistical analysis"
+            " (mean, median, std). Include comprehensive docstrings."
+        ),
     },
     {
-        "system": "You are a backend engineer with expertise in API design. Write RESTful, scalable code.",
+        "system": (
+            "You are a backend engineer with expertise in API design."
+            " Write RESTful, scalable code."
+        ),
         "context": (
             "# Flask endpoint for user management\n"
             "@app.route('/users', methods=['GET'])\n"
@@ -64,10 +80,16 @@ CODING_PROMPTS: list[dict] = [
             "    users = User.query.all()\n"
             "    return jsonify([u.to_dict() for u in users])"
         ),
-        "request": "Add pagination, filtering, and proper error handling. Include request validation and response schemas.",
+        "request": (
+            "Add pagination, filtering, and proper error handling."
+            " Include request validation and response schemas."
+        ),
     },
     {
-        "system": "You are a debugging specialist. Analyze code issues and provide clear fixes with explanations.",
+        "system": (
+            "You are a debugging specialist. Analyze code issues and"
+            " provide clear fixes with explanations."
+        ),
         "context": (
             "async def fetch_data(urls):\n"
             "    results = []\n"
@@ -76,10 +98,16 @@ CODING_PROMPTS: list[dict] = [
             "        results.append(response)\n"
             "    return results"
         ),
-        "request": "This code is slow when fetching many URLs. Optimize it for concurrent fetching and add timeout handling.",
+        "request": (
+            "This code is slow when fetching many URLs. Optimize it for"
+            " concurrent fetching and add timeout handling."
+        ),
     },
     {
-        "system": "You are a JavaScript/TypeScript expert. Write modern, type-safe frontend code.",
+        "system": (
+            "You are a JavaScript/TypeScript expert."
+            " Write modern, type-safe frontend code."
+        ),
         "context": (
             "interface User {\n"
             "  name: string;\n"
@@ -89,20 +117,33 @@ CODING_PROMPTS: list[dict] = [
             "  return user.name.length > 0 && user.email.includes('@');\n"
             "}"
         ),
-        "request": "Add comprehensive validation for email format, password strength, and phone number. Include error messages.",
+        "request": (
+            "Add comprehensive validation for email format, password"
+            " strength, and phone number. Include error messages."
+        ),
     },
     {
-        "system": "You are a security engineer. Focus on identifying vulnerabilities and providing secure implementations.",
+        "system": (
+            "You are a security engineer. Focus on identifying"
+            " vulnerabilities and providing secure implementations."
+        ),
         "context": (
             "def login(username, password):\n"
-            "    query = f\"SELECT * FROM users WHERE username='{username}' AND password='{password}'\"\n"
+            "    query = f\"SELECT * FROM users WHERE"
+            " username='{username}' AND password='{password}'\"\n"
             "    result = db.execute(query)\n"
             "    return result.fetchone()"
         ),
-        "request": "Identify the security vulnerability and rewrite this to be secure. Add proper authentication practices.",
+        "request": (
+            "Identify the security vulnerability and rewrite this to be"
+            " secure. Add proper authentication practices."
+        ),
     },
     {
-        "system": "You are a database specialist. Optimize queries and design efficient schemas.",
+        "system": (
+            "You are a database specialist."
+            " Optimize queries and design efficient schemas."
+        ),
         "context": (
             "-- Query to get user orders\n"
             "SELECT u.name, o.id, o.total, p.name as product_name\n"
@@ -111,10 +152,16 @@ CODING_PROMPTS: list[dict] = [
             "JOIN products p ON o.product_id = p.id\n"
             "WHERE o.created_at > '2024-01-01'"
         ),
-        "request": "Analyze query performance and suggest optimizations. Add indexes and rewrite for better efficiency.",
+        "request": (
+            "Analyze query performance and suggest optimizations."
+            " Add indexes and rewrite for better efficiency."
+        ),
     },
     {
-        "system": "You are an ML engineer. Focus on efficient model implementations and data pipelines.",
+        "system": (
+            "You are an ML engineer. Focus on efficient model"
+            " implementations and data pipelines."
+        ),
         "context": (
             "import numpy as np\n\n"
             "def train_model(X, y, epochs=100):\n"
@@ -125,19 +172,31 @@ CODING_PROMPTS: list[dict] = [
             "        weights -= 0.01 * X.T @ errors\n"
             "    return weights"
         ),
-        "request": "Add batch processing, learning rate scheduling, and early stopping. Include logging and validation.",
+        "request": (
+            "Add batch processing, learning rate scheduling, and early"
+            " stopping. Include logging and validation."
+        ),
     },
     {
-        "system": "You are a DevOps engineer. Write automation scripts and infrastructure code.",
+        "system": (
+            "You are a DevOps engineer."
+            " Write automation scripts and infrastructure code."
+        ),
         "context": (
             "# Docker build script\n"
             "docker build -t myapp:latest .\n"
             "docker run -d -p 8080:80 myapp:latest"
         ),
-        "request": "Create a complete CI/CD pipeline script with health checks, rollback, and monitoring integration.",
+        "request": (
+            "Create a complete CI/CD pipeline script with health checks,"
+            " rollback, and monitoring integration."
+        ),
     },
     {
-        "system": "You are a code reviewer. Provide constructive feedback and suggest improvements.",
+        "system": (
+            "You are a code reviewer."
+            " Provide constructive feedback and suggest improvements."
+        ),
         "context": (
             "def process_file(filename):\n"
             "    with open(filename) as f:\n"
@@ -151,7 +210,10 @@ CODING_PROMPTS: list[dict] = [
             "        results.append(parts)\n"
             "    return results"
         ),
-        "request": "Review this code for issues: error handling, performance, readability. Provide improved version.",
+        "request": (
+            "Review this code for issues: error handling, performance,"
+            " readability. Provide improved version."
+        ),
     },
 ]
 
