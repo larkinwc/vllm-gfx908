@@ -262,7 +262,10 @@ def main() -> int:
     out.append("## Reproduction")
     out.append("")
     out.append("```")
-    out.append("# Autotune configs already in vllm/model_executor/kernels/configs/gfx908/")
+    out.append(
+        "# Autotune configs already in"
+        " vllm/model_executor/kernels/configs/gfx908/"
+    )
     out.append("scripts/mi100/run_grid.sh m3-w8a8-autotune w8a8_")
     out.append("scripts/mi100/run_grid.sh m3-w8a8-heuristic w8a8_")
     out.append("scripts/mi100/run_grid.sh m3-w4a16-mi100 w4a16_")
@@ -297,11 +300,25 @@ def main() -> int:
     out.append("")
     out.append("## Files")
     out.append("")
-    out.append("- W8A8 autotune cells: `/root/bench-int8-w4a16/m3/w8a8/autotune/{synthetic,coding}/`")
-    out.append("- W8A8 heuristic cells: `/root/bench-int8-w4a16/m3/w8a8/heuristic/{synthetic,coding}/`")
-    out.append("- W4A16 mi100 cells: `/root/bench-int8-w4a16/m3/w4a16/mi100/{synthetic,coding}/`")
-    out.append("- W4A16 generic cells: `/root/bench-int8-w4a16/m3/w4a16/generic/{synthetic,coding}/`")
-    out.append("- Pareto exceptions: `/root/bench-int8-w4a16/m3/pareto_exceptions.md`")
+    out.append(
+        "- W8A8 autotune cells: "
+        "`/root/bench-int8-w4a16/m3/w8a8/autotune/{synthetic,coding}/`"
+    )
+    out.append(
+        "- W8A8 heuristic cells: "
+        "`/root/bench-int8-w4a16/m3/w8a8/heuristic/{synthetic,coding}/`"
+    )
+    out.append(
+        "- W4A16 mi100 cells: "
+        "`/root/bench-int8-w4a16/m3/w4a16/mi100/{synthetic,coding}/`"
+    )
+    out.append(
+        "- W4A16 generic cells: "
+        "`/root/bench-int8-w4a16/m3/w4a16/generic/{synthetic,coding}/`"
+    )
+    out.append(
+        "- Pareto exceptions: `/root/bench-int8-w4a16/m3/pareto_exceptions.md`"
+    )
     out.append("")
 
     print("\n".join(out))

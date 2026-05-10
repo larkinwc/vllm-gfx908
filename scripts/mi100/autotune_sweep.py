@@ -576,7 +576,6 @@ def main() -> int:
             # Check whether this prune reason is a hard invariant
             # (would also eliminate the config for any other
             # shape) vs a shape-specific filter.
-            r_root = r.split("_")[0] + "_" + r.split("_")[1] if "_" in r else r
             is_hard = any(
                 r.startswith(inv) for inv in hard_invariants
             )
