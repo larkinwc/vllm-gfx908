@@ -344,10 +344,7 @@ def _persist_best(
     # Map the CLI-friendly kernel name to the in-tree config-loader key
     # used by the runtime kernel modules. The W8A8 module loads
     # ``mi100_int8`` (not ``mi100_w8a8``) from configs/gfx908/.
-    if kernel == "w8a8":
-        config_key = "mi100_" + "i" + "nt8"
-    else:
-        config_key = "mi100_" + kernel
+    config_key = "mi100_" + "i" + "nt8" if kernel == "w8a8" else "mi100_" + kernel
     if group_size is not None:
         fname = f"{config_key}_M{M}_N{N}_K{K}_g{group_size}.json"
     else:
