@@ -26,6 +26,7 @@ from .mi100_hipblaslt import (
     mi100_hipblaslt_scaled_mm,
     mi100_hipblaslt_supports,
 )
+from .mi100_int8_dispatch import choose_backend
 from .ScaledMMLinearKernel import (
     Int8ScaledMMLinearKernel,
     Int8ScaledMMLinearLayerConfig,
@@ -64,9 +65,75 @@ def _maybe_log_gemm_shape(M: int, N: int, K: int) -> None:
             _gemm_shape_log_handle.write("M,N,K,dtype,layout,pid\n")
     # Logging must never break the forward path.
     with contextlib.suppress(Exception):
-        _gemm_shape_log_handle.write(
-            f"{M},{N},{K},int8,row_col,{os.getpid()}\n"
-        )
+        _gemm_shape_log_handle.write(f"{M},{N},{K},int8,row_col,{os.getpid()}\n")
+
+
+def _get_tp_rank() -> int:
+    """Return the tensor-parallel rank for backend dispatch.
+
+    Prefers ``torch.distributed.get_rank()`` when a process group is
+    initialized; otherwise falls back to the ``RANK`` env var; finally
+    defaults to 0 for single-process runs. Used only as a key into the
+    CK instance registry, so a wrong value just means "no CK" rather
+    than a correctness issue.
+    """
+    try:
+        import torch.distributed as dist
+
+        if dist.is_available() and dist.is_initialized():
+            return int(dist.get_rank())
+    except Exception:
+        pass
+    try:
+        return int(os.environ.get("RANK", "0"))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _ck_int8_dispatch(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    scale_a: torch.Tensor,
+    scale_b: torch.Tensor,
+    out_dtype: type[torch.dtype],
+    bias: torch.Tensor | None,
+) -> torch.Tensor:
+    """Route a W8A8 INT8 GEMM through ``torch.ops._rocm_C.ck_int8_gemm``.
+
+    ``mi100_int8_scaled_mm`` carries ``weight`` as ``[K, N]`` row-major
+    int8 (transposed in ``process_weights_after_loading``), while the
+    CK op expects ``b`` as ``[N, K]`` int8 contiguous. Per-token and
+    per-channel scales are flattened to 1-D fp32, expanding scalar
+    (per-tensor) scales out to the row/column count so the CK
+    ``apply_scales_kernel`` epilogue (which indexes ``scale_a[m]`` /
+    ``scale_b[n]``) sees a vector of the right length.
+    """
+    M, K = input.shape
+    N = weight.shape[1]
+
+    a = input.contiguous() if not input.is_contiguous() else input
+    # weight is [K, N] row-major; CK wants [N, K] row-major contiguous.
+    b_nk = weight.t().contiguous()
+
+    sa = scale_a.to(torch.float32).reshape(-1)
+    sb = scale_b.to(torch.float32).reshape(-1)
+    if sa.numel() == 1 and M > 1:
+        sa = sa.expand(M).contiguous()
+    if sb.numel() == 1 and N > 1:
+        sb = sb.expand(N).contiguous()
+
+    ck_bias: torch.Tensor | None = None
+    if bias is not None:
+        # apply_scales_kernel expects __half bias [N]. Cast/flatten here
+        # so the call site does not need to know the kernel ABI.
+        ck_bias = bias.reshape(-1).to(torch.float16)
+
+    tp_rank = _get_tp_rank()
+    out = torch.ops._rocm_C.ck_int8_gemm(a, b_nk, sa, sb, ck_bias, tp_rank)
+    # CK always returns fp16; cast if caller asked for a different dtype.
+    if out.dtype != out_dtype:
+        out = out.to(out_dtype)
+    return out
 
 
 def is_weak_contiguous(x: torch.Tensor):
@@ -215,6 +282,23 @@ def mi100_int8_scaled_mm(
 
     _maybe_log_gemm_shape(M, N, K)
 
+    # M4 dispatch: choose_backend() picks CK > hipBLASLt > Triton. CK is
+    # selected only when an instance is registered for the (M, N, K,
+    # tp_rank) tuple; the runtime ``ck_int8_gemm_supports`` re-check is
+    # defence-in-depth against the registry shifting between dispatch and
+    # invocation. ``VLLM_DISABLE_CK=1`` short-circuits this branch and
+    # falls through to the legacy hipBLASLt/Triton path.
+    tp_rank = _get_tp_rank()
+    backend = choose_backend(M, N, K, tp_rank)
+    if backend == "ck":
+        ck_supports = getattr(
+            getattr(torch.ops, "_rocm_C", None),
+            "ck_int8_gemm_supports",
+            None,
+        )
+        if ck_supports is not None and bool(ck_supports(M, N, K, tp_rank)):
+            return _ck_int8_dispatch(input, weight, scale_a, scale_b, out_dtype, bias)
+
     # M2 dispatch: prefer hipBLASLt for tuned shapes; otherwise fall through
     # to the existing Triton kernel below. VLLM_DISABLE_HIPBLASLT=1 forces
     # 100% Triton dispatch (validated by VAL-TENSILE-008).
@@ -257,9 +341,7 @@ def mi100_int8_scaled_mm(
         if "num_stages" in cfg:
             extra_launch["num_stages"] = int(cfg["num_stages"])
         if "matrix_instr_nonkdim" in cfg:
-            extra_launch["matrix_instr_nonkdim"] = int(
-                cfg["matrix_instr_nonkdim"]
-            )
+            extra_launch["matrix_instr_nonkdim"] = int(cfg["matrix_instr_nonkdim"])
         if "kpack" in cfg:
             extra_launch["kpack"] = int(cfg["kpack"])
         if "waves_per_eu" in cfg:
@@ -284,9 +366,7 @@ def mi100_int8_scaled_mm(
         # L2 cache swizzle: group M-tiles for better reuse
         # MI100 has 8MB L2, grouping helps with weight reuse
         num_pid_n_h = triton.cdiv(N, block_size_n)
-        group_size_m = (
-            max(1, min(8, 120 // num_pid_n_h)) if num_pid_n_h > 0 else 1
-        )
+        group_size_m = max(1, min(8, 120 // num_pid_n_h)) if num_pid_n_h > 0 else 1
 
     block_size_sa = 1 if has_scalar(scale_a) else block_size_m
     block_size_sb = 1 if has_scalar(scale_b) else block_size_n
