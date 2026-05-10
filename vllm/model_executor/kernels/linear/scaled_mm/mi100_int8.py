@@ -12,6 +12,9 @@ import os
 import torch
 
 from vllm import _custom_ops as ops
+from vllm.model_executor.kernels.configs.gfx908.config_loader import (
+    load_config as _load_mi100_autotune_config,
+)
 from vllm.model_executor.layers.quantization.utils import replace_parameter
 from vllm.model_executor.layers.quantization.utils.w8a8_utils import (
     convert_to_channelwise,
@@ -155,7 +158,12 @@ def mi100_int8_scaled_mm_kernel(
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
 
-    # Dequantize: convert INT32 accumulator to FP32, apply scales
+    # === Fused dequant + bias + cast epilogue ============================
+    # 1. Convert INT32 accumulator -> FP32.
+    # 2. Apply per-token activation scale (scale_a, [M] when not scalar).
+    # 3. Apply per-channel weight scale (scale_b, [N] when not scalar).
+    # 4. Optionally add bias (FP32 add for fidelity).
+    # 5. Cast to output dtype and store. No separate dequant launch.
     masks_scale_a = masks_scale_am[:, None] & (tl.arange(0, 1) < 1)[:, None]
     scale_a = tl.load(scale_a_ptrs[:, None], masks_scale_a)
     scale_a = scale_a.broadcast_to((BLOCK_SIZE_M, 1))
@@ -166,14 +174,14 @@ def mi100_int8_scaled_mm_kernel(
     scale_b = scale_b.broadcast_to((BLOCK_SIZE_N, 1))
     result = scale_b.T * result
 
-    c = result.to(c_ptr.type.element_ty)
-
     if bias_ptr:
         offsets_bias = offsets_bn
         bias_ptrs = bias_ptr + offsets_bias
         bias_mask = offsets_bias < N
-        bias = tl.load(bias_ptrs, bias_mask)
-        c += bias
+        bias_vec = tl.load(bias_ptrs, bias_mask).to(tl.float32)
+        result = result + bias_vec[None, :]
+
+    c = result.to(c_ptr.type.element_ty)
 
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)
@@ -231,33 +239,57 @@ def mi100_int8_scaled_mm(
     has_scalar = lambda x: x.shape[0] == 1 and x.shape[1] == 1
 
     # MI100-tuned tile sizes for gfx908 (120 CUs, wavefront-64, 64KB LDS)
-    # INT8 elements are 1 byte each, so we can fit larger tiles in LDS:
-    # A tile: BLOCK_M * BLOCK_K * 1B, B tile: BLOCK_K * BLOCK_N * 1B
-    # With 64x64x128: A=8KB + B=8KB = 16KB << 64KB LDS
-    # With 128x128x64: A=8KB + B=8KB = 16KB, good CU occupancy
-    is_small_N = N < 8192
-    next_power_of_2_M = max(32, triton.next_power_of_2(M))
+    # INT8 elements are 1 byte each, so we can fit larger tiles in LDS.
+    # M3: prefer per-shape autotune-selected configs from
+    # vllm/model_executor/kernels/configs/gfx908/mi100_int8_M*_N*_K*.json
+    # falling back to the static heuristic below for shapes that have not
+    # been autotuned yet.
+    cfg = _load_mi100_autotune_config("mi100_int8", M=M, N=N, K=K)
+    extra_launch: dict = {}
 
-    if next_power_of_2_M <= 32:
-        # Decode-like: small M, use wider K tiles for bandwidth
-        tile_shape = (32, 64, 128) if is_small_N else (32, 128, 128)
-    elif next_power_of_2_M <= 64:
-        tile_shape = (64, 64, 128) if is_small_N else (64, 128, 128)
-    elif next_power_of_2_M <= 128:
-        tile_shape = (64, 128, 64)
+    if cfg is not None:
+        block_size_m = int(cfg["BLOCK_M"])
+        block_size_n = int(cfg["BLOCK_N"])
+        block_size_k = int(cfg["BLOCK_K"])
+        group_size_m = int(cfg.get("GROUP_SIZE_M", 8))
+        if "num_warps" in cfg:
+            extra_launch["num_warps"] = int(cfg["num_warps"])
+        if "num_stages" in cfg:
+            extra_launch["num_stages"] = int(cfg["num_stages"])
+        if "matrix_instr_nonkdim" in cfg:
+            extra_launch["matrix_instr_nonkdim"] = int(
+                cfg["matrix_instr_nonkdim"]
+            )
+        if "kpack" in cfg:
+            extra_launch["kpack"] = int(cfg["kpack"])
+        if "waves_per_eu" in cfg:
+            extra_launch["waves_per_eu"] = int(cfg["waves_per_eu"])
     else:
-        # Prefill-like: large M, balance M/N tiles
-        tile_shape = (128, 128, 64)
+        is_small_N = N < 8192
+        next_power_of_2_M = max(32, triton.next_power_of_2(M))
 
-    block_size_m, block_size_n, block_size_k = tile_shape
+        if next_power_of_2_M <= 32:
+            # Decode-like: small M, use wider K tiles for bandwidth
+            tile_shape = (32, 64, 128) if is_small_N else (32, 128, 128)
+        elif next_power_of_2_M <= 64:
+            tile_shape = (64, 64, 128) if is_small_N else (64, 128, 128)
+        elif next_power_of_2_M <= 128:
+            tile_shape = (64, 128, 64)
+        else:
+            # Prefill-like: large M, balance M/N tiles
+            tile_shape = (128, 128, 64)
+
+        block_size_m, block_size_n, block_size_k = tile_shape
+
+        # L2 cache swizzle: group M-tiles for better reuse
+        # MI100 has 8MB L2, grouping helps with weight reuse
+        num_pid_n_h = triton.cdiv(N, block_size_n)
+        group_size_m = (
+            max(1, min(8, 120 // num_pid_n_h)) if num_pid_n_h > 0 else 1
+        )
 
     block_size_sa = 1 if has_scalar(scale_a) else block_size_m
     block_size_sb = 1 if has_scalar(scale_b) else block_size_n
-
-    # L2 cache swizzle: group M-tiles for better reuse
-    # MI100 has 8MB L2, grouping helps with weight reuse
-    num_pid_n = triton.cdiv(N, block_size_n)
-    group_size_m = max(1, min(8, 120 // num_pid_n)) if num_pid_n > 0 else 1
 
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
@@ -285,6 +317,7 @@ def mi100_int8_scaled_mm(
         BLOCK_SIZE_SCALE_A=block_size_sa,
         BLOCK_SIZE_SCALE_B=block_size_sb,
         GROUP_SIZE_M=group_size_m,
+        **extra_launch,
     )
 
     return result

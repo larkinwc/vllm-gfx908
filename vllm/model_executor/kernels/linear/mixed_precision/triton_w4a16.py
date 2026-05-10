@@ -19,6 +19,8 @@ Checkpoint layout from compressed_tensors_wNa16 create_weights:
   weight_zero_point: [N//8, K//G]  int32 (output_dim=0, packed_dim=0)
 """
 
+import os
+
 import torch
 
 from vllm.model_executor.layers.quantization.utils import replace_parameter
@@ -34,6 +36,17 @@ TRITON_W4A16_SUPPORTED_QUANT_TYPES = [
     scalar_types.uint4b8,  # symmetric GPTQ (bias=8)
     scalar_types.uint4,  # asymmetric with explicit zeros
 ]
+
+
+def _mi100_w4a16_disabled() -> bool:
+    """``VLLM_DISABLE_MI100_W4A16=1`` forces the generic Triton path.
+
+    Used by the M3 dispatcher to A/B between the new mi100_w4a16 kernel
+    and the in-tree generic ``triton_w4a16_gemm_kernel`` for benchmark
+    isolation and as an escape hatch when correctness regressions need
+    to be triaged.
+    """
+    return os.environ.get("VLLM_DISABLE_MI100_W4A16", "0") == "1"
 
 
 @triton.jit
@@ -201,6 +214,22 @@ def triton_w4a16_gemm(
         assert qzeros.shape == (K // group_size, N // 8), (
             f"qzeros shape mismatch: {qzeros.shape}"
         )
+
+    # M3 (MI100/gfx908): when this is the supported group-size path,
+    # forward to the dedicated mi100_w4a16 kernel which is autotuned with
+    # per-shape configs in vllm/model_executor/kernels/configs/gfx908/.
+    # The dispatch is intentionally narrow: any unsupported group-size or
+    # disabled-via-env case falls back to the generic Triton path below.
+    if current_platform.is_rocm() and not _mi100_w4a16_disabled():
+        from vllm.platforms.rocm import on_mi100
+        if on_mi100() and group_size in (32, 128):
+            from vllm.model_executor.kernels.linear.scaled_mm.mi100_w4a16 import (
+                mi100_w4a16_gemm as _mi100_w4a16_gemm,
+            )
+            return _mi100_w4a16_gemm(
+                a=a, b_q=b_q, scales=scales,
+                qzeros=qzeros, group_size=group_size, zp_bias=zp_bias,
+            )
 
     c = torch.empty((M, N), dtype=a.dtype, device=a.device)
 
