@@ -30,7 +30,17 @@ set -uo pipefail
 QUANT=${1:-w8a8}
 TP=${2:-1}
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+# Resolve repo root from this script's location (scripts/mi100/cudagraph_smoke.sh)
+# so the script works in any worktree (no hard-coded absolute path).
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(cd "$SCRIPT_DIR/../.." && pwd)
+# Sanity: prefer git's view if available.
+if command -v git >/dev/null 2>&1; then
+  GIT_TOPLEVEL=$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null || true)
+  if [[ -n "$GIT_TOPLEVEL" ]]; then
+    REPO=$GIT_TOPLEVEL
+  fi
+fi
 OUT_DIR=/root/bench-int8-w4a16/triton
 mkdir -p "$OUT_DIR"
 LOG=$OUT_DIR/cudagraph_${QUANT}_tp${TP}.log

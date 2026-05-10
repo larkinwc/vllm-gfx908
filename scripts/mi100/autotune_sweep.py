@@ -56,10 +56,9 @@ from pathlib import Path
 
 import torch
 
-REPO = Path(
-    "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/"
-    "emdash/fuzzy-hornets-see-szfl4"
-)
+# Resolve repo root from this file's location (scripts/mi100/autotune_sweep.py)
+# so the script works in any worktree (no hard-coded absolute path).
+REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
 # Defaults
@@ -339,6 +338,9 @@ def _persist_best(
     kernel: str, M: int, N: int, K: int, group_size: int | None,
     best_cfg: SweepConfig, best_ms: float, evaluated: int, pruned: int,
     out_dir: Path,
+    cartesian_total: int = 0,
+    legal_subset: int = 0,
+    eliminated_by_hard_invariant: int = 0,
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     # Map the CLI-friendly kernel name to the in-tree config-loader key
@@ -374,6 +376,12 @@ def _persist_best(
         "measured_tok_s": measured_tok_s,
         "autotune_runs_evaluated": evaluated,
         "autotune_runs_pruned": pruned,
+        "autotune_cartesian_total": cartesian_total,
+        "autotune_legal_subset": legal_subset,
+        "autotune_legal_coverage_pct": (
+            (evaluated / legal_subset * 100.0) if legal_subset else 0.0
+        ),
+        "autotune_hard_invariant_eliminated": eliminated_by_hard_invariant,
         "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
         "vllm_commit": _git_sha(),
         "rocm_version": os.environ.get("ROCM_VERSION", "7.12"),
@@ -537,19 +545,76 @@ def main() -> int:
 
         cart_total = len(full_cart)
         evaluated_pct = (evaluated / cart_total) * 100.0
+
+        # Compute the "legal subset": configs that survive the hard
+        # invariants imposed by the kernel (e.g. BLOCK_K <= group_size
+        # for W4A16). Configs eliminated by these invariants are NOT
+        # candidates for evaluation under any setting and so should be
+        # excluded from the coverage denominator (VAL-TRITON-003 amend).
+        # A config that fails only because of shape-specific reasons
+        # like ``block_n_gt_N`` is still counted as "legal" because a
+        # different shape could legitimately use it.
+        if args.kernel == "w8a8":
+            hard_invariants = {
+                "lds_overflow", "nonkdim32_needs_>=32_tiles",
+            }
+        else:
+            hard_invariants = {
+                "block_k_gt_group", "block_n_not_multiple_of_8",
+                "lds_overflow", "nonkdim32_needs_>=32_tiles",
+            }
+        legal_subset = 0
+        eliminated_by_hard_invariant = 0
+        for cfg2 in full_cart:
+            if args.kernel == "w8a8":
+                r = _prune_w8a8(cfg2, M, N, K)
+            else:
+                r = _prune_w4a16(cfg2, M, N, K, group_size or 128)
+            if r is None:
+                legal_subset += 1
+                continue
+            # Check whether this prune reason is a hard invariant
+            # (would also eliminate the config for any other
+            # shape) vs a shape-specific filter.
+            r_root = r.split("_")[0] + "_" + r.split("_")[1] if "_" in r else r
+            is_hard = any(
+                r.startswith(inv) for inv in hard_invariants
+            )
+            if is_hard:
+                eliminated_by_hard_invariant += 1
+            else:
+                legal_subset += 1
+        legal_pct = (
+            (evaluated / legal_subset) * 100.0 if legal_subset else 0.0
+        )
         logger.info(
-            "best %s: %s @ %.4f ms (evaluated %d/%d = %.1f%%, pruned %d)",
+            "best %s: %s @ %.4f ms",
             prefix, best_cfg.as_launch_kwargs(), best_ms,
-            evaluated, cart_total, evaluated_pct, pruned,
+        )
+        logger.info(
+            "  cartesian-coverage: evaluated %d/%d = %.1f%%",
+            evaluated, cart_total, evaluated_pct,
+        )
+        logger.info(
+            "  legal-coverage:     evaluated %d/%d = %.1f%% "
+            "(eliminated by hard invariants: %d)",
+            evaluated, legal_subset, legal_pct,
+            eliminated_by_hard_invariant,
         )
         log_fh.write(
             f"BEST {best_cfg.as_launch_kwargs()} ms={best_ms:.4f} "
-            f"evaluated={evaluated}/{cart_total} pruned={pruned}\n"
+            f"evaluated={evaluated} cartesian={cart_total} "
+            f"legal_subset={legal_subset} legal_coverage_pct={legal_pct:.1f} "
+            f"pruned={pruned} hard_invariant_eliminated="
+            f"{eliminated_by_hard_invariant}\n"
         )
 
         out_path = _persist_best(
             args.kernel, M, N, K, group_size,
             best_cfg, best_ms, evaluated, pruned, out_dir,
+            cartesian_total=cart_total,
+            legal_subset=legal_subset,
+            eliminated_by_hard_invariant=eliminated_by_hard_invariant,
         )
         summary_rows.append(
             {
@@ -558,19 +623,74 @@ def main() -> int:
                 "best_cfg": asdict(best_cfg),
                 "evaluated": evaluated,
                 "pruned": pruned,
+                "cartesian_total": cart_total,
                 "evaluated_pct_of_cart": evaluated_pct,
+                "legal_subset": legal_subset,
+                "legal_coverage_pct": legal_pct,
+                "hard_invariant_eliminated": eliminated_by_hard_invariant,
                 "out_path": str(out_path),
             }
         )
+
+    # Aggregate end-of-sweep coverage summary so VAL-TRITON-003 amend
+    # is verifiable without re-deriving numbers from per-shape JSONs.
+    cart_total_global = len(_enumerate_configs())
+    if summary_rows:
+        legal_avg = sum(r["legal_subset"] for r in summary_rows) / len(
+            summary_rows
+        )
+        cov_avg = sum(r["legal_coverage_pct"] for r in summary_rows) / len(
+            summary_rows
+        )
+    else:
+        legal_avg = 0.0
+        cov_avg = 0.0
+    coverage_summary = {
+        "cartesian_total": cart_total_global,
+        "shapes_processed": len(summary_rows),
+        "average_legal_subset": legal_avg,
+        "average_legal_coverage_pct": cov_avg,
+        "per_shape": [
+            {
+                "shape": r["shape"],
+                "evaluated": r["evaluated"],
+                "cartesian_total": r["cartesian_total"],
+                "legal_subset": r["legal_subset"],
+                "legal_coverage_pct": r["legal_coverage_pct"],
+                "hard_invariant_eliminated": r["hard_invariant_eliminated"],
+            }
+            for r in summary_rows
+        ],
+    }
 
     summary_path = log_dir / f"sweep_{args.kernel}_summary.json"
     summary_path.write_text(json.dumps({
         "kernel": args.kernel,
         "shapes": summary_rows,
-        "cartesian_total": len(_enumerate_configs()),
+        "cartesian_total": cart_total_global,
+        "coverage_summary": coverage_summary,
         "trials_per_config": args.trials_per_config,
         "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
     }, indent=2))
+
+    logger.info("=" * 70)
+    logger.info("Sweep coverage summary (kernel=%s):", args.kernel)
+    logger.info("  cartesian total          = %d configs", cart_total_global)
+    for r in summary_rows:
+        shape_str = "x".join(str(x) for x in r["shape"] if x is not None)
+        logger.info(
+            "  shape %-26s legal subset = %d configs; "
+            "evaluated = %d; legal-coverage = %d/%d = %.1f%%",
+            shape_str,
+            r["legal_subset"],
+            r["evaluated"],
+            r["evaluated"], r["legal_subset"], r["legal_coverage_pct"],
+        )
+    logger.info(
+        "  average legal-coverage   = %.1f%% across %d shapes",
+        cov_avg, len(summary_rows),
+    )
+    logger.info("=" * 70)
     logger.info("summary written to %s", summary_path)
 
     log_fh.close()

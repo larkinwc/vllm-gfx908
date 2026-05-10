@@ -25,7 +25,14 @@
 # =============================================================================
 set -uo pipefail
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO=$(cd "$SCRIPT_DIR/../.." && pwd)
+if command -v git >/dev/null 2>&1; then
+  GIT_TOPLEVEL=$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null || true)
+  if [[ -n "$GIT_TOPLEVEL" ]]; then
+    REPO=$GIT_TOPLEVEL
+  fi
+fi
 M1_HARNESS=/root/bench-int8-w4a16/baseline/run_baseline.sh
 M2_ROOT=/root/bench-int8-w4a16/m2
 M1_REBASELINE_ROOT=/root/bench-int8-w4a16/m1-rebaseline
@@ -39,6 +46,10 @@ case "$milestone" in
   m2) ROOT=$M2_ROOT ;;
   m1) ROOT=/root/bench-int8-w4a16/baseline ;;
   m1-rebaseline) ROOT=$M1_REBASELINE_ROOT ;;
+  m3-w8a8-autotune) ROOT=/root/bench-int8-w4a16/m3/w8a8/autotune ;;
+  m3-w8a8-heuristic) ROOT=/root/bench-int8-w4a16/m3/w8a8/heuristic ;;
+  m3-w4a16-mi100) ROOT=/root/bench-int8-w4a16/m3/w4a16/mi100 ;;
+  m3-w4a16-generic) ROOT=/root/bench-int8-w4a16/m3/w4a16/generic ;;
   *) echo "unknown milestone $milestone" >&2; exit 2 ;;
 esac
 
@@ -85,6 +96,46 @@ elif [[ "$milestone" == "m1-rebaseline" ]]; then
   echo "[run_grid] m1-rebaseline env exported:"
   echo "  LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
   echo "  HIPBLASLT_TENSILE_LIBPATH=(unset)"
+elif [[ "$milestone" == "m3-w8a8-autotune" || "$milestone" == "m3-w8a8-heuristic" ]]; then
+  # M3 W8A8 cells: keep the M2-build libhipblaslt + merged library
+  # in flight so the dispatcher's "hipBLASLt > Triton" priority is
+  # exercised exactly as it ships. The M3 mi100_int8 Triton kernel
+  # picks up its persisted autotune configs from configs/gfx908/.
+  if [[ ! -d "$MERGED_LIB_DIR" ]]; then
+    echo "FATAL: merged library missing at $MERGED_LIB_DIR" >&2
+    exit 2
+  fi
+  export LD_LIBRARY_PATH="$BUILD_LIB_DIR:/opt/rocm/core-7.12/lib"
+  export HIPBLASLT_TENSILE_LIBPATH="$MERGED_LIB_DIR"
+  if [[ "$milestone" == "m3-w8a8-heuristic" ]]; then
+    export VLLM_MI100_DISABLE_AUTOTUNE_CONFIG=1
+    echo "[run_grid] M3 heuristic env: VLLM_MI100_DISABLE_AUTOTUNE_CONFIG=1"
+  else
+    unset VLLM_MI100_DISABLE_AUTOTUNE_CONFIG || true
+  fi
+  export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
+  echo "[run_grid] M3 W8A8 env:"
+  echo "  LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+  echo "  HIPBLASLT_TENSILE_LIBPATH=$HIPBLASLT_TENSILE_LIBPATH"
+  echo "  VLLM_MI100_DISABLE_AUTOTUNE_CONFIG=${VLLM_MI100_DISABLE_AUTOTUNE_CONFIG:-(unset)}"
+  echo "  PYTHONPATH=$PYTHONPATH"
+elif [[ "$milestone" == "m3-w4a16-mi100" || "$milestone" == "m3-w4a16-generic" ]]; then
+  # M3 W4A16 cells: same libhipblaslt as M2 (irrelevant for w4a16
+  # path but keeps env consistent). Toggle the mi100_w4a16 kernel
+  # via VLLM_DISABLE_MI100_W4A16.
+  export LD_LIBRARY_PATH="$BUILD_LIB_DIR:/opt/rocm/core-7.12/lib"
+  unset HIPBLASLT_TENSILE_LIBPATH
+  if [[ "$milestone" == "m3-w4a16-generic" ]]; then
+    export VLLM_DISABLE_MI100_W4A16=1
+    echo "[run_grid] M3 W4A16 generic env: VLLM_DISABLE_MI100_W4A16=1"
+  else
+    unset VLLM_DISABLE_MI100_W4A16 || true
+  fi
+  export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
+  echo "[run_grid] M3 W4A16 env:"
+  echo "  LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+  echo "  VLLM_DISABLE_MI100_W4A16=${VLLM_DISABLE_MI100_W4A16:-(unset)}"
+  echo "  PYTHONPATH=$PYTHONPATH"
 fi
 
 # Filter the cells.

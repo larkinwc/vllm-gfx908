@@ -25,5 +25,9 @@
   "timestamp": "2026-05-10T06:47:11.642300+00:00",
   "vllm_commit": "73f7e629a5a7225e3cb19a4df12c4afb371c32b8",
   "rocm_version": "7.12",
-  "kernel_source_sha256": "f2150852e843825010ff850d1cbe4cc528c3c3704843d9a69e9776a12e1c8987"
+  "kernel_source_sha256": "f2150852e843825010ff850d1cbe4cc528c3c3704843d9a69e9776a12e1c8987",
+  "autotune_cartesian_total": 768,
+  "autotune_legal_subset": 616,
+  "autotune_legal_coverage_pct": 100.0,
+  "autotune_hard_invariant_eliminated": 152
 }
