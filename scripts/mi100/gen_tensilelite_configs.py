@@ -37,7 +37,8 @@ TUNING_YAML_TMPL = dedent("""\
 #
 # Shape: M={M}, N={N}, K={K} (batch=1)
 # Problem type: Cijk_Ailk_Bljk_I8 (row-major × col-major INT8 × INT32 acc)
-#               TransposeA=False, TransposeB=True (Bljk = transposed)
+#               TransposeA=False, TransposeB=False (matches prebuilt
+#               I8I8_II8_Ailk_Bljk operationIdentifier).
 ################################################################################
 
 GlobalParameters:
@@ -60,17 +61,19 @@ GlobalParameters:
   HardwareMonitor: False
 
 BenchmarkProblems:
-  - # Cijk_Ailk_Bljk_I8 with INT32 acc / I8 dest (matches the prebuilt
-    # hipBLASLt I8I8_II8 contraction at /opt/rocm and our build/release/
-    # hipblaslt-install/lib/hipblaslt/library/TensileLibrary_I8I8_II8_*).
+  - # Cijk_Ailk_Bljk_I8 with INT32 acc / INT32 dest (matches the prebuilt
+    # hipBLASLt I8I8_II8 contraction at
+    # /root/hipblaslt-src/build/release/hipblaslt-install/lib/hipblaslt/library/
+    # which is what torch._int_mm dispatches to on ROCm
+    # (cType=Int32, dType=Int32, transA=False, transB=False at runtime).
     -
       OperationType: GEMM
       DataType: I8
-      DestDataType: I8
+      DestDataType: I
       ComputeDataType: I
       HighPrecisionAccumulate: True
       TransposeA: False
-      TransposeB: True
+      TransposeB: False
       UseBeta: True
       Batched: True
     -
