@@ -50,6 +50,8 @@ case "$milestone" in
   m3-w8a8-heuristic) ROOT=/root/bench-int8-w4a16/m3/w8a8/heuristic ;;
   m3-w4a16-mi100) ROOT=/root/bench-int8-w4a16/m3/w4a16/mi100 ;;
   m3-w4a16-generic) ROOT=/root/bench-int8-w4a16/m3/w4a16/generic ;;
+  m4-w8a8-ck) ROOT=/root/bench-int8-w4a16/m4/w8a8/ck ;;
+  m4-w8a8-noCk) ROOT=/root/bench-int8-w4a16/m4/w8a8/noCk ;;
   *) echo "unknown milestone $milestone" >&2; exit 2 ;;
 esac
 
@@ -118,6 +120,33 @@ elif [[ "$milestone" == "m3-w8a8-autotune" || "$milestone" == "m3-w8a8-heuristic
   echo "  LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
   echo "  HIPBLASLT_TENSILE_LIBPATH=$HIPBLASLT_TENSILE_LIBPATH"
   echo "  VLLM_MI100_DISABLE_AUTOTUNE_CONFIG=${VLLM_MI100_DISABLE_AUTOTUNE_CONFIG:-(unset)}"
+  echo "  PYTHONPATH=$PYTHONPATH"
+elif [[ "$milestone" == "m4-w8a8-ck" || "$milestone" == "m4-w8a8-noCk" ]]; then
+  # M4 W8A8 cells: same M2-build libhipblaslt + merged TensileLite
+  # library as M3 so the dispatcher's "CK > hipBLASLt > Triton" priority
+  # is exercised exactly as it ships. The M4 CK INT8 instances are
+  # selected only for the TP=1 hot-prefill shapes (M=16..4096,
+  # N in {24576,4096,10240}, K in {4096,12288}); decode and TP=4
+  # sharded shapes fall through to hipBLASLt -> Triton autotune.
+  # VLLM_DISABLE_CK=1 forces the fall-through (no CK), giving the A/B.
+  if [[ ! -d "$MERGED_LIB_DIR" ]]; then
+    echo "FATAL: merged library missing at $MERGED_LIB_DIR" >&2
+    exit 2
+  fi
+  export LD_LIBRARY_PATH="$BUILD_LIB_DIR:/opt/rocm/core-7.12/lib"
+  export HIPBLASLT_TENSILE_LIBPATH="$MERGED_LIB_DIR"
+  if [[ "$milestone" == "m4-w8a8-noCk" ]]; then
+    export VLLM_DISABLE_CK=1
+    echo "[run_grid] M4 noCk env: VLLM_DISABLE_CK=1 (forces hipBLASLt -> Triton path)"
+  else
+    unset VLLM_DISABLE_CK || true
+  fi
+  unset VLLM_MI100_DISABLE_AUTOTUNE_CONFIG || true
+  export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
+  echo "[run_grid] M4 W8A8 env:"
+  echo "  LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+  echo "  HIPBLASLT_TENSILE_LIBPATH=$HIPBLASLT_TENSILE_LIBPATH"
+  echo "  VLLM_DISABLE_CK=${VLLM_DISABLE_CK:-(unset)}"
   echo "  PYTHONPATH=$PYTHONPATH"
 elif [[ "$milestone" == "m3-w4a16-mi100" || "$milestone" == "m3-w4a16-generic" ]]; then
   # M3 W4A16 cells: same libhipblaslt as M2 (irrelevant for w4a16
