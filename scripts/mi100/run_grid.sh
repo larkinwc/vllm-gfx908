@@ -28,6 +28,7 @@ set -uo pipefail
 REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
 M1_HARNESS=/root/bench-int8-w4a16/baseline/run_baseline.sh
 M2_ROOT=/root/bench-int8-w4a16/m2
+M1_REBASELINE_ROOT=/root/bench-int8-w4a16/m1-rebaseline
 MERGED_LIB_DIR=/root/bench-int8-w4a16/tensilelite/merged_library/library
 BUILD_LIB_DIR=/root/hipblaslt-src/build/release/library
 
@@ -37,6 +38,7 @@ filter=${2:-.*}
 case "$milestone" in
   m2) ROOT=$M2_ROOT ;;
   m1) ROOT=/root/bench-int8-w4a16/baseline ;;
+  m1-rebaseline) ROOT=$M1_REBASELINE_ROOT ;;
   *) echo "unknown milestone $milestone" >&2; exit 2 ;;
 esac
 
@@ -53,6 +55,12 @@ if [[ "$milestone" == "m2" ]]; then
     exit 2
   fi
 fi
+if [[ "$milestone" == "m1-rebaseline" ]]; then
+  if [[ ! -f "$BUILD_LIB_DIR/libhipblaslt.so" ]]; then
+    echo "FATAL: M2 build libhipblaslt.so missing at $BUILD_LIB_DIR" >&2
+    exit 2
+  fi
+fi
 
 # Copy harness to milestone root and patch BASELINE_ROOT to point here.
 M2_HARNESS=$ROOT/run_${milestone}.sh
@@ -66,6 +74,17 @@ if [[ "$milestone" == "m2" ]]; then
   echo "[run_grid] M2 env exported:"
   echo "  LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
   echo "  HIPBLASLT_TENSILE_LIBPATH=$HIPBLASLT_TENSILE_LIBPATH"
+elif [[ "$milestone" == "m1-rebaseline" ]]; then
+  # Same M2-build libhipblaslt.so + LD_LIBRARY_PATH, but DO NOT export
+  # HIPBLASLT_TENSILE_LIBPATH so hipBLASLt loads its own prebuilt
+  # I8I8 default kernel (the one that ships with the M2 build).
+  # This isolates the libhipblaslt build/system-swap delta from the
+  # actual TensileLite tuning gain delivered by the merged library.
+  export LD_LIBRARY_PATH="$BUILD_LIB_DIR:/opt/rocm/core-7.12/lib"
+  unset HIPBLASLT_TENSILE_LIBPATH
+  echo "[run_grid] m1-rebaseline env exported:"
+  echo "  LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
+  echo "  HIPBLASLT_TENSILE_LIBPATH=(unset)"
 fi
 
 # Filter the cells.
