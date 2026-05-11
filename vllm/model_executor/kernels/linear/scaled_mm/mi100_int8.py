@@ -69,25 +69,41 @@ def _maybe_log_gemm_shape(M: int, N: int, K: int) -> None:
 
 
 def _get_tp_rank() -> int:
-    """Return the tensor-parallel rank for backend dispatch.
+    """Return the tensor-parallel-size key for the CK instance registry.
 
-    Prefers ``torch.distributed.get_rank()`` when a process group is
-    initialized; otherwise falls back to the ``RANK`` env var; finally
-    defaults to 0 for single-process runs. Used only as a key into the
-    CK instance registry, so a wrong value just means "no CK" rather
-    than a correctness issue.
+    The CK dispatch table is keyed by *world size* (``tp_rank=1`` for
+    single-process / TP=1, ``tp_rank=4`` for TP=4 column-parallel, etc.)
+    rather than the in-group rank — see
+    ``csrc/quantization/w8a8/int8/ck/ck_int8_gemm.h``: "with TP=1 set 0,
+    with TP=4 set 4 etc. Only used to pick the right registered
+    instance."  Despite the header comment, the M4 instances are
+    registered as ``tp_rank=1`` for TP=1 and ``tp_rank=4`` for the
+    sharded TP=4 entry, so this helper returns ``world_size`` as the
+    consistent registry key. A wrong value just means "no CK" rather
+    than a correctness issue (the hipBLASLt → Triton fall-through
+    handles every shape).
     """
+    try:
+        from vllm.distributed.parallel_state import (
+            get_tensor_model_parallel_world_size,
+        )
+
+        ws = int(get_tensor_model_parallel_world_size())
+        if ws >= 1:
+            return ws
+    except Exception:
+        pass
     try:
         import torch.distributed as dist
 
         if dist.is_available() and dist.is_initialized():
-            return int(dist.get_rank())
+            return int(dist.get_world_size())
     except Exception:
         pass
     try:
-        return int(os.environ.get("RANK", "0"))
+        return int(os.environ.get("WORLD_SIZE", "1"))
     except (TypeError, ValueError):
-        return 0
+        return 1
 
 
 def _ck_int8_dispatch(

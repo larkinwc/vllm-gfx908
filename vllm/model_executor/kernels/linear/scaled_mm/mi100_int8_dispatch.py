@@ -19,6 +19,7 @@ to the matching path.
 When ``VLLM_LOG_GEMM_BACKEND=1`` is set, every dispatch is appended to a
 ring buffer for offline inspection (``get_recent_dispatch_log``).
 """
+
 from __future__ import annotations
 
 import collections
@@ -31,8 +32,8 @@ logger = logging.getLogger(__name__)
 
 Backend = Literal["ck", "hipblaslt", "triton"]
 
-_DISPATCH_LOG: collections.deque[tuple[int, int, int, int, str]] = (
-    collections.deque(maxlen=1024)
+_DISPATCH_LOG: collections.deque[tuple[int, int, int, int, str]] = collections.deque(
+    maxlen=1024
 )
 _DISPATCH_LOG_LOCK = threading.Lock()
 
@@ -62,9 +63,7 @@ def _hipblaslt_supports(M: int, N: int, K: int) -> bool:
         return False
 
 
-def choose_backend(
-    M: int, N: int, K: int, tp_rank: int = 1
-) -> Backend:
+def choose_backend(M: int, N: int, K: int, tp_rank: int = 1) -> Backend:
     """Return the backend that should service this GEMM.
 
     Priority: CK > hipBLASLt > Triton. The ``VLLM_DISABLE_CK`` and
@@ -72,14 +71,10 @@ def choose_backend(
     debugging or reproducibility experiments.
     """
     backend: Backend
-    if (
-        os.environ.get("VLLM_DISABLE_CK", "0") != "1"
-        and _ck_supports(M, N, K, tp_rank)
-    ):
+    if os.environ.get("VLLM_DISABLE_CK", "0") != "1" and _ck_supports(M, N, K, tp_rank):
         backend = "ck"
-    elif (
-        os.environ.get("VLLM_DISABLE_HIPBLASLT", "0") != "1"
-        and _hipblaslt_supports(M, N, K)
+    elif os.environ.get("VLLM_DISABLE_HIPBLASLT", "0") != "1" and _hipblaslt_supports(
+        M, N, K
     ):
         backend = "hipblaslt"
     else:
@@ -88,6 +83,18 @@ def choose_backend(
     if os.environ.get("VLLM_LOG_GEMM_BACKEND") == "1":
         with _DISPATCH_LOG_LOCK:
             _DISPATCH_LOG.append((M, N, K, tp_rank, backend))
+        # Emit one stderr/log line per dispatch so server logs are
+        # grep-able for integration verification (e.g.
+        # ``grep 'choose_backend: ck' server.log``). The ring buffer
+        # remains for in-process introspection.
+        logger.info(
+            "choose_backend: %s (M=%d,N=%d,K=%d,tp_rank=%d)",
+            backend,
+            M,
+            N,
+            K,
+            tp_rank,
+        )
     return backend
 
 

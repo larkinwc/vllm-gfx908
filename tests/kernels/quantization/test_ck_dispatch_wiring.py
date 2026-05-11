@@ -83,9 +83,11 @@ def fake_ck_ops(monkeypatch):
         return torch.zeros((M, N), dtype=torch.float16, device=a.device)
 
     def fake_ck_supports(M, N, K, tp_rank):
+        # tp_rank=1 matches the world-size convention used to register
+        # the M4 CK instances (see ``_get_tp_rank`` in mi100_int8.py).
         return (int(M), int(N), int(K)) == (M_target, N_target, K_target) and int(
             tp_rank
-        ) == 0
+        ) == 1
 
     fake_namespace = SimpleNamespace(
         ck_int8_gemm=fake_ck_int8_gemm,
@@ -100,6 +102,9 @@ def fake_ck_ops(monkeypatch):
     # tp_rank lookup deterministically returns 0.
     monkeypatch.delenv("VLLM_DISABLE_CK", raising=False)
     monkeypatch.delenv("RANK", raising=False)
+    # Force ``_get_tp_rank`` to deterministically return 1 (single-process
+    # convention used by the CK instance registry).
+    monkeypatch.setenv("WORLD_SIZE", "1")
     yield counter
 
 
@@ -124,7 +129,7 @@ def test_mi100_int8_scaled_mm_invokes_ck_for_registered_shape(fake_ck_ops):
         f"CK was called with wrong (M, N, K): "
         f"got ({seen_M}, {seen_N}, {seen_K}), expected {CK_SHAPE}"
     )
-    assert seen_tp == 0
+    assert seen_tp == 1
     assert out.shape == (M, N)
     assert out.dtype == torch.float16
 
