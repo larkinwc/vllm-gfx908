@@ -28,8 +28,9 @@ namespace vllm::ck_int8 {
 //   bias:     optional [N] fp16
 // Returns:    [M, N] fp16
 //
-// `tp_rank` is metadata captured for dispatch-table lookup; with TP=1 set 0,
-// with TP=4 set 4 etc. Only used to pick the right registered instance.
+// `tp_rank`: world size of tensor-parallel group (with TP=1 set 1; with TP=4
+// set 4) — matches CK instance registration key in dispatcher. Used to pick
+// the right registered instance.
 torch::Tensor ck_int8_gemm(const torch::Tensor& a, const torch::Tensor& b,
                            const torch::Tensor& scale_a,
                            const torch::Tensor& scale_b,
