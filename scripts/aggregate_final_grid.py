@@ -20,7 +20,7 @@ W4A16 does NOT have a TensileLite column (M2 was W8A8-only) nor a CK column
 (M4 CK W4A16 declined as documented negative result in BENCH_M4_CK.md).
 Missing cells are emitted with `null` and an explicit reason captured in
 ``final_grid_reasons.json``.
-"""
+"""  # noqa: E501
 from __future__ import annotations
 
 import csv
@@ -60,7 +60,7 @@ COLUMNS = [
         None,
         "isa",
         (),
-        "M5 hand-ISA declined as negative result (memory-bound hot kernels); see BENCH_M5_ISA.md.",
+        "M5 hand-ISA declined as negative result (memory-bound hot kernels); see BENCH_M5_ISA.md.",  # noqa: E501
     ),
 ]
 
@@ -82,7 +82,7 @@ METRICS = [
 ]
 
 
-def resolve_path(root: Path, label: str, model: str, tp: int, c: int, wl: str) -> Path | None:
+def resolve_path(root: Path, label: str, model: str, tp: int, c: int, wl: str) -> Path | None:  # noqa: E501
     """Resolve milestone cell JSON path. Returns None if column N/A."""
     if root is None:
         return None
@@ -112,7 +112,7 @@ def load(p: Path | None) -> dict | None:
         return None
 
 
-def pick_winner(values: dict[str, float | None], higher_better: bool) -> tuple[str, float] | None:
+def pick_winner(values: dict[str, float | None], higher_better: bool) -> tuple[str, float] | None:  # noqa: E501
     """Pick the column with the best value. Skips None/NaN entries.
 
     Tie-break: prefer the earlier column in COLUMNS list (i.e. simpler path
@@ -124,7 +124,7 @@ def pick_winner(values: dict[str, float | None], higher_better: bool) -> tuple[s
         v = values.get(label)
         if v is None:
             continue
-        if best is None or (higher_better and v > best[1]) or (not higher_better and v < best[1]):
+        if best is None or (higher_better and v > best[1]) or (not higher_better and v < best[1]):  # noqa: E501
             best = (label, v)
     return best
 
@@ -142,7 +142,7 @@ def main() -> int:
             if model not in applies:
                 cell_values[label] = None
                 continue
-            cell_values[label] = load(resolve_path(path_prefix, label, model, tp, c, wl))
+            cell_values[label] = load(resolve_path(path_prefix, label, model, tp, c, wl))  # noqa: E501
 
         for key, label_metric, higher_better in METRICS:
             values: dict[str, float | None] = {}

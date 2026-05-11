@@ -29,13 +29,13 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-REPO = Path("/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4")
+REPO = Path("/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4")  # noqa: E501
 DEFAULT_PROMPTS = REPO / "tests" / "eval" / "coding_prompts.json"
 DEFAULT_OUT_DIR = Path("/root/bench-int8-w4a16/final")
 SERVER = "http://127.0.0.1:8000"
 
 
-def chat(prompt: str, model: str, max_tokens: int = 2048, timeout: float = 600.0) -> str:
+def chat(prompt: str, model: str, max_tokens: int = 2048, timeout: float = 600.0) -> str:  # noqa: E501
     body = json.dumps({
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -106,7 +106,7 @@ def grade(prompt: dict, response: str) -> dict:
         if lang == "python":
             fpath = Path(td) / "snippet.py"
             fpath.write_text(code)
-            r = subprocess.run(["/usr/bin/env", "python3", "-m", "py_compile", str(fpath)], capture_output=True, text=True)
+            r = subprocess.run(["/usr/bin/env", "python3", "-m", "py_compile", str(fpath)], capture_output=True, text=True)  # noqa: E501
             if r.returncode != 0:
                 out["error"] = f"py_compile: {r.stderr.strip()[:240]}"
                 return out
@@ -135,15 +135,15 @@ def grade(prompt: dict, response: str) -> dict:
                 "    try:",
                 "        actual = " + fn_name + "(*args)",
                 "    except Exception as e:",
-                "        results.append({'ok': False, 'err': str(e), 'expected': expected})",
+                "        results.append({'ok': False, 'err': str(e), 'expected': expected})",  # noqa: E501
                 "        continue",
-                "    results.append({'ok': coerce(actual) == coerce(expected), 'expected': expected, 'actual': coerce(actual)})",
+                "    results.append({'ok': coerce(actual) == coerce(expected), 'expected': expected, 'actual': coerce(actual)})",  # noqa: E501
                 "print(json.dumps(results))",
             ]
             harness = "\n".join(harness_lines)
             hpath = Path(td) / "harness.py"
             hpath.write_text(harness)
-            r = subprocess.run(["/usr/bin/env", "python3", str(hpath)], capture_output=True, text=True, timeout=20)
+            r = subprocess.run(["/usr/bin/env", "python3", str(hpath)], capture_output=True, text=True, timeout=20)  # noqa: E501
             if r.returncode != 0:
                 out["error"] = f"runtime: {r.stderr.strip()[:240]}"
                 return out
@@ -155,23 +155,23 @@ def grade(prompt: dict, response: str) -> dict:
                 return out
             out["correct"] = all(rr.get("ok") for rr in results)
             if not out["correct"]:
-                out["error"] = f"sanity-call failures: {[r for r in results if not r.get('ok')][:3]}"
+                out["error"] = f"sanity-call failures: {[r for r in results if not r.get('ok')][:3]}"  # noqa: E501
             out["sanity_results"] = results
             return out
 
         if lang == "javascript":
             fpath = Path(td) / "snippet.js"
             fpath.write_text(code)
-            r = subprocess.run(["/usr/bin/env", "node", "--check", str(fpath)], capture_output=True, text=True)
+            r = subprocess.run(["/usr/bin/env", "node", "--check", str(fpath)], capture_output=True, text=True)  # noqa: E501
             if r.returncode != 0:
                 out["error"] = f"node --check: {r.stderr.strip()[:240]}"
                 return out
             out["compiles"] = True
             # crude runtime check: declare function + invoke a trivial case.
-            harness = code + "\nconsole.log(JSON.stringify({a: typeof sumOfSquares === 'function' ? sumOfSquares([1,2,3,'x']) : null}));"
+            harness = code + "\nconsole.log(JSON.stringify({a: typeof sumOfSquares === 'function' ? sumOfSquares([1,2,3,'x']) : null}));"  # noqa: E501
             hpath = Path(td) / "harness.js"
             hpath.write_text(harness)
-            r = subprocess.run(["/usr/bin/env", "node", str(hpath)], capture_output=True, text=True, timeout=20)
+            r = subprocess.run(["/usr/bin/env", "node", str(hpath)], capture_output=True, text=True, timeout=20)  # noqa: E501
             if r.returncode != 0:
                 out["error"] = f"runtime: {r.stderr.strip()[:240]}"
                 return out
@@ -186,12 +186,12 @@ def grade(prompt: dict, response: str) -> dict:
         if lang == "bash":
             fpath = Path(td) / "snippet.sh"
             fpath.write_text(code)
-            r = subprocess.run(["bash", "-n", str(fpath)], capture_output=True, text=True)
+            r = subprocess.run(["bash", "-n", str(fpath)], capture_output=True, text=True)  # noqa: E501
             if r.returncode != 0:
                 out["error"] = f"bash -n: {r.stderr.strip()[:240]}"
                 return out
             out["compiles"] = True
-            r = subprocess.run(["bash", str(fpath)], capture_output=True, text=True, timeout=10)
+            r = subprocess.run(["bash", str(fpath)], capture_output=True, text=True, timeout=10)  # noqa: E501
             if r.returncode != 0:
                 out["error"] = f"runtime: {r.stderr.strip()[:240]}"
                 return out
@@ -228,7 +228,7 @@ def main() -> int:
                 blob = json.loads(resp.read())
                 model = blob["data"][0]["id"]
         except (urllib.error.URLError, KeyError, IndexError) as exc:
-            print(f"ERROR: cannot reach vLLM at {SERVER} or /v1/models malformed: {exc}", file=sys.stderr)
+            print(f"ERROR: cannot reach vLLM at {SERVER} or /v1/models malformed: {exc}", file=sys.stderr)  # noqa: E501
             return 2
 
     grades = []
@@ -240,7 +240,7 @@ def main() -> int:
             response = chat(p["prompt"], model)
         except Exception as exc:
             print(f"FAIL ({exc})")
-            grades.append({"id": p["id"], "language": p["language"], "error": str(exc), "compiles": False, "runs": False, "correct": False})
+            grades.append({"id": p["id"], "language": p["language"], "error": str(exc), "compiles": False, "runs": False, "correct": False})  # noqa: E501
             continue
         g = grade(p, response)
         g["response"] = response

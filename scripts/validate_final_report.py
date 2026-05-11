@@ -18,10 +18,9 @@ from __future__ import annotations
 import argparse
 import csv
 import re
-import sys
 from pathlib import Path
 
-REPO = Path("/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4")
+REPO = Path("/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4")  # noqa: E501
 DEFAULT_REPORT = REPO / "BENCH_INT8_W4A16_FINAL.md"
 GRID_CSV = Path("/root/bench-int8-w4a16/final/final_grid.csv")
 
@@ -110,7 +109,7 @@ def check_links(report: str, errors: list[str]) -> None:
             continue
         # Resolve relative to repo root (where the .md lives).
         cand = (REPO / path_part).resolve()
-        if not cand.exists():
+        if not cand.exists():  # noqa: SIM102
             # Try absolute path interpretation.
             if not Path(path_part).exists():
                 errors.append(f"Broken link [{label}] → {target}")
@@ -147,7 +146,7 @@ def main() -> int:
     out_log = Path("/root/bench-int8-w4a16/final/m6_link_check.txt")
     out_log.parent.mkdir(parents=True, exist_ok=True)
     out_log.write_text(
-        f"validate_final_report.py {('--check-links ' if args.check_links else '')}{args.path}: PASS\n"
+        f"validate_final_report.py {('--check-links ' if args.check_links else '')}{args.path}: PASS\n"  # noqa: E501
     )
     print(f"{args.path}: schema OK; link-check {'ON' if args.check_links else 'OFF'}; "
           f"wrote {out_log}")

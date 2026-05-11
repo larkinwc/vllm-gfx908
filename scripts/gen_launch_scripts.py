@@ -20,10 +20,9 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 from pathlib import Path
 
-REPO = Path("/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4")
+REPO = Path("/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4")  # noqa: E501
 LAUNCH_DIR = REPO / "scripts"
 
 CELLS = []
@@ -33,7 +32,7 @@ for model in ("w8a8", "w4a16"):
             CELLS.append((model, tp, c))
 
 
-def reference_throughput(grid_rows: list[dict], cell_id: str) -> tuple[float | None, str | None]:
+def reference_throughput(grid_rows: list[dict], cell_id: str) -> tuple[float | None, str | None]:  # noqa: E501
     """Return (output_tput, ref-path) for synthetic+tput row of cell.
 
     For *reproducibility purposes* (VAL-FINAL-005), the reference is the
@@ -241,7 +240,7 @@ sys.exit(0 if abs(delta)<=2.0 else 1)
 rc=$?
 echo "[launch_$cell_id] $verdict"
 exit $rc
-"""
+"""  # noqa: E501
 
 
 def tp_specific_env(tp: int, model: str) -> tuple[str, str]:
@@ -258,7 +257,7 @@ def tuning_dir_for_model(model: str) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--grid", type=Path, default=Path("/root/bench-int8-w4a16/final/final_grid.csv"))
+    ap.add_argument("--grid", type=Path, default=Path("/root/bench-int8-w4a16/final/final_grid.csv"))  # noqa: E501
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 

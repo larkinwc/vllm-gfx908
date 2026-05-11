@@ -1038,7 +1038,7 @@ class FusedMoE(PluggableLayer):
                 f"which is not a multiple of {type_size}. This would "
                 f"corrupt dequant and produce NaN. Choose a tp_size that "
                 f"divides {blocks_total} evenly (e.g. factors: "
-                f"{sorted(d for d in range(1, blocks_total + 1) if blocks_total % d == 0)})."
+                f"{sorted(d for d in range(1, blocks_total + 1) if blocks_total % d == 0)})."  # noqa: E501
             )
 
     def _load_w2(

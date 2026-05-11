@@ -303,6 +303,6 @@ class RocmCKFlashAttentionImpl(AttentionImpl):
 
 
 # Re-export for convenience so the registry can import from this module.
-AttentionCGSupport  # noqa: F401 (re-export sentinel for type stubs)
-AttentionLayer  # noqa: F401
-AttentionSpec  # noqa: F401
+AttentionCGSupport  # noqa: B018, F401
+AttentionLayer  # noqa: B018, F401
+AttentionSpec  # noqa: B018, F401
