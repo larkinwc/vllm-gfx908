@@ -152,8 +152,10 @@ proposal):
    Net effect: more in-flight VMEM loads. *Bottlenecks on HBM
    *issue rate*, not HBM *throughput*. The W8A8 and W4A16 hot kernels
    already issue VMEM at >70 % of HBM achievable; saturating from
-   70 % to (theoretical) 100 % buys at most 1/0.7 = 1.43× ⇒ ~4 % cell
-   throughput improvement *if* every other constraint vanishes. M4-CK
+   70 % to (theoretical) 100 % buys at most 1/0.7 ≈ 1.43× on the
+   *matmul cell*, which after amortising over the rest of the forward
+   pass yields ≲4 % e2e throughput improvement *if* every other
+   constraint vanishes. M4-CK
    captured 1.86 % geomean against the same problem; the realistic
    ceiling is materially below 5 %.
 2. **`s_nop 3` between dependent MFMAs** — closes CDNA1 RAW hazard.
