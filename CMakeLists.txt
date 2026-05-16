@@ -1227,6 +1227,64 @@ if(VLLM_GPU_LANG STREQUAL "HIP")
     "csrc/rocm/skinny_gemms.cu"
     "csrc/rocm/attention.cu")
 
+  # ---------------------------------------------------------------------
+  # M4 Composable Kernel (CK) glue for gfx908.
+  #
+  # VLLM_BUILD_CK defaults ON whenever the build targets gfx908. The CK
+  # device-template instantiations in csrc/quantization/.../ck/ require a
+  # `composable_kernel` include tree with the gfx908-correct
+  # `get_warp_size()` overload. The system /opt/rocm/core-7.12/include/ck
+  # has a single __host__ __device__ definition that uses the HIP magic
+  # constant `warpSize`, which the host-side template instantiation cannot
+  # resolve. We therefore prefer a vendored or external composable_kernel
+  # include path via VLLM_CK_INCLUDE_DIR, falling back to the system path
+  # only if the vendored copy is unavailable.
+  # ---------------------------------------------------------------------
+  set(VLLM_CK_DEFAULT_OFF OFF)
+  string(FIND "${VLLM_GPU_ARCHES}" "gfx908" _vllm_ck_has_gfx908)
+  if(NOT _vllm_ck_has_gfx908 EQUAL -1)
+    set(VLLM_CK_DEFAULT_OFF ON)
+  endif()
+  option(VLLM_BUILD_CK
+    "Build M4 Composable Kernel INT8 GEMM instances (gfx908 only)"
+    ${VLLM_CK_DEFAULT_OFF})
+
+  if(VLLM_BUILD_CK)
+    if(NOT DEFINED VLLM_CK_INCLUDE_DIR OR VLLM_CK_INCLUDE_DIR STREQUAL "")
+      # Look for a vendored copy at common paths used by previous mission
+      # work (M4 worker authored against rocm-flash-attention's CK clone).
+      foreach(_p
+          "/home/aimeme/Desktop/rocm-flash-attention/csrc/composable_kernel/include"
+          "${CMAKE_CURRENT_LIST_DIR}/csrc/quantization/composable_kernel/include")
+        if(EXISTS "${_p}/ck/ck.hpp")
+          set(VLLM_CK_INCLUDE_DIR "${_p}" CACHE PATH
+              "composable_kernel include directory")
+          break()
+        endif()
+      endforeach()
+    endif()
+
+    if(NOT DEFINED VLLM_CK_INCLUDE_DIR OR VLLM_CK_INCLUDE_DIR STREQUAL "")
+      message(WARNING
+        "VLLM_BUILD_CK=ON but no composable_kernel include directory was "
+        "found via VLLM_CK_INCLUDE_DIR or vendored fallback. The system CK "
+        "headers under ${ROCM_PATH}/include/ck cannot be used as-is on "
+        "gfx908 (warpSize/host-host-device conflict). Disabling CK build.")
+      set(VLLM_BUILD_CK OFF)
+    else()
+      message(STATUS "VLLM_BUILD_CK=ON; CK include dir: ${VLLM_CK_INCLUDE_DIR}")
+      include(${CMAKE_CURRENT_LIST_DIR}/csrc/quantization/w8a8/int8/ck/CMakeLists.txt)
+      include(${CMAKE_CURRENT_LIST_DIR}/csrc/quantization/gptq/ck/CMakeLists.txt)
+      list(APPEND VLLM_ROCM_EXT_SRC
+        ${VLLM_ROCM_CK_INT8_SRC}
+        ${VLLM_ROCM_CK_GPTQ_SRC})
+      list(APPEND VLLM_GPU_FLAGS "-DVLLM_BUILD_CK=1")
+      # Compile-only flags for CK — keep GPU code targeted at gfx908 and
+      # avoid spurious warnings emitted by CK's `#pragma clang diagnostic`.
+      list(APPEND VLLM_GPU_FLAGS "-Wno-unknown-warning-option")
+    endif()
+  endif()
+
   define_extension_target(
     _rocm_C
     DESTINATION vllm
@@ -1236,6 +1294,17 @@ if(VLLM_GPU_LANG STREQUAL "HIP")
     ARCHITECTURES ${VLLM_GPU_ARCHES}
     USE_SABI 3
     WITH_SOABI)
+
+  if(VLLM_BUILD_CK)
+    target_include_directories(_rocm_C PRIVATE
+      ${VLLM_CK_INCLUDE_DIR}
+      ${CMAKE_CURRENT_LIST_DIR}/csrc)
+    # VLLM_GPU_FLAGS only applies to the HIP COMPILE_LANGUAGE — re-define
+    # VLLM_BUILD_CK as a target-wide definition so torch_bindings.cpp
+    # (compiled via the C++ language path) also sees the macro and registers
+    # the new ck_int8_gemm / ck_w4a16_gemm torch ops.
+    target_compile_definitions(_rocm_C PRIVATE VLLM_BUILD_CK=1)
+  endif()
 endif()
 
 # For CUDA and HIP builds also build the triton_kernels external package.

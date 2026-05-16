@@ -1,0 +1,298 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+"""Generate per-cell reproducible launch scripts (VAL-FINAL-005).
+
+For each (model, tp, concurrency) we emit a single shell script at
+``scripts/launch_<model>_<tp>_<conc>.sh`` that:
+
+  1. Pins env vars, vLLM commit, ROCm version, tuning-JSON path
+  2. Starts the appropriate vLLM service from services.yaml in the
+     background
+  3. Runs the canonical 200-prompt synthetic benchmark for that cell
+  4. Compares the just-measured throughput against the recorded best-of-
+     milestone number and fails if the deviation exceeds ±2 %
+
+The recorded reference value per cell is the *winner* row in
+``/root/bench-int8-w4a16/final/final_grid.csv``, selected on
+``output_throughput_toks_s``.
+"""
+from __future__ import annotations
+
+import argparse
+import csv
+from pathlib import Path
+
+REPO = Path("/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4")  # noqa: E501
+LAUNCH_DIR = REPO / "scripts"
+
+CELLS = []
+for model in ("w8a8", "w4a16"):
+    for tp in (1, 4):
+        for c in (1, 2, 4):
+            CELLS.append((model, tp, c))
+
+
+def reference_throughput(grid_rows: list[dict], cell_id: str) -> tuple[float | None, str | None]:  # noqa: E501
+    """Return (output_tput, ref-path) for synthetic+tput row of cell.
+
+    For *reproducibility purposes* (VAL-FINAL-005), the reference is the
+    path that the M6 launch env actually exercises — i.e. the dispatcher
+    selection under the pinned env vars in the launch script. That env
+    pins M2-build libhipblaslt + merged TensileLite library + the
+    CK > hipBLASLt > Triton dispatch priority, so the corresponding
+    reference column is:
+
+      - W8A8  : +CK  (=> includes +TensileLite + +Triton fall-through)
+      - W4A16 : +Triton  (mi100_w4a16 kernel; W4A16 has no CK path)
+
+    Falls back to the row's overall winner if the milestone column is
+    not present for that cell.
+    """
+    model = cell_id.split("_", 1)[0]
+    pref_col = "ck" if model == "w8a8" else "triton"
+    for row in grid_rows:
+        if row["cell"] != cell_id:
+            continue
+        if row["workload"] != "synthetic":
+            continue
+        if row["metric"] != "tput":
+            continue
+        v = row.get(pref_col)
+        if v not in (None, "", "None"):
+            try:
+                return float(v), {"ck": "+CK", "triton": "+Triton"}[pref_col]
+            except (TypeError, ValueError):
+                pass
+        # Fall back to the row's winner.
+        wv = row.get("winner_value")
+        wp = row.get("winner_path")
+        if wv:
+            try:
+                return float(wv), wp
+            except (TypeError, ValueError):
+                pass
+        return None, wp
+    return None, None
+
+
+SCRIPT_TEMPLATE = r"""#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+#
+# Per-cell launch script — {cell_id}
+#
+# VAL-FINAL-005: pinned env, vLLM commit, ROCm version, tuning-JSON
+# provenance for {model} TP={tp} concurrency={conc}.
+#
+# Reproduces the cell's recorded output throughput within ±2 %.
+#
+# Usage:
+#   {script_name} [--check]   # run the cell, compare to recorded ref
+#   {script_name} --serve-only # just start the server, no bench
+#
+# Recorded reference (from /root/bench-int8-w4a16/final/final_grid.csv):
+#   winner path = {winner_path}
+#   output_throughput_toks_s (synthetic, num_prompts=200) = {ref_tput}
+set -euo pipefail
+
+cell_id={cell_id}
+model_path=/models/Qwen3.5-9B-{model}
+tp={tp}
+conc={conc}
+ref_tput={ref_tput_str}
+
+# ---------------------------------------------------------------------------
+# Pinned environment
+# ---------------------------------------------------------------------------
+export ROCM_PATH=/opt/rocm/core-7.12
+export LD_LIBRARY_PATH=/root/hipblaslt-src/build/release/library:/opt/rocm/core-7.12/lib
+export PATH=/opt/rocm/core-7.12/bin:$PATH
+export PYTORCH_ROCM_ARCH=gfx908
+export VLLM_ROCM_USE_AITER=1
+export VLLM_ROCM_USE_SKINNY_GEMM=0
+export TORCH_COMPILE_DISABLE=1
+export HF_HUB_OFFLINE=1
+
+# Tuning provenance — pinned to the merged TensileLite library + the
+# per-shape JSONs that ship in-tree. Their SHA256 hashes are pinned in
+# /root/bench-int8-w4a16/final/tuning_hashes.json; verify with
+# `scripts/verify_tuning_hashes.py`.
+export HIPBLASLT_TENSILE_LIBPATH=/root/bench-int8-w4a16/tensilelite/merged_library/library
+export TUNING_JSON_DIR={tuning_json_dir}
+
+# vLLM commit (M4 final): 003f7d6ec (post M5 negative-result commit).
+# ROCm: 7.12. PyTorch: 2.11.0+rocm7.2. Triton: 3.5.1.
+export PINNED_VLLM_COMMIT=003f7d6ec
+export PINNED_ROCM=7.12
+export PINNED_TORCH=2.11.0+rocm7.2
+export PINNED_TRITON=3.5.1
+
+REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+export PYTHONPATH="$REPO${{PYTHONPATH:+:$PYTHONPATH}}"
+
+OUT_ROOT=/root/bench-int8-w4a16/final/launch_smoke
+mkdir -p "$OUT_ROOT/${{cell_id}}"
+LOG="$OUT_ROOT/${{cell_id}}/server.log"
+
+mode=${{1:---check}}
+
+# ---------------------------------------------------------------------------
+# Lifecycle helpers
+# ---------------------------------------------------------------------------
+stop_server() {{
+  pkill -9 -f 'vllm.entrypoints' 2>/dev/null || true
+  pkill -9 -f 'VLLM::' 2>/dev/null || true
+  sleep 2
+}}
+
+trap stop_server EXIT
+stop_server
+
+# ---------------------------------------------------------------------------
+# Start server (matches services.yaml: vllm-{model}-tp{tp})
+# ---------------------------------------------------------------------------
+{tp_specific_env}
+
+/opt/vllm-env/bin/python3 -m vllm.entrypoints.openai.api_server \
+    --model "$model_path" \
+    --dtype float16 \
+    --tensor-parallel-size {tp} \
+    --max-model-len 32768 \
+    --block-size 32 \
+    --enable-prefix-caching \
+    --language-model-only \
+    --gpu-memory-utilization 0.93 \
+    --port 8000 {extra_serve_args} > "$LOG" 2>&1 &
+SERVER_PID=$!
+echo "[launch_$cell_id] server PID=$SERVER_PID; log=$LOG"
+
+# Health wait (up to 300 s).
+for i in $(seq 1 60); do
+  if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
+    echo "[launch_$cell_id] healthcheck OK after ${{i}} x5 s"
+    break
+  fi
+  if ! kill -0 $SERVER_PID 2>/dev/null; then
+    echo "[launch_$cell_id] FATAL: server exited; tail:"
+    tail -n 60 "$LOG"
+    exit 2
+  fi
+  sleep 5
+done
+if ! curl -sf http://localhost:8000/health >/dev/null 2>&1; then
+  echo "[launch_$cell_id] FATAL: server did not become healthy in 300 s"
+  tail -n 60 "$LOG"
+  exit 2
+fi
+
+if [[ "$mode" == "--serve-only" ]]; then
+  trap - EXIT
+  echo "[launch_$cell_id] server ready; pid=$SERVER_PID (you must kill it manually)."
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Canonical bench (synthetic random, NUM_PROMPTS=200, seed=42)
+# ---------------------------------------------------------------------------
+RAW_DIR="$OUT_ROOT/${{cell_id}}/bench_$(date -u +%Y%m%dT%H%M%SZ)"
+mkdir -p "$RAW_DIR"
+
+/opt/vllm-env/bin/python3 -m vllm.entrypoints.cli.main bench serve \
+    --model "$model_path" \
+    --base-url http://127.0.0.1:8000 \
+    --num-prompts 200 \
+    --request-rate inf \
+    --max-concurrency {conc} \
+    --seed 42 \
+    --save-result \
+    --result-dir "$RAW_DIR" \
+    --result-filename raw.json \
+    --trust-remote-code \
+    --percentile-metrics ttft,tpot,itl,e2el \
+    --metric-percentiles 50,90,99 \
+    --metadata cell_id=${{cell_id}} workload=synthetic tp={tp} concurrency={conc} \
+    --dataset-name random \
+    --random-input-len 1024 \
+    --random-output-len 256 \
+    --ignore-eos
+
+result_json="$RAW_DIR/raw.json"
+if [[ ! -f "$result_json" ]]; then
+  echo "[launch_$cell_id] FATAL: bench produced no result.json"; exit 2
+fi
+
+actual_tput=$(/opt/vllm-env/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["output_throughput"])' "$result_json")
+
+echo "[launch_$cell_id] recorded reference output_throughput = $ref_tput tok/s"
+echo "[launch_$cell_id] this run     output_throughput        = $actual_tput tok/s"
+
+if [[ -z "$ref_tput" || "$ref_tput" == "None" ]]; then
+  echo "[launch_$cell_id] no recorded reference — skipping ±2 % gate"
+  exit 0
+fi
+
+verdict=$(/opt/vllm-env/bin/python3 -c "
+import sys
+ref=float(sys.argv[1]); act=float(sys.argv[2])
+delta=(act-ref)/ref*100
+print(f'delta={{delta:+.2f}}%')
+sys.exit(0 if abs(delta)<=2.0 else 1)
+" "$ref_tput" "$actual_tput")
+rc=$?
+echo "[launch_$cell_id] $verdict"
+exit $rc
+"""  # noqa: E501
+
+
+def tp_specific_env(tp: int, model: str) -> tuple[str, str]:
+    if tp == 4:
+        env = "export VLLM_MI100_DISABLE_CUSTOM_AR=1"
+        extra = " \\\n    --disable-custom-all-reduce"
+        return env, extra
+    return "export CUDA_VISIBLE_DEVICES=0", ""
+
+
+def tuning_dir_for_model(model: str) -> str:
+    return "vllm/model_executor/kernels/configs/gfx908"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--grid", type=Path, default=Path("/root/bench-int8-w4a16/final/final_grid.csv"))  # noqa: E501
+    ap.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+
+    rows = list(csv.DictReader(args.grid.open()))
+
+    written = []
+    for model, tp, conc in CELLS:
+        cell_id = f"{model}_tp{tp}_c{conc}"
+        ref_tput, winner = reference_throughput(rows, cell_id)
+        env, extra = tp_specific_env(tp, model)
+        ref_str = f"{ref_tput:.6f}" if ref_tput is not None else ""
+        path = LAUNCH_DIR / f"launch_{model}_tp{tp}_c{conc}.sh"
+        content = SCRIPT_TEMPLATE.format(
+            cell_id=cell_id,
+            model=model,
+            tp=tp,
+            conc=conc,
+            ref_tput=ref_str or "(unknown)",
+            ref_tput_str=ref_str,
+            winner_path=winner or "n/a",
+            script_name=path.name,
+            tp_specific_env=env,
+            extra_serve_args=extra,
+            tuning_json_dir=tuning_dir_for_model(model),
+        )
+        if not args.dry_run:
+            path.write_text(content)
+            path.chmod(0o755)
+        written.append(str(path))
+
+    print(f"Wrote {len(written)} launch scripts under {LAUNCH_DIR}/")
+    for p in written:
+        print("  " + p)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

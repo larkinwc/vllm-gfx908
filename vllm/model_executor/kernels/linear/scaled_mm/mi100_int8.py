@@ -5,11 +5,16 @@
 # (v_mfma_i32_32x32x4i8, v_mfma_i32_16x16x16i8) at 185 TOPS peak.
 # Tile sizes tuned for 120 CUs, wavefront-64, 64KB LDS per CU.
 
+import contextlib
 import logging
+import os
 
 import torch
 
 from vllm import _custom_ops as ops
+from vllm.model_executor.kernels.configs.gfx908.config_loader import (
+    load_config as _load_mi100_autotune_config,
+)
 from vllm.model_executor.layers.quantization.utils import replace_parameter
 from vllm.model_executor.layers.quantization.utils.w8a8_utils import (
     convert_to_channelwise,
@@ -17,6 +22,11 @@ from vllm.model_executor.layers.quantization.utils.w8a8_utils import (
 from vllm.platforms import current_platform
 from vllm.triton_utils import tl, triton
 
+from .mi100_hipblaslt import (
+    mi100_hipblaslt_scaled_mm,
+    mi100_hipblaslt_supports,
+)
+from .mi100_int8_dispatch import choose_backend
 from .ScaledMMLinearKernel import (
     Int8ScaledMMLinearKernel,
     Int8ScaledMMLinearLayerConfig,
@@ -24,6 +34,122 @@ from .ScaledMMLinearKernel import (
 
 logger = logging.getLogger(__name__)
 _mi100_int8_logged = False
+
+# M2 GEMM-shape logging instrumentation (env-flag gated).
+# Set VLLM_LOG_GEMM_SHAPES=1 to dump (M,N,K) tuples of every W8A8
+# linear call into VLLM_GEMM_SHAPES_OUT (default
+# /root/bench-int8-w4a16/tensilelite/gemm_shapes_w8a8.csv). Used by
+# scripts/mi100/dump_gemm_shapes.py to gather the input for TensileLite
+# tuning.
+_gemm_shape_log_path: str | None = None
+_gemm_shape_log_handle = None
+
+
+def _maybe_log_gemm_shape(M: int, N: int, K: int) -> None:
+    global _gemm_shape_log_path, _gemm_shape_log_handle
+    if os.environ.get("VLLM_LOG_GEMM_SHAPES") != "1":
+        return
+    if _gemm_shape_log_handle is None:
+        path = os.environ.get(
+            "VLLM_GEMM_SHAPES_OUT",
+            "/root/bench-int8-w4a16/tensilelite/gemm_shapes_w8a8.csv",
+        )
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        new_file = not os.path.exists(path)
+        # Append-mode so multi-rank workers can share the same file. The
+        # handle is held for the lifetime of the process — a context
+        # manager would defeat the purpose of streaming-append logging.
+        _gemm_shape_log_handle = open(path, "a", buffering=1)  # noqa: SIM115
+        _gemm_shape_log_path = path
+        if new_file:
+            _gemm_shape_log_handle.write("M,N,K,dtype,layout,pid\n")
+    # Logging must never break the forward path.
+    with contextlib.suppress(Exception):
+        _gemm_shape_log_handle.write(f"{M},{N},{K},int8,row_col,{os.getpid()}\n")
+
+
+def _get_tp_rank() -> int:
+    """Return the tensor-parallel-size key for the CK instance registry.
+
+    The CK dispatch table is keyed by *world size* (``tp_rank=1`` for
+    single-process / TP=1, ``tp_rank=4`` for TP=4 column-parallel, etc.)
+    rather than the in-group rank — see
+    ``csrc/quantization/w8a8/int8/ck/ck_int8_gemm.h``: "with TP=1 set 0,
+    with TP=4 set 4 etc. Only used to pick the right registered
+    instance."  Despite the header comment, the M4 instances are
+    registered as ``tp_rank=1`` for TP=1 and ``tp_rank=4`` for the
+    sharded TP=4 entry, so this helper returns ``world_size`` as the
+    consistent registry key. A wrong value just means "no CK" rather
+    than a correctness issue (the hipBLASLt → Triton fall-through
+    handles every shape).
+    """
+    try:
+        from vllm.distributed.parallel_state import (
+            get_tensor_model_parallel_world_size,
+        )
+
+        ws = int(get_tensor_model_parallel_world_size())
+        if ws >= 1:
+            return ws
+    except Exception:
+        pass
+    try:
+        import torch.distributed as dist
+
+        if dist.is_available() and dist.is_initialized():
+            return int(dist.get_world_size())
+    except Exception:
+        pass
+    try:
+        return int(os.environ.get("WORLD_SIZE", "1"))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _ck_int8_dispatch(
+    input: torch.Tensor,
+    weight: torch.Tensor,
+    scale_a: torch.Tensor,
+    scale_b: torch.Tensor,
+    out_dtype: type[torch.dtype],
+    bias: torch.Tensor | None,
+) -> torch.Tensor:
+    """Route a W8A8 INT8 GEMM through ``torch.ops._rocm_C.ck_int8_gemm``.
+
+    ``mi100_int8_scaled_mm`` carries ``weight`` as ``[K, N]`` row-major
+    int8 (transposed in ``process_weights_after_loading``), while the
+    CK op expects ``b`` as ``[N, K]`` int8 contiguous. Per-token and
+    per-channel scales are flattened to 1-D fp32, expanding scalar
+    (per-tensor) scales out to the row/column count so the CK
+    ``apply_scales_kernel`` epilogue (which indexes ``scale_a[m]`` /
+    ``scale_b[n]``) sees a vector of the right length.
+    """
+    M, K = input.shape
+    N = weight.shape[1]
+
+    a = input.contiguous() if not input.is_contiguous() else input
+    # weight is [K, N] row-major; CK wants [N, K] row-major contiguous.
+    b_nk = weight.t().contiguous()
+
+    sa = scale_a.to(torch.float32).reshape(-1)
+    sb = scale_b.to(torch.float32).reshape(-1)
+    if sa.numel() == 1 and M > 1:
+        sa = sa.expand(M).contiguous()
+    if sb.numel() == 1 and N > 1:
+        sb = sb.expand(N).contiguous()
+
+    ck_bias: torch.Tensor | None = None
+    if bias is not None:
+        # apply_scales_kernel expects __half bias [N]. Cast/flatten here
+        # so the call site does not need to know the kernel ABI.
+        ck_bias = bias.reshape(-1).to(torch.float16)
+
+    tp_rank = _get_tp_rank()
+    out = torch.ops._rocm_C.ck_int8_gemm(a, b_nk, sa, sb, ck_bias, tp_rank)
+    # CK always returns fp16; cast if caller asked for a different dtype.
+    if out.dtype != out_dtype:
+        out = out.to(out_dtype)
+    return out
 
 
 def is_weak_contiguous(x: torch.Tensor):
@@ -115,7 +241,12 @@ def mi100_int8_scaled_mm_kernel(
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
 
-    # Dequantize: convert INT32 accumulator to FP32, apply scales
+    # === Fused dequant + bias + cast epilogue ============================
+    # 1. Convert INT32 accumulator -> FP32.
+    # 2. Apply per-token activation scale (scale_a, [M] when not scalar).
+    # 3. Apply per-channel weight scale (scale_b, [N] when not scalar).
+    # 4. Optionally add bias (FP32 add for fidelity).
+    # 5. Cast to output dtype and store. No separate dequant launch.
     masks_scale_a = masks_scale_am[:, None] & (tl.arange(0, 1) < 1)[:, None]
     scale_a = tl.load(scale_a_ptrs[:, None], masks_scale_a)
     scale_a = scale_a.broadcast_to((BLOCK_SIZE_M, 1))
@@ -126,14 +257,14 @@ def mi100_int8_scaled_mm_kernel(
     scale_b = scale_b.broadcast_to((BLOCK_SIZE_N, 1))
     result = scale_b.T * result
 
-    c = result.to(c_ptr.type.element_ty)
-
     if bias_ptr:
         offsets_bias = offsets_bn
         bias_ptrs = bias_ptr + offsets_bias
         bias_mask = offsets_bias < N
-        bias = tl.load(bias_ptrs, bias_mask)
-        c += bias
+        bias_vec = tl.load(bias_ptrs, bias_mask).to(tl.float32)
+        result = result + bias_vec[None, :]
+
+    c = result.to(c_ptr.type.element_ty)
 
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)
@@ -165,6 +296,33 @@ def mi100_int8_scaled_mm(
     assert weight.shape[0] == K
     assert input.dtype == torch.int8 and weight.dtype == torch.int8
 
+    _maybe_log_gemm_shape(M, N, K)
+
+    # M4 dispatch: choose_backend() picks CK > hipBLASLt > Triton. CK is
+    # selected only when an instance is registered for the (M, N, K,
+    # tp_rank) tuple; the runtime ``ck_int8_gemm_supports`` re-check is
+    # defence-in-depth against the registry shifting between dispatch and
+    # invocation. ``VLLM_DISABLE_CK=1`` short-circuits this branch and
+    # falls through to the legacy hipBLASLt/Triton path.
+    tp_rank = _get_tp_rank()
+    backend = choose_backend(M, N, K, tp_rank)
+    if backend == "ck":
+        ck_supports = getattr(
+            getattr(torch.ops, "_rocm_C", None),
+            "ck_int8_gemm_supports",
+            None,
+        )
+        if ck_supports is not None and bool(ck_supports(M, N, K, tp_rank)):
+            return _ck_int8_dispatch(input, weight, scale_a, scale_b, out_dtype, bias)
+
+    # M2 dispatch: prefer hipBLASLt for tuned shapes; otherwise fall through
+    # to the existing Triton kernel below. VLLM_DISABLE_HIPBLASLT=1 forces
+    # 100% Triton dispatch (validated by VAL-TENSILE-008).
+    if mi100_hipblaslt_supports(M, N, K):
+        return mi100_hipblaslt_scaled_mm(
+            input, weight, scale_a, scale_b, out_dtype, bias
+        )
+
     scale_a = scale_a.reshape(-1, 1) if scale_a.dim() <= 1 else scale_a
     scale_b = scale_b.reshape(-1, 1) if scale_b.dim() <= 1 else scale_b
 
@@ -181,33 +339,53 @@ def mi100_int8_scaled_mm(
     has_scalar = lambda x: x.shape[0] == 1 and x.shape[1] == 1
 
     # MI100-tuned tile sizes for gfx908 (120 CUs, wavefront-64, 64KB LDS)
-    # INT8 elements are 1 byte each, so we can fit larger tiles in LDS:
-    # A tile: BLOCK_M * BLOCK_K * 1B, B tile: BLOCK_K * BLOCK_N * 1B
-    # With 64x64x128: A=8KB + B=8KB = 16KB << 64KB LDS
-    # With 128x128x64: A=8KB + B=8KB = 16KB, good CU occupancy
-    is_small_N = N < 8192
-    next_power_of_2_M = max(32, triton.next_power_of_2(M))
+    # INT8 elements are 1 byte each, so we can fit larger tiles in LDS.
+    # M3: prefer per-shape autotune-selected configs from
+    # vllm/model_executor/kernels/configs/gfx908/mi100_int8_M*_N*_K*.json
+    # falling back to the static heuristic below for shapes that have not
+    # been autotuned yet.
+    cfg = _load_mi100_autotune_config("mi100_int8", M=M, N=N, K=K)
+    extra_launch: dict = {}
 
-    if next_power_of_2_M <= 32:
-        # Decode-like: small M, use wider K tiles for bandwidth
-        tile_shape = (32, 64, 128) if is_small_N else (32, 128, 128)
-    elif next_power_of_2_M <= 64:
-        tile_shape = (64, 64, 128) if is_small_N else (64, 128, 128)
-    elif next_power_of_2_M <= 128:
-        tile_shape = (64, 128, 64)
+    if cfg is not None:
+        block_size_m = int(cfg["BLOCK_M"])
+        block_size_n = int(cfg["BLOCK_N"])
+        block_size_k = int(cfg["BLOCK_K"])
+        group_size_m = int(cfg.get("GROUP_SIZE_M", 8))
+        if "num_warps" in cfg:
+            extra_launch["num_warps"] = int(cfg["num_warps"])
+        if "num_stages" in cfg:
+            extra_launch["num_stages"] = int(cfg["num_stages"])
+        if "matrix_instr_nonkdim" in cfg:
+            extra_launch["matrix_instr_nonkdim"] = int(cfg["matrix_instr_nonkdim"])
+        if "kpack" in cfg:
+            extra_launch["kpack"] = int(cfg["kpack"])
+        if "waves_per_eu" in cfg:
+            extra_launch["waves_per_eu"] = int(cfg["waves_per_eu"])
     else:
-        # Prefill-like: large M, balance M/N tiles
-        tile_shape = (128, 128, 64)
+        is_small_N = N < 8192
+        next_power_of_2_M = max(32, triton.next_power_of_2(M))
 
-    block_size_m, block_size_n, block_size_k = tile_shape
+        if next_power_of_2_M <= 32:
+            # Decode-like: small M, use wider K tiles for bandwidth
+            tile_shape = (32, 64, 128) if is_small_N else (32, 128, 128)
+        elif next_power_of_2_M <= 64:
+            tile_shape = (64, 64, 128) if is_small_N else (64, 128, 128)
+        elif next_power_of_2_M <= 128:
+            tile_shape = (64, 128, 64)
+        else:
+            # Prefill-like: large M, balance M/N tiles
+            tile_shape = (128, 128, 64)
+
+        block_size_m, block_size_n, block_size_k = tile_shape
+
+        # L2 cache swizzle: group M-tiles for better reuse
+        # MI100 has 8MB L2, grouping helps with weight reuse
+        num_pid_n_h = triton.cdiv(N, block_size_n)
+        group_size_m = max(1, min(8, 120 // num_pid_n_h)) if num_pid_n_h > 0 else 1
 
     block_size_sa = 1 if has_scalar(scale_a) else block_size_m
     block_size_sb = 1 if has_scalar(scale_b) else block_size_n
-
-    # L2 cache swizzle: group M-tiles for better reuse
-    # MI100 has 8MB L2, grouping helps with weight reuse
-    num_pid_n = triton.cdiv(N, block_size_n)
-    group_size_m = max(1, min(8, 120 // num_pid_n)) if num_pid_n > 0 else 1
 
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
@@ -235,6 +413,7 @@ def mi100_int8_scaled_mm(
         BLOCK_SIZE_SCALE_A=block_size_sa,
         BLOCK_SIZE_SCALE_B=block_size_sb,
         GROUP_SIZE_M=group_size_m,
+        **extra_launch,
     )
 
     return result

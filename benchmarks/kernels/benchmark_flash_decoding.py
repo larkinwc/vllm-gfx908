@@ -24,7 +24,6 @@ import torch
 
 from vllm.utils.math_utils import next_power_of_2
 from vllm.v1.attention.backends.triton_attn import (
-    FLASH_DECODING_SPLIT_COUNTS,
     _compute_flash_decoding_splits,
 )
 from vllm.v1.attention.ops.triton_unified_attention import unified_attention

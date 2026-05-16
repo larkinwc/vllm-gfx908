@@ -38,7 +38,7 @@ logger = init_logger(__name__)
 # temporary workaround and better long term solutions are:
 # - Add model type to MODELS_WITH_INCORRECT_HUB_TOKENIZER_CLASS in transformers (better)
 # - Fix tokenizer_class on the hub for the affected models (best)
-_MODEL_TYPES_WITH_INCORRECT_TOKENIZER_CLASS: set[str] = {"step3_vl"}
+_MODEL_TYPES_WITH_INCORRECT_TOKENIZER_CLASS: set[str] = {"step3_vl", "qwen3_5"}
 
 _VLLM_TOKENIZERS = {
     "deepseek_v32": ("deepseek_v32", "DeepseekV32Tokenizer"),
@@ -228,20 +228,39 @@ def get_tokenizer(
     # Some models have an incorrect tokenizer_class on the hub.
     # For these model types, bypass AutoTokenizer and use TokenizersBackend directly.
     model_type = getattr(config, "model_type", None) if config else None
-    if model_type in _MODEL_TYPES_WITH_INCORRECT_TOKENIZER_CLASS:
-        from transformers.tokenization_utils_tokenizers import TokenizersBackend
+    use_tokenizers_backend_override = (
+        model_type in _MODEL_TYPES_WITH_INCORRECT_TOKENIZER_CLASS
+    )
+    if use_tokenizers_backend_override:
+        # transformers v5 has TokenizersBackend; v4 doesn't, fall back to
+        # PreTrainedTokenizerFast which is the equivalent generic fast tokenizer
+        # and is what TokenizersBackend wraps in v5. We then run it through
+        # get_cached_tokenizer to add the vLLM-required cached attributes
+        # (e.g., max_chars_per_token).
+        try:
+            from transformers.tokenization_utils_tokenizers import (
+                TokenizersBackend as _Tk,
+            )
+        except ImportError:
+            from transformers import PreTrainedTokenizerFast as _Tk
 
         logger.debug(
-            "Overriding tokenizer_class to TokenizersBackend for model_type=%r",
-            model_type,
+            "Overriding tokenizer_class to %s for model_type=%r",
+            _Tk.__name__, model_type,
         )
-        tokenizer_cls_ = TokenizersBackend
+        tokenizer_cls_ = _Tk
     elif tokenizer_cls == TokenizerLike:
         tokenizer_cls_ = TokenizerRegistry.load_tokenizer_cls(tokenizer_mode)
     else:
         tokenizer_cls_ = tokenizer_cls
 
     tokenizer = tokenizer_cls_.from_pretrained(tokenizer_name, *args, **kwargs)
+    if use_tokenizers_backend_override:
+        # Wrap with vLLM's cached-attribute proxy so renderers get
+        # max_chars_per_token, max_token_id, etc.
+        from .hf import get_cached_tokenizer as _get_cached_tokenizer
+
+        tokenizer = _get_cached_tokenizer(tokenizer)
     if not tokenizer.is_fast:
         logger.warning(
             "Using a slow tokenizer. This might cause a significant "

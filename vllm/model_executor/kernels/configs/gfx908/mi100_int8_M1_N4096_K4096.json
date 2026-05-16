@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "kernel": "mi100_int8",
+  "shape": {
+    "M": 1,
+    "N": 4096,
+    "K": 4096,
+    "group_size": null
+  },
+  "config": {
+    "BLOCK_M": 16,
+    "BLOCK_N": 64,
+    "BLOCK_K": 128,
+    "GROUP_SIZE_M": 8,
+    "matrix_instr_nonkdim": 16,
+    "kpack": 2,
+    "waves_per_eu": 1,
+    "num_warps": 4,
+    "num_stages": 2
+  },
+  "measured_ms_per_iter": 0.10908208787441254,
+  "measured_tok_s": 9167.407953827502,
+  "autotune_runs_evaluated": 672,
+  "autotune_runs_pruned": 96,
+  "timestamp": "2026-05-10T06:32:24.767585+00:00",
+  "vllm_commit": "73f7e629a5a7225e3cb19a4df12c4afb371c32b8",
+  "rocm_version": "7.12",
+  "kernel_source_sha256": "aa19e264e66ff23ff992d2dd4e1dc61c87f912a678013896fb7dd958c753e45e",
+  "autotune_cartesian_total": 768,
+  "autotune_legal_subset": 672,
+  "autotune_legal_coverage_pct": 100.0,
+  "autotune_hard_invariant_eliminated": 96
+}
