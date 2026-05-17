@@ -92,6 +92,16 @@ SCRIPT_TEMPLATE = r"""#!/usr/bin/env bash
 # Recorded reference (from /root/bench-int8-w4a16/final/final_grid.csv):
 #   winner path = {winner_path}
 #   output_throughput_toks_s (synthetic, num_prompts=200) = {ref_tput}
+#
+# Optional env-var overrides (additive — empty/unset preserves production
+# behavior; resulting vLLM CLI is byte-identical to the unmodified script):
+#
+#   KV_CACHE_DTYPE  (m1-kvint8): when non-empty, injects
+#                                `--kv-cache-dtype $KV_CACHE_DTYPE` into the
+#                                vllm.entrypoints.openai.api_server invocation.
+#                                Recommended value: `int8`. Disable path:
+#                                `unset KV_CACHE_DTYPE` or `KV_CACHE_DTYPE=`
+#                                returns to the production baseline (FP16 KV).
 set -euo pipefail
 
 cell_id={cell_id}
@@ -129,6 +139,18 @@ export PINNED_TRITON=3.5.1
 REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
 export PYTHONPATH="$REPO${{PYTHONPATH:+:$PYTHONPATH}}"
 
+# ---------------------------------------------------------------------------
+# Optional additive env-var → CLI-flag overrides (m1-kvint8 et seq.)
+# Each populates a bash array that expands to the corresponding CLI flag(s)
+# when its env var is non-empty, and to *nothing* when unset/empty. This
+# preserves byte-identical CLI vs the pre-extension script in the default
+# (unset) case while letting workers opt in to KV-INT8 etc. additively.
+# ---------------------------------------------------------------------------
+KV_CACHE_DTYPE_FLAG=()
+if [[ -n "${{KV_CACHE_DTYPE:-}}" ]]; then
+  KV_CACHE_DTYPE_FLAG=(--kv-cache-dtype "$KV_CACHE_DTYPE")
+fi
+
 OUT_ROOT=/root/bench-int8-w4a16/final/launch_smoke
 mkdir -p "$OUT_ROOT/${{cell_id}}"
 LOG="$OUT_ROOT/${{cell_id}}/server.log"
@@ -161,7 +183,7 @@ stop_server
     --enable-prefix-caching \
     --language-model-only \
     --gpu-memory-utilization 0.93 \
-    --port 8000 {extra_serve_args} > "$LOG" 2>&1 &
+    --port 8000 {extra_serve_args} "${{KV_CACHE_DTYPE_FLAG[@]}}" > "$LOG" 2>&1 &
 SERVER_PID=$!
 echo "[launch_$cell_id] server PID=$SERVER_PID; log=$LOG"
 
