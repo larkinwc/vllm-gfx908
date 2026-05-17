@@ -22,9 +22,17 @@
 #   KV_CACHE_DTYPE  (m1-kvint8): when non-empty, injects
 #                                `--kv-cache-dtype $KV_CACHE_DTYPE` into the
 #                                vllm.entrypoints.openai.api_server invocation.
-#                                Recommended value: `int8`. Disable path:
+#                                Recommended value on this vLLM build:
+#                                `int8_per_token_head` (the only INT8-named
+#                                CacheDType in vllm 0.20.2; see
+#                                vllm/config/cache.py CacheDType Literal).
+#                                Other accepted values include fp8, fp8_e4m3,
+#                                fp8_e5m2, fp8_inc, fp8_per_token_head,
+#                                fp8_ds_mla, nvfp4. Disable path:
 #                                `unset KV_CACHE_DTYPE` or `KV_CACHE_DTYPE=`
-#                                returns to the production baseline (FP16 KV).
+#                                returns to the production baseline (FP16 KV);
+#                                resulting CLI is byte-identical to the
+#                                pre-extension script.
 set -euo pipefail
 
 cell_id=w4a16_tp4_c2
