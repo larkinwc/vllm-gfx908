@@ -108,18 +108,42 @@ export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
 # ---------- Milestone-specific env (server-side flags + env vars) ----------
 # kv_cache_dtype value applied for this milestone (empty = production FP16 KV).
 KV_CACHE_DTYPE_VAL=""
+# m2-chunked per-quant chunk size (max-num-batched-tokens). Empty = no chunked
+# prefill. Populated for m2-chunked / m4-final from chunk_sweep.json.
+declare -A CHUNK_PER_QUANT=([w8a8]="" [w4a16]="")
+ENABLE_CHUNKED_PREFILL_FLAG_VAL=""
 case "$milestone" in
   m1-kvint8)
     KV_CACHE_DTYPE_VAL=int8_per_token_head
     ;;
-  m2-chunked|m3-tp|m4-final)
-    # Future milestones layer additional flags here. For now this wrapper
-    # only supports m1-kvint8 actively; the others are scaffolded so the
-    # same script can be re-used by subsequent features.
+  m2-chunked)
+    # M2 stack sits on top of M1 KV-INT8 per orchestrator decision.
+    KV_CACHE_DTYPE_VAL=int8_per_token_head
+    ENABLE_CHUNKED_PREFILL_FLAG_VAL=1
+    # Read per-quant optimum from the chunk-size sweep emitted by
+    # m2-chunk-size-sweep. Fail fast if absent or malformed.
+    CHUNK_SWEEP_JSON=/root/bench-int8-w4a16-hbm/m2-chunked/chunk_sweep.json
+    if [[ ! -f "$CHUNK_SWEEP_JSON" ]]; then
+      log "FATAL: chunk_sweep.json missing at $CHUNK_SWEEP_JSON"
+      exit 2
+    fi
+    CHUNK_W8A8=$($PY -c "import json; d=json.load(open('$CHUNK_SWEEP_JSON')); print(d['optimum_per_quant']['w8a8'])" 2>/dev/null || echo "")
+    CHUNK_W4A16=$($PY -c "import json; d=json.load(open('$CHUNK_SWEEP_JSON')); print(d['optimum_per_quant']['w4a16'])" 2>/dev/null || echo "")
+    if [[ -z "$CHUNK_W8A8" || -z "$CHUNK_W4A16" ]]; then
+      log "FATAL: could not read optimum_per_quant.{w8a8,w4a16} from $CHUNK_SWEEP_JSON"
+      exit 2
+    fi
+    CHUNK_PER_QUANT[w8a8]="$CHUNK_W8A8"
+    CHUNK_PER_QUANT[w4a16]="$CHUNK_W4A16"
+    log "  m2-chunked: optimum chunk sizes w8a8=$CHUNK_W8A8 w4a16=$CHUNK_W4A16"
+    ;;
+  m3-tp|m4-final)
+    # Future milestones layer additional flags here.
     KV_CACHE_DTYPE_VAL=""
     ;;
 esac
 log "milestone=$milestone  KV_CACHE_DTYPE=${KV_CACHE_DTYPE_VAL:-(unset)}"
+log "  ENABLE_CHUNKED_PREFILL=${ENABLE_CHUNKED_PREFILL_FLAG_VAL:-(unset)}  CHUNK_PER_QUANT=w8a8:${CHUNK_PER_QUANT[w8a8]:-(unset)} w4a16:${CHUNK_PER_QUANT[w4a16]:-(unset)}"
 
 # ---------- Versions ----------
 VLLM_COMMIT=$(cd "$REPO" && git rev-parse HEAD)
@@ -142,12 +166,12 @@ kill_orphans() {
 
 start_service() {
   # $1 service id (vllm-w8a8-tp1 | vllm-w8a8-tp4 | vllm-w4a16-tp1 | vllm-w4a16-tp4)
-  local svc=$1 model tp extra cuda_visible
+  local svc=$1 model tp extra cuda_visible quant_short
   case "$svc" in
-    vllm-w8a8-tp1)   model=/models/Qwen3.5-9B-w8a8;   tp=1; extra=""; cuda_visible=0 ;;
-    vllm-w8a8-tp4)   model=/models/Qwen3.5-9B-w8a8;   tp=4; extra="--disable-custom-all-reduce"; cuda_visible="" ;;
-    vllm-w4a16-tp1)  model=/models/Qwen3.5-9B-w4a16;  tp=1; extra=""; cuda_visible=0 ;;
-    vllm-w4a16-tp4)  model=/models/Qwen3.5-9B-w4a16;  tp=4; extra="--disable-custom-all-reduce"; cuda_visible="" ;;
+    vllm-w8a8-tp1)   model=/models/Qwen3.5-9B-w8a8;   tp=1; extra=""; cuda_visible=0;  quant_short=w8a8 ;;
+    vllm-w8a8-tp4)   model=/models/Qwen3.5-9B-w8a8;   tp=4; extra="--disable-custom-all-reduce"; cuda_visible=""; quant_short=w8a8 ;;
+    vllm-w4a16-tp1)  model=/models/Qwen3.5-9B-w4a16;  tp=1; extra=""; cuda_visible=0;  quant_short=w4a16 ;;
+    vllm-w4a16-tp4)  model=/models/Qwen3.5-9B-w4a16;  tp=4; extra="--disable-custom-all-reduce"; cuda_visible=""; quant_short=w4a16 ;;
     *) log "unknown service $svc"; return 2 ;;
   esac
 
@@ -182,8 +206,21 @@ start_service() {
     kv_flag=(--kv-cache-dtype "$KV_CACHE_DTYPE_VAL")
   fi
 
+  # Optional chunked-prefill injection (m2-chunked / m4-final).
+  local chunked_flag=()
+  if [[ -n "$ENABLE_CHUNKED_PREFILL_FLAG_VAL" ]]; then
+    chunked_flag+=(--enable-chunked-prefill)
+  fi
+  local chunk_val=${CHUNK_PER_QUANT[$quant_short]:-}
+  if [[ -n "$chunk_val" ]]; then
+    chunked_flag+=(--max-num-batched-tokens "$chunk_val")
+  fi
+  # Export for run_cell's env snapshot.
+  export ACTIVE_MAX_NUM_BATCHED_TOKENS="$chunk_val"
+  export ACTIVE_ENABLE_CHUNKED_PREFILL="$ENABLE_CHUNKED_PREFILL_FLAG_VAL"
+
   local svc_log=$ROOT/server_${svc}_${TS}.log
-  log "starting $svc (model=$model tp=$tp kv=${KV_CACHE_DTYPE_VAL:-fp16}) -> $svc_log"
+  log "starting $svc (model=$model tp=$tp kv=${KV_CACHE_DTYPE_VAL:-fp16} chunked=${ENABLE_CHUNKED_PREFILL_FLAG_VAL:-0} max-num-batched-tokens=${chunk_val:-default}) -> $svc_log"
   cd "$REPO"
   nohup $PY -m vllm.entrypoints.openai.api_server \
     --model "$model" \
@@ -198,6 +235,7 @@ start_service() {
     --port 8000 \
     $extra \
     "${kv_flag[@]}" \
+    "${chunked_flag[@]}" \
     > "$svc_log" 2>&1 &
   echo $! > "$ROOT/${svc}.pid"
 
@@ -262,7 +300,12 @@ keep = [
     "TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC","HF_HUB_OFFLINE",
     "CUDA_VISIBLE_DEVICES",
 ]
-extra = {"KV_CACHE_DTYPE": "${KV_CACHE_DTYPE_VAL}", "milestone": "${milestone}"}
+extra = {
+    "KV_CACHE_DTYPE": "${KV_CACHE_DTYPE_VAL}",
+    "milestone": "${milestone}",
+    "ENABLE_CHUNKED_PREFILL": "${ACTIVE_ENABLE_CHUNKED_PREFILL:-}",
+    "MAX_NUM_BATCHED_TOKENS": "${ACTIVE_MAX_NUM_BATCHED_TOKENS:-}",
+}
 d = {k: os.environ.get(k, "") for k in keep}
 d.update(extra)
 print(json.dumps(d, indent=2))
@@ -286,7 +329,9 @@ EOF
     --metadata "cell_id=${cell_id}" "workload=${workload}" "tp=${tp}" \
                "concurrency=${conc}" "num_prompts=${n_prompts}" \
                "kv_cache_dtype=${KV_CACHE_DTYPE_VAL:-auto}" \
-               "milestone=${milestone}"
+               "milestone=${milestone}" \
+               "enable_chunked_prefill=${ACTIVE_ENABLE_CHUNKED_PREFILL:-0}" \
+               "max_num_batched_tokens=${ACTIVE_MAX_NUM_BATCHED_TOKENS:-default}"
   )
   if [[ "$workload" == synthetic ]]; then
     bench_args+=(
