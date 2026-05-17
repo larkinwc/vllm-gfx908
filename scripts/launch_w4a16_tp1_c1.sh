@@ -33,6 +33,31 @@
 #                                returns to the production baseline (FP16 KV);
 #                                resulting CLI is byte-identical to the
 #                                pre-extension script.
+#
+#   MAX_NUM_BATCHED_TOKENS  (m2-chunk-size-sweep): when non-empty, injects
+#                                `--max-num-batched-tokens $MAX_NUM_BATCHED_TOKENS`
+#                                into the api_server invocation. Recommended
+#                                values: 512, 1024, 2048, 4096 (the M2 sweep
+#                                range). Disable path: `unset MAX_NUM_BATCHED_TOKENS`
+#                                or `MAX_NUM_BATCHED_TOKENS=` returns to the
+#                                production baseline (vLLM default); resulting
+#                                CLI is byte-identical to the pre-extension
+#                                script.
+#
+#   ENABLE_CHUNKED_PREFILL  (m2-chunk-size-sweep): when non-empty (any value),
+#                                injects `--enable-chunked-prefill` into the
+#                                api_server invocation. Disable path: `unset
+#                                ENABLE_CHUNKED_PREFILL` or
+#                                `ENABLE_CHUNKED_PREFILL=` returns to the
+#                                production baseline (no chunked prefill);
+#                                resulting CLI is byte-identical to the
+#                                pre-extension script.
+#
+#   LAUNCH_HEALTH_WAIT_SECS (m2-chunk-size-sweep, optional): overrides the
+#                                health-check ceiling (default 300 s). Used by
+#                                long-running sweeps where first-time cudagraph
+#                                capture / Triton compile can exceed 5 minutes.
+#                                Disable path: unset returns to 300 s default.
 set -euo pipefail
 
 cell_id=w4a16_tp1_c1
@@ -82,6 +107,16 @@ if [[ -n "${KV_CACHE_DTYPE:-}" ]]; then
   KV_CACHE_DTYPE_FLAG=(--kv-cache-dtype "$KV_CACHE_DTYPE")
 fi
 
+MAX_NUM_BATCHED_TOKENS_FLAG=()
+if [[ -n "${MAX_NUM_BATCHED_TOKENS:-}" ]]; then
+  MAX_NUM_BATCHED_TOKENS_FLAG=(--max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS")
+fi
+
+ENABLE_CHUNKED_PREFILL_FLAG=()
+if [[ -n "${ENABLE_CHUNKED_PREFILL:-}" ]]; then
+  ENABLE_CHUNKED_PREFILL_FLAG=(--enable-chunked-prefill)
+fi
+
 OUT_ROOT=/root/bench-int8-w4a16/final/launch_smoke
 mkdir -p "$OUT_ROOT/${cell_id}"
 LOG="$OUT_ROOT/${cell_id}/server.log"
@@ -114,12 +149,14 @@ export CUDA_VISIBLE_DEVICES=0
     --enable-prefix-caching \
     --language-model-only \
     --gpu-memory-utilization 0.93 \
-    --port 8000  "${KV_CACHE_DTYPE_FLAG[@]}" > "$LOG" 2>&1 &
+    --port 8000  "${KV_CACHE_DTYPE_FLAG[@]}" "${MAX_NUM_BATCHED_TOKENS_FLAG[@]}" "${ENABLE_CHUNKED_PREFILL_FLAG[@]}" > "$LOG" 2>&1 &
 SERVER_PID=$!
 echo "[launch_$cell_id] server PID=$SERVER_PID; log=$LOG"
 
-# Health wait (up to 300 s).
-for i in $(seq 1 60); do
+# Health wait (default 300 s; override via LAUNCH_HEALTH_WAIT_SECS).
+HEALTH_WAIT_SECS=${LAUNCH_HEALTH_WAIT_SECS:-300}
+poll_count=$(( HEALTH_WAIT_SECS / 5 ))
+for i in $(seq 1 "$poll_count"); do
   if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
     echo "[launch_$cell_id] healthcheck OK after ${i} x5 s"
     break
@@ -132,7 +169,7 @@ for i in $(seq 1 60); do
   sleep 5
 done
 if ! curl -sf http://localhost:8000/health >/dev/null 2>&1; then
-  echo "[launch_$cell_id] FATAL: server did not become healthy in 300 s"
+  echo "[launch_$cell_id] FATAL: server did not become healthy in ${HEALTH_WAIT_SECS} s"
   tail -n 60 "$LOG"
   exit 2
 fi
