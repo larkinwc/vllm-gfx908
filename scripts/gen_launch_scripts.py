@@ -130,11 +130,31 @@ SCRIPT_TEMPLATE = r"""#!/usr/bin/env bash
 #                                resulting CLI is byte-identical to the
 #                                pre-extension script.
 #
+#   CUDAGRAPH_MODE  (m2-cudagraph-investigation): when non-empty, injects
+#                                `--compilation-config '{{"cudagraph_mode": "$CUDAGRAPH_MODE"}}'`
+#                                into the api_server invocation. Accepted
+#                                values include FULL_DECODE_ONLY (production
+#                                default — only need to pass explicitly when
+#                                overriding), FULL (covers prefill — likely
+#                                fails on Triton kernels due to compile-on-
+#                                first-shape), FULL_AND_PIECEWISE (uses
+#                                torch.compile + PIECEWISE — broken on
+#                                gfx908; documented in library/graph-mode-
+#                                results.md). Disable path:
+#                                `unset CUDAGRAPH_MODE` or `CUDAGRAPH_MODE=`
+#                                returns to vLLM's production default
+#                                (FULL_DECODE_ONLY for the graph-capable
+#                                services; eager otherwise). When unset the
+#                                resulting CLI is byte-identical to the
+#                                pre-extension script.
+#
 #   LAUNCH_HEALTH_WAIT_SECS (m2-chunk-size-sweep, optional): overrides the
 #                                health-check ceiling (default 300 s). Used by
 #                                long-running sweeps where first-time cudagraph
 #                                capture / Triton compile can exceed 5 minutes.
-#                                Disable path: unset returns to 300 s default.
+#                                FULL cudagraph capture probes typically need
+#                                LAUNCH_HEALTH_WAIT_SECS=600. Disable path:
+#                                unset returns to 300 s default.
 set -euo pipefail
 
 cell_id={cell_id}
@@ -194,6 +214,16 @@ if [[ -n "${{ENABLE_CHUNKED_PREFILL:-}}" ]]; then
   ENABLE_CHUNKED_PREFILL_FLAG=(--enable-chunked-prefill)
 fi
 
+# CUDAGRAPH_MODE → --compilation-config '{{"cudagraph_mode": "<value>"}}'
+# We pass the JSON via a single argv slot so that bash word-splitting does
+# not break the brace expression. When CUDAGRAPH_MODE is unset/empty the
+# array stays empty and the resulting CLI is byte-identical to the
+# pre-extension script.
+CUDAGRAPH_MODE_FLAG=()
+if [[ -n "${{CUDAGRAPH_MODE:-}}" ]]; then
+  CUDAGRAPH_MODE_FLAG=(--compilation-config "{{\"cudagraph_mode\": \"$CUDAGRAPH_MODE\"}}")
+fi
+
 OUT_ROOT=/root/bench-int8-w4a16/final/launch_smoke
 mkdir -p "$OUT_ROOT/${{cell_id}}"
 LOG="$OUT_ROOT/${{cell_id}}/server.log"
@@ -226,7 +256,7 @@ stop_server
     --enable-prefix-caching \
     --language-model-only \
     --gpu-memory-utilization 0.93 \
-    --port 8000 {extra_serve_args} "${{KV_CACHE_DTYPE_FLAG[@]}}" "${{MAX_NUM_BATCHED_TOKENS_FLAG[@]}}" "${{ENABLE_CHUNKED_PREFILL_FLAG[@]}}" > "$LOG" 2>&1 &
+    --port 8000 {extra_serve_args} "${{KV_CACHE_DTYPE_FLAG[@]}}" "${{MAX_NUM_BATCHED_TOKENS_FLAG[@]}}" "${{ENABLE_CHUNKED_PREFILL_FLAG[@]}}" "${{CUDAGRAPH_MODE_FLAG[@]}}" > "$LOG" 2>&1 &
 SERVER_PID=$!
 echo "[launch_$cell_id] server PID=$SERVER_PID; log=$LOG"
 
