@@ -78,6 +78,24 @@
 #                                FULL cudagraph capture probes typically need
 #                                LAUNCH_HEALTH_WAIT_SECS=600. Disable path:
 #                                unset returns to 300 s default.
+#
+#   NCCL_ALGO (m3-tp-bench-and-update, BAKED IN below): per-cell rccl
+#                                all-reduce / all-gather algorithm chosen by
+#                                the M3 NCCL sweep
+#                                (/root/bench-int8-w4a16-hbm/m3-tp/nccl_sweep.json).
+#                                rccl honors NCCL_ALGO from the environment
+#                                directly; nothing is injected into the vLLM
+#                                CLI. Accepted values for the M3 stack:
+#                                `Ring` (force ring algo) or empty (rccl
+#                                heuristic default). `Tree` is NOT selectable
+#                                on the M3 KV-INT8 stack because rccl 2.27.7
+#                                rejects NCCL_ALGO=Tree for AllGather on
+#                                ncclInt8 datatype. Disable path:
+#                                `unset NCCL_ALGO` (or set after the export
+#                                below) reverts to rccl's heuristic default;
+#                                empty value behaves identically. The line
+#                                baked into the Pinned environment block below
+#                                is the M3 winner for this cell.
 set -euo pipefail
 
 cell_id=w4a16_tp4_c4
@@ -97,6 +115,7 @@ export VLLM_ROCM_USE_AITER=1
 export VLLM_ROCM_USE_SKINNY_GEMM=0
 export TORCH_COMPILE_DISABLE=1
 export HF_HUB_OFFLINE=1
+export NCCL_ALGO=Ring  # M3 winner for w4a16_tp4_c4; see nccl_sweep.json
 
 # Tuning provenance — pinned to the merged TensileLite library + the
 # per-shape JSONs that ship in-tree. Their SHA256 hashes are pinned in

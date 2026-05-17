@@ -65,6 +65,14 @@ TPS = (1, 4)
 CONCS = (1, 2, 4)
 WORKLOADS = ("synthetic", "coding")
 
+# m3-tp covers only TP=4 cells (TP=1 is a no-op for NCCL topology).
+TPS_BY_MILESTONE: dict[str, tuple[int, ...]] = {
+    "m1-kvint8": (1, 4),
+    "m2-chunked": (1, 4),
+    "m3-tp": (4,),
+    "m4-final": (1, 4),
+}
+
 # Decode-dominated cells used by the win-bar evaluation.
 DECODE_DOMINATED = (
     ("tp1", 1), ("tp1", 2),
@@ -143,10 +151,11 @@ def model_for_quant(quant: str) -> str:
 def build_rows(milestone: str,
                prod: dict[tuple[str, str, str], float]
                ) -> list[dict[str, object]]:
-    """Build the 144-row table."""
+    """Build the 144-row table (or fewer for milestones that subset cells)."""
     rows: list[dict[str, object]] = []
+    tps = TPS_BY_MILESTONE.get(milestone, TPS)
     for quant in QUANTS:
-        for tp in TPS:
+        for tp in tps:
             for conc in CONCS:
                 for wl in WORKLOADS:
                     cell_id = f"{quant}_tp{tp}_c{conc}"
@@ -263,6 +272,22 @@ def decode_geomean(rows: list[dict[str, object]],
     return gm(ratios), gm(ms), gm(ps)
 
 
+def tp4_win_bar_count(rows: list[dict[str, object]]) -> tuple[int, list[dict]]:
+    """For m3-tp: count TP=4 cells with `tput` WIN (≥+3%) vs production.
+
+    Returns (n_cells_won, list_of_winning_rows). A "cell" here is one
+    (quant, tp, concurrency, workload) tuple; the m3-tp grid has 12 such
+    cells total (6 TP=4 cells × 2 workloads).
+    """
+    winning: list[dict] = []
+    for r in rows:
+        if r["tp"] != 4 or r["metric"] != "tput":
+            continue
+        if r["verdict"] == "WIN":
+            winning.append(r)
+    return len(winning), winning
+
+
 def write_markdown(milestone: str, rows: list[dict[str, object]],
                    win_bar_res: dict[str, dict],
                    regressions: list[dict],
@@ -333,6 +358,37 @@ def write_markdown(milestone: str, rows: list[dict[str, object]],
                    else "**WIN-BAR-NOT-MET**")
         out.append("")
         out.append(f"Verdict for `{quant}`: {verdict}")
+        out.append("")
+
+    # m3-tp specific: total TP=4 cell wins on tput (mission-level win-bar)
+    if milestone == "m3-tp":
+        n_won, winning = tp4_win_bar_count(rows)
+        out.append("## m3-tp TP=4 cell win-bar (≥ 3 of 12 cells must WIN on tput)")
+        out.append("")
+        out.append(
+            "Per mission VAL-TP-004: ≥ +3 % `output_throughput_toks_s` win on "
+            "≥ 3 TP=4 cells vs the production `final_grid.csv` baseline. "
+            "Total TP=4 grid is 6 cells × 2 workloads = 12 candidate rows."
+        )
+        out.append("")
+        out.append(f"Cells won (Δ ≥ +3 %): **{n_won} / 12**")
+        out.append("")
+        if winning:
+            out.append("| Cell | Workload | Production tput | "
+                       f"{milestone} tput | Δ% |")
+            out.append("| --- | --- | ---: | ---: | ---: |")
+            for r in winning:
+                pv = r["production_value"]
+                mv = r["milestone_value"]
+                d = r["delta_pct"]
+                out.append(
+                    f"| {r['cell_id']} | {r['workload']} | "
+                    f"{pv:.4f} | {mv:.4f} | "
+                    f"{fmt_delta(d, r['verdict'])} |"
+                )
+        verdict = ("**WIN-BAR-MET**" if n_won >= 3 else "**WIN-BAR-NOT-MET**")
+        out.append("")
+        out.append(f"Mission win-bar verdict: {verdict}")
         out.append("")
 
     # Regressions
