@@ -168,8 +168,33 @@ case "$milestone" in
     log "  m3-tp: per-cell NCCL_ALGO from $NCCL_SWEEP_JSON"
     ;;
   m4-final)
-    # Future milestones layer additional flags here.
-    KV_CACHE_DTYPE_VAL=""
+    # M4 cumulative stack: M1 KV-INT8 + M2 chunked-prefill per-quant optimum
+    # + M3 per-cell NCCL_ALGO winner (TP=4 cells only; TP=1 cells leave
+    # NCCL_ALGO unset since it's a no-op at single-rank).
+    KV_CACHE_DTYPE_VAL=int8_per_token_head
+    ENABLE_CHUNKED_PREFILL_FLAG_VAL=1
+    CHUNK_SWEEP_JSON=/root/bench-int8-w4a16-hbm/m2-chunked/chunk_sweep.json
+    if [[ ! -f "$CHUNK_SWEEP_JSON" ]]; then
+      log "FATAL: chunk_sweep.json missing at $CHUNK_SWEEP_JSON (needed by m4-final to stack M2 winners)"
+      exit 2
+    fi
+    CHUNK_W8A8=$($PY -c "import json; d=json.load(open('$CHUNK_SWEEP_JSON')); print(d['optimum_per_quant']['w8a8'])" 2>/dev/null || echo "")
+    CHUNK_W4A16=$($PY -c "import json; d=json.load(open('$CHUNK_SWEEP_JSON')); print(d['optimum_per_quant']['w4a16'])" 2>/dev/null || echo "")
+    if [[ -z "$CHUNK_W8A8" || -z "$CHUNK_W4A16" ]]; then
+      log "FATAL: could not read optimum_per_quant.{w8a8,w4a16} from $CHUNK_SWEEP_JSON"
+      exit 2
+    fi
+    CHUNK_PER_QUANT[w8a8]="$CHUNK_W8A8"
+    CHUNK_PER_QUANT[w4a16]="$CHUNK_W4A16"
+    NCCL_SWEEP_JSON=/root/bench-int8-w4a16-hbm/m3-tp/nccl_sweep.json
+    if [[ ! -f "$NCCL_SWEEP_JSON" ]]; then
+      log "FATAL: nccl_sweep.json missing at $NCCL_SWEEP_JSON (needed by m4-final for per-cell NCCL_ALGO)"
+      exit 2
+    fi
+    export M3_NCCL_SWEEP_JSON="$NCCL_SWEEP_JSON"
+    log "  m4-final: stacking M1 KV-INT8 (int8_per_token_head) + M2 chunked-prefill + M3 NCCL_ALGO"
+    log "  m4-final: M2 optimum chunk sizes w8a8=$CHUNK_W8A8 w4a16=$CHUNK_W4A16"
+    log "  m4-final: per-cell NCCL_ALGO from $NCCL_SWEEP_JSON (TP=4 cells only)"
     ;;
 esac
 log "milestone=$milestone  KV_CACHE_DTYPE=${KV_CACHE_DTYPE_VAL:-(unset)}"
@@ -545,14 +570,78 @@ for c in sweep.get("cells", []):
 PYEOF
 }
 
-if [[ "$milestone" == "m3-tp" ]]; then
-  # m3-tp diverges from the standard loop in two ways:
-  #   1) Only TP=4 cells (TP=1 cells are skipped — NCCL_ALGO is a no-op at
-  #      single-rank; the milestone scope is TP=4 topology selection).
-  #   2) The server must be restarted PER concurrency cell so the baked
-  #      per-cell NCCL_ALGO winner is honored by rccl (which reads
-  #      NCCL_ALGO once at engine init).
-  log "m3-tp main loop: TP=4 cells only, per-cell server restart for NCCL_ALGO winner"
+if [[ "$milestone" == "m3-tp" || "$milestone" == "m4-final" ]]; then
+  # m3-tp / m4-final diverge from the standard loop because the TP=4 cells
+  # need the server restarted PER concurrency cell so the baked per-cell
+  # NCCL_ALGO winner is honored by rccl (which reads NCCL_ALGO once at
+  # engine init).
+  #
+  # m3-tp scope: TP=4 cells only (NCCL_ALGO is the only knob being swept).
+  # m4-final scope: all 12 cells (TP=1 + TP=4); TP=1 cells use the standard
+  # one-service-per-(quant,tp) pass since NCCL_ALGO is a no-op at single-rank.
+  if [[ "$milestone" == "m4-final" ]]; then
+    # m4-final: first run the TP=1 cells via the standard single-service path
+    # for each quant, then fall through to the TP=4 per-cell-restart loop.
+    log "m4-final main loop (phase 1/2): TP=1 cells via single-service pass per quant"
+    TP1_SERVICES=(
+      "w8a8:vllm-w8a8-tp1:1"
+      "w4a16:vllm-w4a16-tp1:1"
+    )
+    for triple in "${TP1_SERVICES[@]}"; do
+      IFS=":" read -r model_short svc tp <<<"$triple"
+
+      any_match=0
+      for conc in 1 2 4; do
+        for wl in synthetic coding; do
+          cell="${model_short}_tp${tp}_c${conc}_${wl}"
+          if [[ "$cell" =~ $CELLS_FILTER ]]; then any_match=1; break; fi
+        done
+        [[ $any_match -eq 1 ]] && break
+      done
+      if [[ $any_match -eq 0 ]]; then
+        log "skipping $svc (no cells match filter)"
+        continue
+      fi
+
+      if ! start_service "$svc"; then
+        log "  start_service $svc failed; killing all vLLM, sleeping 5s, retrying once"
+        kill_orphans
+        sleep 5
+        if ! start_service "$svc"; then
+          log "FAILED to start $svc after retry — marking its TP=1 cells as FAILED"
+          stop_service
+          for conc in 1 2 4; do
+            for wl in synthetic coding; do
+              cell="${model_short}_tp${tp}_c${conc}_${wl}"
+              if [[ "$cell" =~ $CELLS_FILTER ]]; then
+                failed_cells+=("$cell")
+              fi
+            done
+          done
+          continue
+        fi
+      fi
+
+      for conc in 1 2 4; do
+        for wl in synthetic coding; do
+          cell="${model_short}_tp${tp}_c${conc}_${wl}"
+          if [[ ! "$cell" =~ $CELLS_FILTER ]]; then
+            log "  skip $cell (filter)"
+            continue
+          fi
+          if ! run_cell "$model_short" "$svc" "$tp" "$conc" "$wl"; then
+            log "  run_cell $cell failed; continuing"
+            failed_cells+=("$cell")
+          fi
+        done
+      done
+
+      stop_service
+    done
+    log "m4-final main loop (phase 2/2): TP=4 cells with per-cell NCCL_ALGO winner"
+  else
+    log "m3-tp main loop: TP=4 cells only, per-cell server restart for NCCL_ALGO winner"
+  fi
   TP4_SERVICES=(
     "w8a8:vllm-w8a8-tp4:4"
     "w4a16:vllm-w4a16-tp4:4"
