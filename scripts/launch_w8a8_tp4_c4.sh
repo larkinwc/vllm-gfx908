@@ -15,6 +15,87 @@
 # Recorded reference (from /root/bench-int8-w4a16/final/final_grid.csv):
 #   winner path = +CK
 #   output_throughput_toks_s (synthetic, num_prompts=200) = 224.343051
+#
+# Optional env-var overrides (additive — empty/unset preserves production
+# behavior; resulting vLLM CLI is byte-identical to the unmodified script):
+#
+#   KV_CACHE_DTYPE  (m1-kvint8): when non-empty, injects
+#                                `--kv-cache-dtype $KV_CACHE_DTYPE` into the
+#                                vllm.entrypoints.openai.api_server invocation.
+#                                Recommended value on this vLLM build:
+#                                `int8_per_token_head` (the only INT8-named
+#                                CacheDType in vllm 0.20.2; see
+#                                vllm/config/cache.py CacheDType Literal).
+#                                Other accepted values include fp8, fp8_e4m3,
+#                                fp8_e5m2, fp8_inc, fp8_per_token_head,
+#                                fp8_ds_mla, nvfp4. Disable path:
+#                                `unset KV_CACHE_DTYPE` or `KV_CACHE_DTYPE=`
+#                                returns to the production baseline (FP16 KV);
+#                                resulting CLI is byte-identical to the
+#                                pre-extension script.
+#
+#   MAX_NUM_BATCHED_TOKENS  (m2-chunk-size-sweep): when non-empty, injects
+#                                `--max-num-batched-tokens $MAX_NUM_BATCHED_TOKENS`
+#                                into the api_server invocation. Recommended
+#                                values: 512, 1024, 2048, 4096 (the M2 sweep
+#                                range). Disable path: `unset MAX_NUM_BATCHED_TOKENS`
+#                                or `MAX_NUM_BATCHED_TOKENS=` returns to the
+#                                production baseline (vLLM default); resulting
+#                                CLI is byte-identical to the pre-extension
+#                                script.
+#
+#   ENABLE_CHUNKED_PREFILL  (m2-chunk-size-sweep): when non-empty (any value),
+#                                injects `--enable-chunked-prefill` into the
+#                                api_server invocation. Disable path: `unset
+#                                ENABLE_CHUNKED_PREFILL` or
+#                                `ENABLE_CHUNKED_PREFILL=` returns to the
+#                                production baseline (no chunked prefill);
+#                                resulting CLI is byte-identical to the
+#                                pre-extension script.
+#
+#   CUDAGRAPH_MODE  (m2-cudagraph-investigation): when non-empty, injects
+#                                `--compilation-config '{"cudagraph_mode": "$CUDAGRAPH_MODE"}'`
+#                                into the api_server invocation. Accepted
+#                                values include FULL_DECODE_ONLY (production
+#                                default — only need to pass explicitly when
+#                                overriding), FULL (covers prefill — likely
+#                                fails on Triton kernels due to compile-on-
+#                                first-shape), FULL_AND_PIECEWISE (uses
+#                                torch.compile + PIECEWISE — broken on
+#                                gfx908; documented in library/graph-mode-
+#                                results.md). Disable path:
+#                                `unset CUDAGRAPH_MODE` or `CUDAGRAPH_MODE=`
+#                                returns to vLLM's production default
+#                                (FULL_DECODE_ONLY for the graph-capable
+#                                services; eager otherwise). When unset the
+#                                resulting CLI is byte-identical to the
+#                                pre-extension script.
+#
+#   LAUNCH_HEALTH_WAIT_SECS (m2-chunk-size-sweep, optional): overrides the
+#                                health-check ceiling (default 300 s). Used by
+#                                long-running sweeps where first-time cudagraph
+#                                capture / Triton compile can exceed 5 minutes.
+#                                FULL cudagraph capture probes typically need
+#                                LAUNCH_HEALTH_WAIT_SECS=600. Disable path:
+#                                unset returns to 300 s default.
+#
+#   NCCL_ALGO (m3-tp-bench-and-update, BAKED IN below): per-cell rccl
+#                                all-reduce / all-gather algorithm chosen by
+#                                the M3 NCCL sweep
+#                                (/root/bench-int8-w4a16-hbm/m3-tp/nccl_sweep.json).
+#                                rccl honors NCCL_ALGO from the environment
+#                                directly; nothing is injected into the vLLM
+#                                CLI. Accepted values for the M3 stack:
+#                                `Ring` (force ring algo) or empty (rccl
+#                                heuristic default). `Tree` is NOT selectable
+#                                on the M3 KV-INT8 stack because rccl 2.27.7
+#                                rejects NCCL_ALGO=Tree for AllGather on
+#                                ncclInt8 datatype. Disable path:
+#                                `unset NCCL_ALGO` (or set after the export
+#                                below) reverts to rccl's heuristic default;
+#                                empty value behaves identically. The line
+#                                baked into the Pinned environment block below
+#                                is the M3 winner for this cell.
 set -euo pipefail
 
 cell_id=w8a8_tp4_c4
@@ -34,6 +115,7 @@ export VLLM_ROCM_USE_AITER=1
 export VLLM_ROCM_USE_SKINNY_GEMM=0
 export TORCH_COMPILE_DISABLE=1
 export HF_HUB_OFFLINE=1
+export NCCL_ALGO=Ring  # M3 winner for w8a8_tp4_c4; see nccl_sweep.json
 
 # Tuning provenance — pinned to the merged TensileLite library + the
 # per-shape JSONs that ship in-tree. Their SHA256 hashes are pinned in
@@ -51,6 +133,38 @@ export PINNED_TRITON=3.5.1
 
 REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
 export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
+
+# ---------------------------------------------------------------------------
+# Optional additive env-var → CLI-flag overrides (m1-kvint8 et seq.)
+# Each populates a bash array that expands to the corresponding CLI flag(s)
+# when its env var is non-empty, and to *nothing* when unset/empty. This
+# preserves byte-identical CLI vs the pre-extension script in the default
+# (unset) case while letting workers opt in to KV-INT8 etc. additively.
+# ---------------------------------------------------------------------------
+KV_CACHE_DTYPE_FLAG=()
+if [[ -n "${KV_CACHE_DTYPE:-}" ]]; then
+  KV_CACHE_DTYPE_FLAG=(--kv-cache-dtype "$KV_CACHE_DTYPE")
+fi
+
+MAX_NUM_BATCHED_TOKENS_FLAG=()
+if [[ -n "${MAX_NUM_BATCHED_TOKENS:-}" ]]; then
+  MAX_NUM_BATCHED_TOKENS_FLAG=(--max-num-batched-tokens "$MAX_NUM_BATCHED_TOKENS")
+fi
+
+ENABLE_CHUNKED_PREFILL_FLAG=()
+if [[ -n "${ENABLE_CHUNKED_PREFILL:-}" ]]; then
+  ENABLE_CHUNKED_PREFILL_FLAG=(--enable-chunked-prefill)
+fi
+
+# CUDAGRAPH_MODE → --compilation-config '{"cudagraph_mode": "<value>"}'
+# We pass the JSON via a single argv slot so that bash word-splitting does
+# not break the brace expression. When CUDAGRAPH_MODE is unset/empty the
+# array stays empty and the resulting CLI is byte-identical to the
+# pre-extension script.
+CUDAGRAPH_MODE_FLAG=()
+if [[ -n "${CUDAGRAPH_MODE:-}" ]]; then
+  CUDAGRAPH_MODE_FLAG=(--compilation-config "{\"cudagraph_mode\": \"$CUDAGRAPH_MODE\"}")
+fi
 
 OUT_ROOT=/root/bench-int8-w4a16/final/launch_smoke
 mkdir -p "$OUT_ROOT/${cell_id}"
@@ -85,12 +199,14 @@ export VLLM_MI100_DISABLE_CUSTOM_AR=1
     --language-model-only \
     --gpu-memory-utilization 0.93 \
     --port 8000  \
-    --disable-custom-all-reduce > "$LOG" 2>&1 &
+    --disable-custom-all-reduce "${KV_CACHE_DTYPE_FLAG[@]}" "${MAX_NUM_BATCHED_TOKENS_FLAG[@]}" "${ENABLE_CHUNKED_PREFILL_FLAG[@]}" "${CUDAGRAPH_MODE_FLAG[@]}" > "$LOG" 2>&1 &
 SERVER_PID=$!
 echo "[launch_$cell_id] server PID=$SERVER_PID; log=$LOG"
 
-# Health wait (up to 300 s).
-for i in $(seq 1 60); do
+# Health wait (default 300 s; override via LAUNCH_HEALTH_WAIT_SECS).
+HEALTH_WAIT_SECS=${LAUNCH_HEALTH_WAIT_SECS:-300}
+poll_count=$(( HEALTH_WAIT_SECS / 5 ))
+for i in $(seq 1 "$poll_count"); do
   if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
     echo "[launch_$cell_id] healthcheck OK after ${i} x5 s"
     break
@@ -103,7 +219,7 @@ for i in $(seq 1 60); do
   sleep 5
 done
 if ! curl -sf http://localhost:8000/health >/dev/null 2>&1; then
-  echo "[launch_$cell_id] FATAL: server did not become healthy in 300 s"
+  echo "[launch_$cell_id] FATAL: server did not become healthy in ${HEALTH_WAIT_SECS} s"
   tail -n 60 "$LOG"
   exit 2
 fi
