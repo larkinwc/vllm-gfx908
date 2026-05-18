@@ -358,9 +358,15 @@ Per the conditional negative-result clause in `validation-contract.md`
 negative result"), the [§10 Gap Analysis](#10-gap-analysis-val-final-005-negative-result-clause)
 below is the documented evidence that resolves VAL-FINAL-005 as a negative
 result. The mission still delivers — every sub-mission's individual win-bar
-was met, all quality gates pass, no regressions exceed the per-cell 1 %
-threshold by more than a single cell, and the 12 new launch scripts +
-tuning hash manifest are committed for production rollout.
+was met, all quality gates pass, and the 12 new launch scripts + tuning hash
+manifest are committed for production rollout. Two synthetic-workload cells
+do regress versus production under NCCL\_ALGO=Ring at high concurrency
+(`w8a8_tp4_c2_synthetic` −2.03 %, `w8a8_tp4_c4_synthetic` −7.51 %); both
+are disclosed in [§5 Cumulative Pareto Grid](#5-cumulative-pareto-grid)
+and root-caused in [§10 Gap Analysis](#10-gap-analysis-val-final-005-negative-result-clause)
+(at c=4 all-reduce is < 3 % of wall-clock so Ring's scheduling overhead
+dominates, while the per-quant `coding` workload on those same cells WINS
+by +9 % / +14 %).
 
 ---
 
