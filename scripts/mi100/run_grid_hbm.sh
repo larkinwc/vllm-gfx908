@@ -63,18 +63,25 @@ set -uo pipefail
 milestone=${1:-}
 if [[ -z "$milestone" ]]; then
   echo "usage: $0 <milestone> [CELLS_FILTER]" >&2
-  echo "  milestone in {m1-kvint8, m2-chunked, m3-tp, m4-final}" >&2
+  echo "  milestone in {m1-kvint8, m2-chunked, m3-tp, m4-final, m1-flash-tune}" >&2
   exit 2
 fi
 case "$milestone" in
-  m1-kvint8|m2-chunked|m3-tp|m4-final) ;;
+  m1-kvint8|m2-chunked|m3-tp|m4-final|m1-flash-tune) ;;
   *) echo "unknown milestone $milestone" >&2; exit 2 ;;
 esac
 CELLS_FILTER=${2:-.*}
 
 # ---------- Paths ----------
 REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
-ROOT=/root/bench-int8-w4a16-hbm/${milestone}
+# m1-flash-tune is the follow-on Triton flash-decoding tuning mission; its
+# bench outputs land under /root/bench-int8-w4a16-hbm-fa/m1-tuning/ (parallel
+# to the prior HBM mission's /root/bench-int8-w4a16-hbm/ namespace).
+if [[ "$milestone" == "m1-flash-tune" ]]; then
+  ROOT=/root/bench-int8-w4a16-hbm-fa/m1-tuning
+else
+  ROOT=/root/bench-int8-w4a16-hbm/${milestone}
+fi
 PY=/opt/vllm-env/bin/python3
 DATASET=/root/bench-int8-w4a16/datasets/coding_agent.jsonl
 SERVICES_YAML=/root/.factory/missions/f74e8645-0bfb-462a-963d-84d7196b0f6c/services.yaml
@@ -166,6 +173,36 @@ case "$milestone" in
     log "  m3-tp: stacking M1 KV-INT8 (int8_per_token_head) + M2 chunked-prefill"
     log "  m3-tp: M2 optimum chunk sizes w8a8=$CHUNK_W8A8 w4a16=$CHUNK_W4A16"
     log "  m3-tp: per-cell NCCL_ALGO from $NCCL_SWEEP_JSON"
+    ;;
+  m1-flash-tune)
+    # m1-flash-tune builds on the M4 stack (KV_CACHE_DTYPE, chunked-prefill,
+    # NCCL_ALGO) which is *already baked into* the scripts/launch_hbm_*.sh
+    # per-cell scripts. This branch does NOT re-introduce a parallel server
+    # launch path — it shells out to the existing launch_hbm_<cell>.sh
+    # `--serve-only` invocation per cell, prepending only the two NEW env
+    # vars introduced by THIS mission:
+    #
+    #   VLLM_MI100_USE_TUNED_FLASH_DECODE=1
+    #     -> engages the winners_lookup.json consumer in
+    #        triton_unified_attention.py (m1-wire-in-lookup wiring).
+    #   VLLM_MI100_TUNED_QUANT_HINT=$QUANT   ($QUANT ∈ {w8a8, w4a16})
+    #     -> required by the lookup at runtime; without it the wire-in
+    #        correctly falls through to legacy and bench results silently
+    #        reflect the M4 baseline.
+    #
+    # We also export LAUNCH_HEALTH_WAIT_SECS=900 for the W4A16 TP=4 cells
+    # (M0 canary discovered first-boot exceeds the default 300s under the
+    # W4A16 TP=4 + KV-INT8 + chunked-prefill stack). The launch scripts
+    # already honor that override per AGENTS.md.
+    KV_CACHE_DTYPE_VAL=int8_per_token_head
+    ENABLE_CHUNKED_PREFILL_FLAG_VAL=1
+    # Per-quant chunk size (mirrors the M4 stack baked into launch_hbm scripts).
+    CHUNK_PER_QUANT[w8a8]=2048
+    CHUNK_PER_QUANT[w4a16]=4096
+    log "  m1-flash-tune: layering VLLM_MI100_USE_TUNED_FLASH_DECODE=1 +"
+    log "                 VLLM_MI100_TUNED_QUANT_HINT=<quant> per cell, on"
+    log "                 top of M4-final launch_hbm_*.sh stack."
+    log "                 LAUNCH_HEALTH_WAIT_SECS=900 for W4A16 TP=4."
     ;;
   m4-final)
     # M4 cumulative stack: M1 KV-INT8 + M2 chunked-prefill per-quant optimum
@@ -367,6 +404,8 @@ keep = [
     "TRITON_CACHE_DIR","NCCL_TIMEOUT_HOURS","TORCH_NCCL_BLOCKING_WAIT",
     "TORCH_NCCL_HEARTBEAT_TIMEOUT_SEC","HF_HUB_OFFLINE",
     "CUDA_VISIBLE_DEVICES","NCCL_ALGO",
+    "VLLM_MI100_USE_TUNED_FLASH_DECODE","VLLM_MI100_TUNED_QUANT_HINT",
+    "LAUNCH_HEALTH_WAIT_SECS",
 ]
 extra = {
     "KV_CACHE_DTYPE": "${KV_CACHE_DTYPE_VAL}",
@@ -374,6 +413,7 @@ extra = {
     "ENABLE_CHUNKED_PREFILL": "${ACTIVE_ENABLE_CHUNKED_PREFILL:-}",
     "MAX_NUM_BATCHED_TOKENS": "${ACTIVE_MAX_NUM_BATCHED_TOKENS:-}",
     "NCCL_ALGO": "${ACTIVE_NCCL_ALGO:-}",
+    "vllm_mi100_use_tuned_flash_decode": os.environ.get("VLLM_MI100_USE_TUNED_FLASH_DECODE", ""),
 }
 d = {k: os.environ.get(k, "") for k in keep}
 d.update(extra)
@@ -401,7 +441,9 @@ EOF
                "milestone=${milestone}" \
                "enable_chunked_prefill=${ACTIVE_ENABLE_CHUNKED_PREFILL:-0}" \
                "max_num_batched_tokens=${ACTIVE_MAX_NUM_BATCHED_TOKENS:-default}" \
-               "nccl_algo=${ACTIVE_NCCL_ALGO:-default}"
+               "nccl_algo=${ACTIVE_NCCL_ALGO:-default}" \
+               "vllm_mi100_use_tuned_flash_decode=${VLLM_MI100_USE_TUNED_FLASH_DECODE:-0}" \
+               "vllm_mi100_tuned_quant_hint=${VLLM_MI100_TUNED_QUANT_HINT:-}"
   )
   if [[ "$workload" == synthetic ]]; then
     bench_args+=(
@@ -570,7 +612,123 @@ for c in sweep.get("cells", []):
 PYEOF
 }
 
-if [[ "$milestone" == "m3-tp" || "$milestone" == "m4-final" ]]; then
+# Helper for m1-flash-tune: start a vLLM server via the existing per-cell
+# launch_hbm_<quant>_tp<tp>_c<conc>.sh in --serve-only mode, with the new
+# m1-flash-tune env vars layered on top. The launch scripts themselves are
+# READ-ONLY (off-limits per AGENTS.md); this function ONLY exports env vars
+# and shells out to them.
+#
+# Args: $1 = cell_id_no_wl (e.g. w8a8_tp1_c1), $2 = quant (w8a8|w4a16)
+# Returns 0 on healthy server, non-zero on failure (caller decides retry).
+start_m1_flash_cell_server() {
+  local cell=$1 quant=$2
+  local launch_script="$REPO/scripts/launch_hbm_${cell}.sh"
+  if [[ ! -x "$launch_script" ]]; then
+    log "  FATAL: missing/non-exec launch script $launch_script"
+    return 2
+  fi
+  kill_orphans
+  # Per-cell environment overlays (do NOT edit the launch scripts; AGENTS.md
+  # explicitly forbids modifying scripts/launch_hbm_*.sh).
+  export VLLM_MI100_USE_TUNED_FLASH_DECODE=1
+  export VLLM_MI100_TUNED_QUANT_HINT="$quant"
+  # First-boot health timeout: W4A16 TP=4 + KV-INT8 + chunked-prefill
+  # consistently exceeds the launch script's default 300s; the M0 canary
+  # documented this. The launch scripts honor LAUNCH_HEALTH_WAIT_SECS via
+  # env override per AGENTS.md.
+  if [[ "$cell" == w4a16_tp4_* ]]; then
+    export LAUNCH_HEALTH_WAIT_SECS=900
+  else
+    export LAUNCH_HEALTH_WAIT_SECS=600
+  fi
+  log "  m1-flash-tune: starting $launch_script --serve-only"
+  log "    VLLM_MI100_USE_TUNED_FLASH_DECODE=1"
+  log "    VLLM_MI100_TUNED_QUANT_HINT=$quant"
+  log "    LAUNCH_HEALTH_WAIT_SECS=$LAUNCH_HEALTH_WAIT_SECS"
+  # Run launch script in --serve-only mode; it daemonizes the server and
+  # exits 0 once /health is up. It writes its own server log into
+  # /root/bench-int8-w4a16-hbm/m4-final/launch_smoke/<cell>/server.log.
+  set +e
+  bash "$launch_script" --serve-only
+  local rc=$?
+  set -e
+  if [[ $rc -ne 0 ]]; then
+    log "  launch_hbm_${cell}.sh --serve-only exit=$rc"
+    return $rc
+  fi
+  if ! curl -sf http://127.0.0.1:8000/health >/dev/null 2>&1; then
+    log "  launch_hbm_${cell}.sh reported serve-ok but /health failing"
+    return 1
+  fi
+  log "  launch_hbm_${cell}.sh --serve-only: server healthy"
+  # Surface env-snapshot keys for run_cell()'s env_file.
+  export ACTIVE_ENABLE_CHUNKED_PREFILL="$ENABLE_CHUNKED_PREFILL_FLAG_VAL"
+  export ACTIVE_MAX_NUM_BATCHED_TOKENS="${CHUNK_PER_QUANT[$quant]:-}"
+  # NCCL_ALGO is exported by the launch script itself for TP=4 cells; for
+  # the env_file snapshot we just record whatever the env currently shows.
+  export ACTIVE_NCCL_ALGO="${NCCL_ALGO:-}"
+  return 0
+}
+
+if [[ "$milestone" == "m1-flash-tune" ]]; then
+  # m1-flash-tune: per-cell server restart, driven by the existing
+  # scripts/launch_hbm_<quant>_tp<tp>_c<conc>.sh scripts in --serve-only
+  # mode, with VLLM_MI100_USE_TUNED_FLASH_DECODE=1 +
+  # VLLM_MI100_TUNED_QUANT_HINT=<quant> layered on per cell.
+  #
+  # We restart per (quant, tp, conc) cell rather than per (quant, tp) so
+  # that the launch scripts can re-export NCCL_ALGO (TP=4 only) and so
+  # that each cell's server log carries the correct M4 stack flags.
+  log "m1-flash-tune main loop: per-cell launch_hbm_*.sh --serve-only"
+  log "  with VLLM_MI100_USE_TUNED_FLASH_DECODE=1 +"
+  log "       VLLM_MI100_TUNED_QUANT_HINT=<quant> overlay"
+  for quant in w8a8 w4a16; do
+    for tp in 1 4; do
+      for conc in 1 2 4; do
+        # Decide which cells to run for this (quant, tp, conc) — both
+        # workloads share the same server, restarted once per cell.
+        any_match=0
+        for wl in synthetic coding; do
+          cell="${quant}_tp${tp}_c${conc}_${wl}"
+          if [[ "$cell" =~ $CELLS_FILTER ]]; then any_match=1; break; fi
+        done
+        if [[ $any_match -eq 0 ]]; then
+          log "skipping ${quant}_tp${tp}_c${conc} (no cells match filter)"
+          continue
+        fi
+        cell_no_wl="${quant}_tp${tp}_c${conc}"
+        if ! start_m1_flash_cell_server "$cell_no_wl" "$quant"; then
+          log "  start_m1_flash_cell_server $cell_no_wl failed; kill+sleep5+retry once"
+          kill_orphans
+          sleep 5
+          if ! start_m1_flash_cell_server "$cell_no_wl" "$quant"; then
+            log "FAILED to start server for $cell_no_wl after retry — marking its 2 workload cells as FAILED"
+            stop_service
+            for wl in synthetic coding; do
+              cell="${quant}_tp${tp}_c${conc}_${wl}"
+              if [[ "$cell" =~ $CELLS_FILTER ]]; then
+                failed_cells+=("$cell")
+              fi
+            done
+            continue
+          fi
+        fi
+        for wl in synthetic coding; do
+          cell="${quant}_tp${tp}_c${conc}_${wl}"
+          if [[ ! "$cell" =~ $CELLS_FILTER ]]; then
+            log "  skip $cell (filter)"
+            continue
+          fi
+          if ! run_cell "$quant" "m1-flash-tune" "$tp" "$conc" "$wl"; then
+            log "  run_cell $cell failed; continuing"
+            failed_cells+=("$cell")
+          fi
+        done
+        stop_service
+      done
+    done
+  done
+elif [[ "$milestone" == "m3-tp" || "$milestone" == "m4-final" ]]; then
   # m3-tp / m4-final diverge from the standard loop because the TP=4 cells
   # need the server restarted PER concurrency cell so the baked per-cell
   # NCCL_ALGO winner is honored by rccl (which reads NCCL_ALGO once at
