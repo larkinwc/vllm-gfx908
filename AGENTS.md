@@ -41,6 +41,17 @@ If work is duplicate/trivial busywork, **do not proceed**. Return a short explan
 
 - **Never use system `python3` or bare `pip`/`pip install`.** All Python commands must go through `uv` and `.venv/bin/python`.
 
+### `gh` repo defaults (fork checkouts)
+
+When this fork (`larkinwc/vllm-gfx908`) is cloned with an `upstream` remote pointing at `vllm-project/vllm`, `gh` cannot disambiguate the two and defaults to upstream. Pin the default once per clone or worktree:
+
+```bash
+gh repo set-default larkinwc/vllm-gfx908
+gh repo set-default --view   # verify: should print larkinwc/vllm-gfx908
+```
+
+After this, `gh pr create`, `gh pr list`, `gh issue ...` target the fork by default. The duplicate-work-check commands in §1 keep their explicit `--repo vllm-project/vllm` so they continue to query upstream regardless of the default.
+
 ### Environment setup
 
 ```bash
