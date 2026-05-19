@@ -3,10 +3,22 @@
 #
 # VAL-CROSS-004 — Disable-path smoke harness.
 #
-# For each new env flag introduced by the HBM-mission (KV_CACHE_DTYPE,
-# ENABLE_CHUNKED_PREFILL+MAX_NUM_BATCHED_TOKENS, NCCL_ALGO), run one
-# canary cell with the flag UNSET and verify the cell reproduces the
-# corresponding production output_throughput_toks_s within ±5 %.
+# Modes:
+#   (default)  Original HBM-mission disable-path: for each new env flag
+#              introduced by the HBM-mission (KV_CACHE_DTYPE,
+#              ENABLE_CHUNKED_PREFILL+MAX_NUM_BATCHED_TOKENS, NCCL_ALGO),
+#              run one canary cell with the flag UNSET and verify the
+#              cell reproduces the corresponding production
+#              output_throughput_toks_s within ±5 %.
+#
+#   --hbm-fa   HBM-FA-mission disable-path (this mission, VAL-CROSS-004):
+#              for two canary cells (w8a8_tp1_c1, w4a16_tp4_c4) `unset
+#              VLLM_MI100_USE_TUNED_FLASH_DECODE` and invoke the EXISTING
+#              `scripts/launch_hbm_<cell>.sh` (M4 fallback path). Assert
+#              the measured throughput reproduces the M4 baseline
+#              `ref_tput` (baked into the launch script) within ±5 %.
+#              Writes the log + CSV under
+#              /root/bench-int8-w4a16-hbm-fa/m3-final/.
 #
 # Per-flag canary assignment (per mission spec):
 #   KV_CACHE_DTYPE          -> w8a8_tp1_c1 (KV-INT8 + chunked unset)
@@ -33,7 +45,29 @@
 set -euo pipefail
 
 REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
-OUT_DIR=/root/bench-int8-w4a16-hbm/m4-final
+
+# ---------------------------------------------------------------------------
+# Mode dispatch
+# ---------------------------------------------------------------------------
+MODE=${1:-hbm}
+case "$MODE" in
+  --hbm-fa|hbm-fa)
+    MODE=hbm-fa
+    ;;
+  ""|--hbm|hbm)
+    MODE=hbm
+    ;;
+  *)
+    echo "usage: $0 [--hbm | --hbm-fa]" >&2
+    exit 2
+    ;;
+esac
+
+if [[ "$MODE" == "hbm-fa" ]]; then
+  OUT_DIR=/root/bench-int8-w4a16-hbm-fa/m3-final
+else
+  OUT_DIR=/root/bench-int8-w4a16-hbm/m4-final
+fi
 mkdir -p "$OUT_DIR"
 LOG="$OUT_DIR/disable_path_smoke.log"
 CSV="$OUT_DIR/disable_path_smoke.csv"
@@ -84,13 +118,57 @@ run_canary() {
 
 overall_rc=0
 
-# 1. KV_CACHE_DTYPE on w8a8_tp1_c1 (also exercises ENABLE_CHUNKED_PREFILL +
-#    MAX_NUM_BATCHED_TOKENS unset, which the spec explicitly groups as
-#    a single canary cell since all three are TP=1-decode-side flags).
-run_canary "KV_CACHE_DTYPE+chunked" "w8a8_tp1_c1" "scripts/launch_w8a8_tp1_c1.sh" || overall_rc=1
+# ---------------------------------------------------------------------------
+# HBM-FA-mission canary: VLLM_MI100_USE_TUNED_FLASH_DECODE unset on the
+# EXISTING launch_hbm_<cell>.sh (M4 fallback path). The M4 launch scripts
+# never set VLLM_MI100_USE_TUNED_FLASH_DECODE, so explicitly unsetting it
+# here exercises the env-gate-off code path in
+# vllm/v1/attention/ops/triton_unified_attention.py. The ±5 % gate is
+# evaluated vs the launch script's baked-in ref_tput (the M4 baseline).
+# ---------------------------------------------------------------------------
+run_canary_hbm_fa() {
+  local cell="$1" launch_script="$2"
+  echo "=== HBM-FA disable-path smoke for cell=$cell ===" | tee -a "$LOG"
+  unset VLLM_MI100_USE_TUNED_FLASH_DECODE
+  unset VLLM_MI100_TUNED_FLASH_DECODE_LOOKUP
+  echo "  VLLM_MI100_USE_TUNED_FLASH_DECODE unset; invoking $launch_script --check" | tee -a "$LOG"
+  set +e
+  bash "$REPO/$launch_script" --check >> "$LOG" 2>&1
+  rc=$?
+  set -e
+  # Locate the most recent raw.json produced by the launch script.
+  out_root="/root/bench-int8-w4a16-hbm/m4-final/launch_smoke/${cell}"
+  raw_json=$(ls -1t "$out_root"/bench_*/raw.json 2>/dev/null | head -n 1)
+  if [[ -z "$raw_json" ]]; then
+    echo "  [WARN] no raw.json found under $out_root" | tee -a "$LOG"
+    echo "VLLM_MI100_USE_TUNED_FLASH_DECODE,$cell,?,?,NA,MISSING" >> "$CSV"
+    return 1
+  fi
+  measured=$(/opt/vllm-env/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["output_throughput"])' "$raw_json")
+  ref=$(grep -E "^ref_tput=" "$REPO/$launch_script" | head -n 1 | cut -d= -f2)
+  delta_pct=$(/opt/vllm-env/bin/python3 -c "import sys; r=float(sys.argv[1]); a=float(sys.argv[2]); print(f'{(a-r)/r*100:+.4f}')" "$ref" "$measured")
+  within_5=$(/opt/vllm-env/bin/python3 -c "import sys; print('PASS' if abs(float(sys.argv[1])) <= 5.0 else 'FAIL')" "$delta_pct")
+  echo "  ref=$ref measured=$measured delta=${delta_pct}% verdict=$within_5" | tee -a "$LOG"
+  echo "VLLM_MI100_USE_TUNED_FLASH_DECODE,$cell,$ref,$measured,$delta_pct,$within_5" >> "$CSV"
+  if [[ "$within_5" != "PASS" ]]; then
+    return 1
+  fi
+  return 0
+}
 
-# 2. NCCL_ALGO on w8a8_tp4_c4 (the only w8a8 TP=4 cell with NCCL_ALGO baked).
-run_canary "NCCL_ALGO" "w8a8_tp4_c4" "scripts/launch_w8a8_tp4_c4.sh" || overall_rc=1
+if [[ "$MODE" == "hbm-fa" ]]; then
+  # Two canary cells per the HBM-FA mission spec (m3-cross-checks step 3).
+  run_canary_hbm_fa "w8a8_tp1_c1" "scripts/launch_hbm_w8a8_tp1_c1.sh" || overall_rc=1
+  run_canary_hbm_fa "w4a16_tp4_c4" "scripts/launch_hbm_w4a16_tp4_c4.sh" || overall_rc=1
+else
+  # 1. KV_CACHE_DTYPE on w8a8_tp1_c1 (also exercises ENABLE_CHUNKED_PREFILL +
+  #    MAX_NUM_BATCHED_TOKENS unset, which the spec explicitly groups as
+  #    a single canary cell since all three are TP=1-decode-side flags).
+  run_canary "KV_CACHE_DTYPE+chunked" "w8a8_tp1_c1" "scripts/launch_w8a8_tp1_c1.sh" || overall_rc=1
+
+  # 2. NCCL_ALGO on w8a8_tp4_c4 (the only w8a8 TP=4 cell with NCCL_ALGO baked).
+  run_canary "NCCL_ALGO" "w8a8_tp4_c4" "scripts/launch_w8a8_tp4_c4.sh" || overall_rc=1
+fi
 
 echo "" | tee -a "$LOG"
 echo "=== Disable-path smoke summary ===" | tee -a "$LOG"
