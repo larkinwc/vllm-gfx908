@@ -29,7 +29,10 @@ from .mi100_hipblaslt import (
     mi100_hipblaslt_scaled_mm,
     mi100_hipblaslt_supports,
 )
-from .mi100_int8_dispatch import choose_backend
+from .mi100_int8_dispatch import (
+    choose_backend,
+    choose_emit_int8_next,
+)
 from .ScaledMMLinearKernel import (
     Int8ScaledMMLinearKernel,
     Int8ScaledMMLinearLayerConfig,
@@ -493,6 +496,74 @@ def mi100_int8_scaled_mm(
     block_size_sa = 1 if has_scalar(scale_a) else block_size_m
     block_size_sb = 1 if has_scalar(scale_b) else block_size_n
 
+    # --- M2 wire-in correctness guard ---------------------------------------
+    # Discovered during m2-epilogue-fusion (commit a64742222) +
+    # m2-numerics-extension (commit 3f397bd95) + this m2-wire-in fix:
+    # the EMIT_INT8_NEXT store epilogue reduces the per-token absmax over a
+    # single BLOCK_SIZE_N tile rather than the full row ``N``. Only
+    # ``pid_n == 0`` writes ``out_scale[m]``. If a caller fires
+    # EMIT_INT8_NEXT=True with ``BLOCK_SIZE_N < N``, the int8 rows from
+    # ``pid_n > 0`` carry their own tile's absmax but the stored scale is
+    # tile-0's — so ``out_int8 * out_scale`` only reconstructs tile-0 values
+    # and silently corrupts tile-1+ outputs. The default heuristic above
+    # picks BLOCK_SIZE_N ∈ {64, 128} which span NONE of Qwen3.5-9B's N
+    # values {3584, 5120, 12544, 18944} in a single tile.
+    #
+    # The fix lives in the Python wrapper (NOT in the dispatcher's
+    # whitelist) so EMIT_INT8_NEXT=True is impossible to misuse from any
+    # caller — the dispatcher, the wrapper-level smoke, and the
+    # m2-numerics-extension tests all benefit. We force BLOCK_SIZE_N to
+    # ``next_power_of_2(N)`` and assert ``block_size_n >= N`` as
+    # defense-in-depth.
+    if emit_int8_next:
+        # Clamp at 32768: forcing BLOCK_SIZE_N > 32768 would push the
+        # per-tile numel past Triton's 2**20 cap on realistic BLOCK_SIZE_M
+        # values. Qwen3.5-9B's largest N is 18944, well under this cap.
+        _EMIT_INT8_NEXT_BLOCK_N_CAP = 32768
+        forced_block_n = triton.next_power_of_2(int(N))
+        assert forced_block_n <= _EMIT_INT8_NEXT_BLOCK_N_CAP, (
+            f"EMIT_INT8_NEXT requires next_power_of_2(N) "
+            f"<= {_EMIT_INT8_NEXT_BLOCK_N_CAP}, got N={N} "
+            f"-> {forced_block_n}; route to emit_int8_next=False at dispatch."
+        )
+        block_size_n = forced_block_n
+        # gfx908 has 64 KiB LDS per CU; the kernel needs LDS for the
+        # int8 input tile (BLOCK_M × BLOCK_K) + the int8 weight tile
+        # (BLOCK_K × BLOCK_N) per pipeline stage, plus a fp32 accumulator
+        # spill for the EMIT_INT8_NEXT row-absmax reduction. With the
+        # default heuristic above, BLOCK_M=64..128 paired with the forced
+        # BLOCK_N≥256 quickly overflows the 64 KiB LDS budget. Cap
+        # BLOCK_M / BLOCK_K so the (BLOCK_M+BLOCK_N) * BLOCK_K * 1B tile
+        # stays under ~48 KiB, leaving headroom for the int32 accumulator
+        # spill and the row-absmax reduction.
+        # Rule of thumb that matches the m2-numerics-extension tests
+        # (which work for the full Qwen3.5-9B shape grid at small
+        # BLOCK_N): if forced BLOCK_N > 256, halve BLOCK_M to 32 and
+        # BLOCK_K to 64. This keeps LDS comfortably within the 64 KiB
+        # limit while still mapping to MFMA tile sizes (16×16, 32×32 on
+        # gfx908).
+        if block_size_n > 256:
+            block_size_m = min(block_size_m, 32)
+            block_size_k = min(block_size_k, 64)
+        # Per-channel weight-scale broadcast tile must match the forced
+        # BLOCK_SIZE_N so the masked load still covers the column range.
+        block_size_sb = 1 if has_scalar(scale_b) else block_size_n
+        # Per-token activation-scale broadcast tile follows the (possibly
+        # reduced) BLOCK_SIZE_M.
+        block_size_sa = 1 if has_scalar(scale_a) else block_size_m
+        # Re-derive the L2-swizzle group factor for the new BLOCK_SIZE_N
+        # so the launch metadata stays internally consistent. ``cdiv``
+        # returns >= 1 for any positive N, so the ``num_pid_n_h > 0``
+        # branch is the production path; the ternary fallback to ``1``
+        # keeps the expression exhaustive on the pathological ``N == 0``
+        # case (already caught by the early ``assert M > 0 and N > 0
+        # and K > 0`` above).
+        num_pid_n_h = triton.cdiv(N, block_size_n)
+        group_size_m = max(1, min(8, 120 // num_pid_n_h)) if num_pid_n_h > 0 else 1
+        assert block_size_n >= N, (
+            f"EMIT_INT8_NEXT requires BLOCK_SIZE_N >= N, got {block_size_n} < {N}"
+        )
+
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
     )
@@ -636,6 +707,34 @@ class MI100Int8ScaledMMLinearKernel(Int8ScaledMMLinearKernel):
         ``scaled_int8_quant`` + ``mi100_int8_scaled_mm`` composition.
         """
         w_q, w_s, i_s, i_zp, _ = self._get_layer_params(layer)
+
+        # M2 dispatcher wire-in (issue #26): probe ``choose_emit_int8_next``
+        # once per layer so the engine log records the per-layer fusion
+        # decision (mission step 5 of m2-wire-in). The dispatcher already
+        # logs every call at ``DEBUG`` level; we additionally raise the
+        # first per-layer firing to INFO so the launcher's default log
+        # level captures one grep-friendly line per layer for the M2
+        # smoke evidence (mission step 8). The decision is informational
+        # only — no consumer plumbing exists yet for the int8/scale
+        # outputs (a future feature stitches that across the MLP /
+        # attention boundary), so the actual ``mi100_int8_scaled_mm``
+        # call below stays on the byte-identical fp16-emit path.
+        if not getattr(layer, "_mi100_emit_int8_next_logged", False):
+            M_dim = int(x.shape[0]) if x.dim() >= 1 else 1
+            N_dim = int(w_q.shape[1])
+            K_dim = int(w_q.shape[0])
+            layer_name = getattr(layer, "prefix", None) or type(layer).__name__
+            decision = choose_emit_int8_next(M_dim, N_dim, K_dim, layer_name=layer_name)
+            logger.info(
+                "[MI100_INT8] emit_int8_next=%s dispatch on layer=%s "
+                "shape=(M=%d,N=%d,K=%d)",
+                decision,
+                layer_name,
+                M_dim,
+                N_dim,
+                K_dim,
+            )
+            layer._mi100_emit_int8_next_logged = True
 
         # Fused-path opt-in: the upstream MLP forward
         # (Qwen2MLP / Qwen2MoeMLP via
