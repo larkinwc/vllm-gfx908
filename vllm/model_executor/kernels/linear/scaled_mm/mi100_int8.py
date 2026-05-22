@@ -15,6 +15,9 @@ from vllm import _custom_ops as ops
 from vllm.model_executor.kernels.configs.gfx908.config_loader import (
     load_config as _load_mi100_autotune_config,
 )
+from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+    is_fused_silu_quant_int8_enabled,
+)
 from vllm.model_executor.layers.quantization.utils import replace_parameter
 from vllm.model_executor.layers.quantization.utils.w8a8_utils import (
     convert_to_channelwise,
@@ -34,6 +37,20 @@ from .ScaledMMLinearKernel import (
 
 logger = logging.getLogger(__name__)
 _mi100_int8_logged = False
+
+# Mission-wide env probe — recorded once per import so the engine log shows
+# which silu→quant code path the W8A8 MI100 dispatcher will use. The probe
+# only inspects the env state; the actual per-call dispatch additionally
+# requires an upstream ``SiluAndMul`` to have stashed a fused cache on the
+# layer (see ``MI100Int8ScaledMMLinearKernel.apply_weights``).
+logger.info(
+    "[MI100_FUSED_ACT_QUANT] W8A8 dispatcher fused_silu_quant_int8 default: "
+    "enabled=%s (VLLM_MI100_DISABLE_FUSED_ACT_QUANT=%r, "
+    "VLLM_DISABLE_FUSED_ACT_QUANT=%r)",
+    is_fused_silu_quant_int8_enabled(),
+    os.environ.get("VLLM_MI100_DISABLE_FUSED_ACT_QUANT", "(unset)"),
+    os.environ.get("VLLM_DISABLE_FUSED_ACT_QUANT", "(unset)"),
+)
 
 # M2 GEMM-shape logging instrumentation (env-flag gated).
 # Set VLLM_LOG_GEMM_SHAPES=1 to dump (M,N,K) tuples of every W8A8
@@ -496,7 +513,55 @@ class MI100Int8ScaledMMLinearKernel(Int8ScaledMMLinearKernel):
         x: torch.Tensor,
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        """W8A8 INT8 linear forward (gfx908).
+
+        When the env-gated ``fused_silu_quant_int8`` path is active (the
+        default; disabled by ``VLLM_MI100_DISABLE_FUSED_ACT_QUANT=1`` or the
+        legacy alias ``VLLM_DISABLE_FUSED_ACT_QUANT=1``) AND an upstream
+        ``SiluAndMul`` has stashed a fused (int8, scale) cache on this layer
+        via the ``_mi100_fused_silu_cache`` attribute, the activation
+        quantization step is skipped — the cached per-token int8 + fp32 scale
+        flow straight into the W8A8 GEMM, eliminating one HBM round-trip on
+        the MLP path (issue #33).
+
+        When the cache attribute is absent (no upstream wire-in) OR the
+        env-gated flag is set, behavior is byte-identical to the legacy
+        ``scaled_int8_quant`` + ``mi100_int8_scaled_mm`` composition.
+        """
         w_q, w_s, i_s, i_zp, _ = self._get_layer_params(layer)
+
+        # Fused-path opt-in: the upstream MLP forward
+        # (Qwen2MLP / Qwen2MoeMLP via
+        # ``try_stash_fused_silu_quant_int8``) may stash the result of
+        # ``fused_silu_quant_int8`` on this consuming layer just before
+        # invoking the GEMM. The cache shape is ``(int8 [M, K], fp32
+        # [M, 1])`` matching ``ops.scaled_int8_quant`` semantics. The
+        # producer is the single point that gates on
+        # ``VLLM_MI100_DISABLE_FUSED_ACT_QUANT`` — once the cache exists
+        # the consumer MUST honor it (the producer skipped the legacy
+        # silu_and_mul call so falling through here would feed the GEMM
+        # a 0-element placeholder and crash). Disable-path semantics
+        # are preserved end-to-end because env-disabled producers never
+        # stash in the first place.
+        fused_cache = getattr(layer, "_mi100_fused_silu_cache", None)
+        if fused_cache is not None:
+            # Always clear the cache so a stale stash from a prior layer does
+            # not leak into a later forward. Done first so an exception in
+            # the GEMM does not orphan the attribute on the layer.
+            layer._mi100_fused_silu_cache = None
+            x_q, x_s = fused_cache
+            assert x_q.dtype == torch.int8, (
+                "fused_silu_quant_int8 cache must carry int8 activations; "
+                f"got {x_q.dtype}."
+            )
+            return mi100_int8_scaled_mm(
+                x_q,
+                w_q,
+                scale_a=x_s,
+                scale_b=w_s,
+                out_dtype=x.dtype,
+                bias=bias,
+            )
 
         # Quantize activations to INT8 (dynamic per-token or static)
         x_q, x_s, x_zp = ops.scaled_int8_quant(
