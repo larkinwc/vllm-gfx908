@@ -185,6 +185,8 @@ def mi100_int8_scaled_mm_kernel(
     scale_b_ptr,
     c_ptr,
     bias_ptr,
+    out_int8_ptr,
+    out_scale_ptr,
     M,
     N,
     K,
@@ -200,6 +202,7 @@ def mi100_int8_scaled_mm_kernel(
     BLOCK_SIZE_SCALE_A: tl.constexpr,
     BLOCK_SIZE_SCALE_B: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
+    EMIT_INT8_NEXT: tl.constexpr = False,
 ):
     pid = tl.program_id(axis=0)
 
@@ -281,14 +284,67 @@ def mi100_int8_scaled_mm_kernel(
         bias_vec = tl.load(bias_ptrs, bias_mask).to(tl.float32)
         result = result + bias_vec[None, :]
 
-    c = result.to(c_ptr.type.element_ty)
-
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)
-    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
 
-    tl.store(c_ptrs, c, mask=c_mask)
+    if EMIT_INT8_NEXT:
+        # M2 INT8-emit store epilogue (issue #26). The fp16 output tile is
+        # converted to per-token-scaled int8 in registers/LDS *before* the
+        # HBM store, so the next consuming W8A8 GEMM can read the int8 +
+        # fp32 scale tensors directly without a fp16→int8 dequant/requant
+        # round-trip through HBM. The per-token absmax is reduced across
+        # the BLOCK_SIZE_N tile dimension; the dispatcher
+        # (mi100_int8_dispatch.py) is responsible for only activating this
+        # path when BLOCK_SIZE_N covers the full row N (i.e. a single
+        # column tile per (pid_m, ...)) — otherwise the per-tile reductions
+        # would disagree across pid_n shards for the same M-row.
+        # Mask out-of-bounds columns to zero so they cannot inflate the
+        # absmax above the valid-data range.
+        col_mask = offs_cn[None, :] < N
+        result_masked = tl.where(col_mask, result, 0.0)
+        # Per-token absmax over the N tile (axis=-1).
+        row_absmax = tl.max(tl.abs(result_masked), axis=-1)
+        # Guard against zero rows (all-zero tile) — keep scale finite so
+        # the divide-and-round below stays well-defined; the resulting
+        # int8 row is still all-zero, which is the correct degenerate
+        # output for a zero input row.
+        eps = 1e-12
+        row_scale = tl.maximum(row_absmax, eps) / 127.0
+        # Quantize: int8 = round(result / scale * 127) ≡
+        # round(result / row_scale)  (since row_scale = absmax/127)
+        out_int8 = result_masked / row_scale[:, None]
+        # Symmetric round-half-to-even semantics via libdevice are not
+        # available across ROCm/CUDA in Triton 3.5.1; tl.extra.libdevice
+        # rint is fine on both. Fall back to round-to-nearest-even via
+        # the standard cast chain (float→int8 in Triton truncates toward
+        # zero, so add a 0.5 magnitude before casting).
+        out_int8 = tl.where(out_int8 >= 0, out_int8 + 0.5, out_int8 - 0.5)
+        # Clamp to int8 range before cast (defensive — should already be
+        # ≤ |127| after the scale).
+        out_int8 = tl.maximum(tl.minimum(out_int8, 127.0), -128.0)
+        out_int8 = out_int8.to(tl.int8)
+
+        out_int8_ptrs = (
+            out_int8_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+        )
+        out_int8_mask = (offs_cm[:, None] < M) & col_mask
+        tl.store(out_int8_ptrs, out_int8, mask=out_int8_mask)
+
+        # Per-token fp32 scale, shape [M, 1]. Store only when this program
+        # owns column tile 0 to avoid redundant writes across pid_n shards
+        # (dispatcher should guarantee a single pid_n in EMIT_INT8_NEXT
+        # mode, but be safe — the value is identical across shards in that
+        # configuration).
+        if pid_n == 0:
+            out_scale_ptrs = out_scale_ptr + offs_cm
+            out_scale_mask = offs_cm < M
+            tl.store(out_scale_ptrs, row_scale, mask=out_scale_mask)
+    else:
+        c = result.to(c_ptr.type.element_ty)
+        c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+        c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+
+        tl.store(c_ptrs, c, mask=c_mask)
 
 
 def mi100_int8_scaled_mm(
@@ -296,15 +352,26 @@ def mi100_int8_scaled_mm(
     weight: torch.Tensor,
     scale_a: torch.Tensor,
     scale_b: torch.Tensor,
-    out_dtype: type[torch.dtype],
+    out_dtype: type[torch.dtype] = torch.float16,
     bias: torch.Tensor | None = None,
-) -> torch.Tensor:
+    emit_int8_next: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     """MI100-optimized INT8 scaled matmul.
 
     input:  [M, K] int8
     weight: [K, N] int8
     scale_a: per-tensor [1,1] or per-token [M,1] float32
     scale_b: per-tensor [1,1] or per-channel [N,1] float32
+
+    When ``emit_int8_next=False`` (the default), behavior is byte-identical to
+    the legacy fp16 path: returns a single ``[M, N]`` tensor in ``out_dtype``.
+
+    When ``emit_int8_next=True``, the Triton kernel runs with
+    ``EMIT_INT8_NEXT=True``, fusing a per-token absmax→int8 quantization into
+    the store epilogue (issue #26). Returns ``(out_int8 [M, N] int8,
+    out_scale [M, 1] fp32)`` ready to feed the next W8A8 GEMM without an
+    intermediate fp16 HBM round-trip. The CK/hipBLASLt fast paths are skipped
+    in this mode — they emit fp16 only.
     """
     M, K = input.shape
     N = weight.shape[1]
@@ -321,27 +388,39 @@ def mi100_int8_scaled_mm(
     # defence-in-depth against the registry shifting between dispatch and
     # invocation. ``VLLM_DISABLE_CK=1`` short-circuits this branch and
     # falls through to the legacy hipBLASLt/Triton path.
-    tp_rank = _get_tp_rank()
-    backend = choose_backend(M, N, K, tp_rank)
-    if backend == "ck":
-        ck_supports = getattr(
-            getattr(torch.ops, "_rocm_C", None),
-            "ck_int8_gemm_supports",
-            None,
-        )
-        if ck_supports is not None and bool(ck_supports(M, N, K, tp_rank)):
-            return _ck_int8_dispatch(input, weight, scale_a, scale_b, out_dtype, bias)
+    # CK / hipBLASLt fast paths emit fp16 only; bypass them when the caller
+    # asks for the fused int8-emit epilogue (M2 issue #26). The Triton
+    # kernel below is the sole owner of EMIT_INT8_NEXT=True.
+    if not emit_int8_next:
+        tp_rank = _get_tp_rank()
+        backend = choose_backend(M, N, K, tp_rank)
+        if backend == "ck":
+            ck_supports = getattr(
+                getattr(torch.ops, "_rocm_C", None),
+                "ck_int8_gemm_supports",
+                None,
+            )
+            if ck_supports is not None and bool(ck_supports(M, N, K, tp_rank)):
+                return _ck_int8_dispatch(
+                    input, weight, scale_a, scale_b, out_dtype, bias
+                )
 
-    # M2 dispatch: prefer hipBLASLt for tuned shapes; otherwise fall through
-    # to the existing Triton kernel below. VLLM_DISABLE_HIPBLASLT=1 forces
-    # 100% Triton dispatch (validated by VAL-TENSILE-008).
-    if mi100_hipblaslt_supports(M, N, K):
-        return mi100_hipblaslt_scaled_mm(
-            input, weight, scale_a, scale_b, out_dtype, bias
-        )
+        # M2 dispatch: prefer hipBLASLt for tuned shapes; otherwise fall
+        # through to the existing Triton kernel below.
+        # VLLM_DISABLE_HIPBLASLT=1 forces 100% Triton dispatch (validated by
+        # VAL-TENSILE-008).
+        if mi100_hipblaslt_supports(M, N, K):
+            return mi100_hipblaslt_scaled_mm(
+                input, weight, scale_a, scale_b, out_dtype, bias
+            )
 
     scale_a = scale_a.reshape(-1, 1) if scale_a.dim() <= 1 else scale_a
     scale_b = scale_b.reshape(-1, 1) if scale_b.dim() <= 1 else scale_b
+    # Per-channel weight scales sometimes arrive as ``[1, N]`` (the call
+    # site that mirrors ``torch.matmul`` broadcasting); normalize to the
+    # ``[N, 1]`` layout the kernel expects.
+    if scale_b.dim() == 2 and scale_b.shape[0] == 1 and scale_b.shape[1] == N:
+        scale_b = scale_b.reshape(N, 1).contiguous()
 
     assert scale_a.dtype == scale_b.dtype and scale_a.is_floating_point()
     assert scale_a.shape[1] == 1 and (scale_a.shape[0] == 1 or scale_a.shape[0] == M)
@@ -352,6 +431,16 @@ def mi100_int8_scaled_mm(
     assert is_weak_contiguous(weight)
 
     result = torch.empty((M, N), dtype=out_dtype, device=input.device)
+    if emit_int8_next:
+        out_int8 = torch.empty((M, N), dtype=torch.int8, device=input.device)
+        out_scale = torch.empty((M, 1), dtype=torch.float32, device=input.device)
+    else:
+        # Tensors must be valid Triton args even when the constexpr branch
+        # is dead-code. Reuse ``result`` so the kernel sees a real buffer
+        # — the EMIT_INT8_NEXT=False branch never dereferences these
+        # pointers.
+        out_int8 = result
+        out_scale = result
 
     has_scalar = lambda x: x.shape[0] == 1 and x.shape[1] == 1
 
@@ -408,6 +497,19 @@ def mi100_int8_scaled_mm(
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
     )
 
+    # When emit_int8_next is True the int8 store uses ``stride_cm`` /
+    # ``stride_cn`` against ``out_int8_ptr``; both ``result`` and
+    # ``out_int8`` are freshly-allocated [M, N] row-major contiguous so
+    # their element strides agree. We deliberately pass the int8 strides
+    # in that mode to keep the kernel's stride math element-correct for
+    # the active store target.
+    if emit_int8_next:
+        stride_cm = out_int8.stride(0)
+        stride_cn = out_int8.stride(1)
+    else:
+        stride_cm = result.stride(0)
+        stride_cn = result.stride(1)
+
     mi100_int8_scaled_mm_kernel[grid](
         input,
         weight,
@@ -415,6 +517,8 @@ def mi100_int8_scaled_mm(
         scale_b,
         result,
         bias,
+        out_int8,
+        out_scale,
         M,
         N,
         K,
@@ -422,17 +526,20 @@ def mi100_int8_scaled_mm(
         input.stride(1),
         weight.stride(0),
         weight.stride(1),
-        result.stride(0),
-        result.stride(1),
+        stride_cm,
+        stride_cn,
         BLOCK_SIZE_M=block_size_m,
         BLOCK_SIZE_N=block_size_n,
         BLOCK_SIZE_K=block_size_k,
         BLOCK_SIZE_SCALE_A=block_size_sa,
         BLOCK_SIZE_SCALE_B=block_size_sb,
         GROUP_SIZE_M=group_size_m,
+        EMIT_INT8_NEXT=emit_int8_next,
         **extra_launch,
     )
 
+    if emit_int8_next:
+        return out_int8, out_scale
     return result
 
 
