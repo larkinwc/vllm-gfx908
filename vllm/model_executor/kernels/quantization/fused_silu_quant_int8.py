@@ -92,6 +92,38 @@ def _truthy(val: str | None) -> bool:
     return val.strip().lower() in {"1", "true", "yes", "on"}
 
 
+# One-shot guard so the legacy-alias deprecation warning fires at most once
+# per process. ``is_fused_silu_quant_int8_disabled`` is called from the hot
+# producer path (``try_stash_fused_silu_quant_int8``), so the warning MUST
+# NOT flood the log on every forward pass.
+_legacy_alias_warned: bool = False
+
+
+def _maybe_warn_legacy_alias() -> None:
+    """Emit a one-time deprecation warning when the user set the legacy
+    ``VLLM_DISABLE_FUSED_ACT_QUANT`` env var without the new primary
+    ``VLLM_MI100_DISABLE_FUSED_ACT_QUANT``. The legacy alias is still
+    honored (see :func:`is_fused_silu_quant_int8_disabled`) but will be
+    removed in a future release; users should migrate to the primary
+    variable.
+    """
+    global _legacy_alias_warned
+    if _legacy_alias_warned:
+        return
+    if os.environ.get(_ENV_PRIMARY) is not None:
+        # User explicitly set the primary; legacy alias state is moot.
+        return
+    if os.environ.get(_ENV_LEGACY) is None:
+        return
+    _legacy_alias_warned = True
+    logger.warning(
+        "[MI100_FUSED_ACT_QUANT] %s is a legacy alias and will be removed "
+        "in a future release; please migrate to %s.",
+        _ENV_LEGACY,
+        _ENV_PRIMARY,
+    )
+
+
 def is_fused_silu_quant_int8_disabled() -> bool:
     """Return True iff the user disabled the fused silu+quant kernel via env.
 
@@ -100,6 +132,7 @@ def is_fused_silu_quant_int8_disabled() -> bool:
     ``VLLM_DISABLE_FUSED_ACT_QUANT=1`` short-circuits the dispatcher to the
     byte-identical ``silu_and_mul`` + ``scaled_int8_quant`` composition.
     """
+    _maybe_warn_legacy_alias()
     return _truthy(os.environ.get(_ENV_PRIMARY)) or _truthy(os.environ.get(_ENV_LEGACY))
 
 
