@@ -110,8 +110,9 @@ if [[ -n "${CUDAGRAPH_MODE:-}" ]]; then
 fi
 
 OUT_ROOT=/root/bench-int8-w4a16-hbm/m4-final/launch_smoke
-mkdir -p "$OUT_ROOT/${cell_id}"
-LOG="$OUT_ROOT/${cell_id}/server.log"
+SERVER_LOG_DIR="${SERVER_LOG_DIR:-$OUT_ROOT/${cell_id}}"
+mkdir -p "$SERVER_LOG_DIR"
+LOG="$SERVER_LOG_DIR/server.log"
 
 # ---------------------------------------------------------------------------
 # CLI arg parsing (backwards-compatible: no args → mode=--check, port=8000)

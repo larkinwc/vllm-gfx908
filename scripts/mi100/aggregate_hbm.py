@@ -78,6 +78,12 @@ TPS_BY_MILESTONE: dict[str, tuple[int, ...]] = {
     # cell JSONs (not against the production final_grid.csv), so all
     # 24 cells (TP=1 + TP=4) are in scope.
     "m1-flash-tune": (1, 4),
+    # The Fused Activation-Quant mission's M4 grid covers all 24 cells
+    # (TP=1 + TP=4); its baseline is the per-cell production raw.json
+    # at /root/bench-int8-w4a16/baseline/raw_*/raw.json (NOT
+    # final_grid.csv — see library/fused-act-quant-mission-context.md
+    # §9 / AGENTS.md anti-pattern #10).
+    "m4-fused-act-quant": (1, 4),
 }
 
 # Decode-dominated cells used by the win-bar evaluation.
@@ -96,7 +102,14 @@ BENCH_ROOT = Path("/root/bench-int8-w4a16-hbm")
 # /root/bench-int8-w4a16-hbm-fa/m1-tuning/ (NOT the prior mission's
 # /root/bench-int8-w4a16-hbm/<milestone>/ path).
 BENCH_ROOT_FLASH_TUNE = Path("/root/bench-int8-w4a16-hbm-fa/m1-tuning")
+# The Fused Activation-Quant mission's m4-bench grid lands under
+# /root/bench-int8-w4a16-fused/m4-bench/{w8a8,w4a16}/<cell>_<wl>.json.
+BENCH_ROOT_FUSED_M4 = Path("/root/bench-int8-w4a16-fused/m4-bench")
 PROD_CSV = Path("/root/bench-int8-w4a16/final/final_grid.csv")
+# Per-cell production baseline raw JSONs (anti-pattern #10: NOT
+# final_grid.csv). Directory layout:
+#   /root/bench-int8-w4a16/baseline/raw_<cell>_<wl>_<8-char-suffix>/raw.json
+PROD_RAW_BASELINE_ROOT = Path("/root/bench-int8-w4a16/baseline")
 
 # Map metric label -> raw.json field name (mirrors METRICS above; used when
 # loading per-cell JSONs as the comparison baseline instead of a CSV).
@@ -107,6 +120,8 @@ def bench_root_for(milestone: str) -> Path:
     """Return the bench-root path that contains <milestone>'s cell JSONs."""
     if milestone == "m1-flash-tune":
         return BENCH_ROOT_FLASH_TUNE
+    if milestone == "m4-fused-act-quant":
+        return BENCH_ROOT_FUSED_M4
     return BENCH_ROOT / milestone
 
 
@@ -159,12 +174,181 @@ def load_cell(milestone: str, quant: str, tp: int, conc: int, workload: str) -> 
         # m1-flash-tune writes under /root/bench-int8-w4a16-hbm-fa/m1-tuning/
         # (no milestone subdir below the bench root).
         p = BENCH_ROOT_FLASH_TUNE / quant / f"{quant}_tp{tp}_c{conc}_{workload}.json"
+    elif milestone == "m4-fused-act-quant":
+        p = BENCH_ROOT_FUSED_M4 / quant / f"{quant}_tp{tp}_c{conc}_{workload}.json"
     else:
         p = BENCH_ROOT / milestone / quant / f"{quant}_tp{tp}_c{conc}_{workload}.json"
     if not p.exists():
         raise FileNotFoundError(f"missing milestone cell JSON: {p}")
     with open(p) as f:
         return json.load(f)
+
+
+def load_production_raw_baseline() -> dict[tuple[str, str], dict]:
+    """Return mapping ``(cell_id, workload) -> raw.json dict`` from the
+    per-cell production baseline at /root/bench-int8-w4a16/baseline/raw_*/.
+
+    Each ``raw_<cell_id>_<workload>_<8-char-suffix>/raw.json`` is the
+    canonical per-cell baseline used by the Fused Activation-Quant mission
+    (see library/fused-act-quant-mission-context.md §9). For cells with
+    multiple raw_* directories (e.g., a re-run), the most recently modified
+    raw.json wins.
+    """
+    base: dict[tuple[str, str], dict] = {}
+    base_mtime: dict[tuple[str, str], float] = {}
+    if not PROD_RAW_BASELINE_ROOT.exists():
+        raise FileNotFoundError(
+            f"missing per-cell production baseline: {PROD_RAW_BASELINE_ROOT}"
+        )
+    for raw_dir in sorted(PROD_RAW_BASELINE_ROOT.glob("raw_*")):
+        # raw_<quant>_<tp>_<c>_<workload>_<suffix>
+        parts = raw_dir.name.split("_")
+        if len(parts) < 6:
+            continue
+        # parts[0] == 'raw'
+        cell_id = "_".join(parts[1:4])  # e.g. w8a8_tp1_c1
+        workload = parts[4]  # synthetic | coding
+        raw_file = raw_dir / "raw.json"
+        if not raw_file.exists():
+            continue
+        try:
+            data = json.loads(raw_file.read_text())
+        except Exception:  # noqa: BLE001
+            continue
+        mtime = raw_file.stat().st_mtime
+        key = (cell_id, workload)
+        if key not in base or mtime > base_mtime.get(key, -1.0):
+            base[key] = data
+            base_mtime[key] = mtime
+    return base
+
+
+# Prefill-dominated cells (see m4-bench-grid VAL-M4-003): TP=1 c=1 W8A8
+# synthetic is the canonical prefill-dominated cell; TP=1 c=2 W8A8
+# synthetic is the secondary candidate. Used for the win-bar check.
+PREFILL_DOMINATED_CELLS: set[tuple[str, str]] = {
+    ("w8a8_tp1_c1", "synthetic"),
+    ("w8a8_tp1_c2", "synthetic"),
+}
+
+
+def fused_m4_vs_baseline_rows(
+    raw_baseline: dict[tuple[str, str], dict],
+) -> list[dict[str, object]]:
+    """Build the m4_vs_baseline_grid.csv rows for the Fused mission.
+
+    Each row corresponds to one of the 24 fused-mission m4 cells joined
+    against the per-cell production raw.json baseline on
+    ``(cell_id, workload)``. Columns:
+
+        cell_id, workload, baseline_tput, fused_tput, delta_tput_pct,
+        baseline_ttft, fused_ttft, delta_ttft_pct,
+        prefill_dominated_bool
+
+    where ``delta_tput_pct = (fused - baseline) / baseline * 100`` and
+    ``delta_ttft_pct = (fused - baseline) / baseline * 100`` (negative
+    delta_ttft_pct is an improvement).
+    """
+    rows: list[dict[str, object]] = []
+    for quant in QUANTS:
+        for tp in (1, 4):
+            for conc in (1, 2, 4):
+                cell_id = f"{quant}_tp{tp}_c{conc}"
+                for wl in WORKLOADS:
+                    try:
+                        cell = load_cell("m4-fused-act-quant", quant, tp, conc, wl)
+                    except FileNotFoundError:
+                        cell = {}
+                    base = raw_baseline.get((cell_id, wl), {})
+                    # Production raw.json uses 'output_throughput'; cell
+                    # JSON uses 'output_throughput_toks_s'.
+                    base_tput = float(base.get("output_throughput") or 0.0)
+                    fused_tput = float(cell.get("output_throughput_toks_s") or 0.0)
+                    base_ttft = float(base.get("mean_ttft_ms") or 0.0)
+                    fused_ttft = float(cell.get("mean_ttft_ms") or 0.0)
+                    if base_tput > 0:
+                        d_tput = (fused_tput - base_tput) / base_tput * 100.0
+                    else:
+                        d_tput = float("nan")
+                    if base_ttft > 0:
+                        d_ttft = (fused_ttft - base_ttft) / base_ttft * 100.0
+                    else:
+                        d_ttft = float("nan")
+                    rows.append(
+                        {
+                            "cell_id": cell_id,
+                            "workload": wl,
+                            "baseline_tput": base_tput,
+                            "fused_tput": fused_tput,
+                            "delta_tput_pct": d_tput,
+                            "baseline_ttft": base_ttft,
+                            "fused_ttft": fused_ttft,
+                            "delta_ttft_pct": d_ttft,
+                            "prefill_dominated_bool": (cell_id, wl)
+                            in PREFILL_DOMINATED_CELLS,
+                        }
+                    )
+    return rows
+
+
+def write_fused_m4_csv(rows: list[dict[str, object]], out: Path) -> None:
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cols = [
+        "cell_id",
+        "workload",
+        "baseline_tput",
+        "fused_tput",
+        "delta_tput_pct",
+        "baseline_ttft",
+        "fused_ttft",
+        "delta_ttft_pct",
+        "prefill_dominated_bool",
+    ]
+    with open(out, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(cols)
+        for r in rows:
+
+            def fmt(v: object) -> str:
+                if isinstance(v, float):
+                    if math.isnan(v):
+                        return ""
+                    return f"{v:.6f}"
+                if isinstance(v, bool):
+                    return "true" if v else "false"
+                return str(v)
+
+            w.writerow([fmt(r[c]) for c in cols])
+
+
+def fused_m4_win_bar(
+    rows: list[dict[str, object]],
+    tput_thresh: float = 0.1,
+    ttft_thresh: float = -0.1,
+) -> tuple[bool, list[dict[str, object]]]:
+    """Evaluate the research-mode win-bar (VAL-M4-003).
+
+    The win-bar is met if at least one prefill-dominated cell shows:
+      delta_tput_pct >= +0.1%  OR  delta_ttft_pct <= -0.1%
+
+    Returns (met, list_of_winning_rows). The list will be empty if the
+    win-bar is not met.
+    """
+    winning: list[dict[str, object]] = []
+    for r in rows:
+        if not r.get("prefill_dominated_bool"):
+            continue
+        d_t = r.get("delta_tput_pct")
+        d_ttft = r.get("delta_ttft_pct")
+        t_ok = isinstance(d_t, float) and not math.isnan(d_t) and d_t >= tput_thresh
+        ttft_ok = (
+            isinstance(d_ttft, float)
+            and not math.isnan(d_ttft)
+            and d_ttft <= ttft_thresh
+        )
+        if t_ok or ttft_ok:
+            winning.append(r)
+    return (len(winning) > 0, winning)
 
 
 def delta_pct(milestone_value: float, production_value: float) -> float:
@@ -513,7 +697,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--milestone",
         required=True,
-        choices=["m1-kvint8", "m2-chunked", "m3-tp", "m4-final", "m1-flash-tune"],
+        choices=[
+            "m1-kvint8",
+            "m2-chunked",
+            "m3-tp",
+            "m4-final",
+            "m1-flash-tune",
+            "m4-fused-act-quant",
+        ],
         help="Milestone identifier (used as both the bench subdir and the "
         "CSV/Markdown filename prefix).",
     )
@@ -538,6 +729,82 @@ def main() -> int:
     args = parse_args()
     milestone = args.milestone
     milestone_key = milestone.replace("-", "_")
+
+    # m4-fused-act-quant has its own per-cell baseline (production raw.json
+    # files, NOT final_grid.csv) and its own CSV format (the spec defines
+    # a 9-column m4_vs_baseline_grid.csv). Handle it ahead of the
+    # general-milestone flow.
+    if milestone == "m4-fused-act-quant":
+        raw_baseline = load_production_raw_baseline()
+        rows = fused_m4_vs_baseline_rows(raw_baseline)
+        out_dir = bench_root_for(milestone)
+        csv_out = out_dir / "m4_vs_baseline_grid.csv"
+        write_fused_m4_csv(rows, csv_out)
+        met, winning = fused_m4_win_bar(rows)
+        # Emit a human-readable summary alongside the CSV.
+        md_out = out_dir / "m4_vs_baseline_grid.md"
+        md_lines: list[str] = [
+            "## m4-fused-act-quant — 24-cell delta vs production baseline",
+            "",
+            (
+                "Baseline source: per-cell raw.json under "
+                "`/root/bench-int8-w4a16/baseline/raw_*/` (per-cell, "
+                "NOT `final_grid.csv` — see "
+                "`library/fused-act-quant-mission-context.md` §9)."
+            ),
+            "",
+            (
+                "| cell_id | workload | baseline_tput | fused_tput | "
+                "Δ tput % | baseline_ttft | fused_ttft | Δ ttft % | "
+                "prefill_dom |"
+            ),
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
+        ]
+        for r in rows:
+            d_t = r["delta_tput_pct"]
+            d_ttft = r["delta_ttft_pct"]
+            d_t_s = "—" if isinstance(d_t, float) and math.isnan(d_t) else f"{d_t:+.2f}"
+            d_ttft_s = (
+                "—"
+                if isinstance(d_ttft, float) and math.isnan(d_ttft)
+                else f"{d_ttft:+.2f}"
+            )
+            md_lines.append(
+                f"| {r['cell_id']} | {r['workload']} | "
+                f"{r['baseline_tput']:.4f} | {r['fused_tput']:.4f} | "
+                f"{d_t_s} | {r['baseline_ttft']:.2f} | "
+                f"{r['fused_ttft']:.2f} | {d_ttft_s} | "
+                f"{'yes' if r['prefill_dominated_bool'] else ''} |"
+            )
+        md_lines.append("")
+        md_lines.append("### Win-bar (research-mode, VAL-M4-003)")
+        md_lines.append("")
+        md_lines.append(
+            "At least one prefill-dominated cell must show "
+            "`delta_tput_pct >= +0.1%` OR `delta_ttft_pct <= -0.1%`. "
+            "Prefill-dominated cells: "
+            + ", ".join(f"`{c}/{w}`" for c, w in sorted(PREFILL_DOMINATED_CELLS))
+            + "."
+        )
+        md_lines.append("")
+        md_lines.append(f"Result: **{'WIN-BAR-MET' if met else 'WIN-BAR-NOT-MET'}**")
+        if winning:
+            md_lines.append("")
+            md_lines.append("Winning cells:")
+            for r in winning:
+                md_lines.append(
+                    f"- {r['cell_id']}/{r['workload']}: "
+                    f"Δtput={r['delta_tput_pct']:+.2f}%, "
+                    f"Δttft={r['delta_ttft_pct']:+.2f}%"
+                )
+        md = "\n".join(md_lines)
+        md_out.write_text(md + "\n")
+        print(md)
+        print()
+        print(f"# CSV:  {csv_out}")
+        print(f"# MD:   {md_out}")
+        print(f"# WIN_BAR: {'MET' if met else 'NOT_MET'}")
+        return 0
 
     # Decide baseline source: per-cell JSON root (preferred when --baseline-root
     # given or milestone=m1-flash-tune) vs the production CSV.
