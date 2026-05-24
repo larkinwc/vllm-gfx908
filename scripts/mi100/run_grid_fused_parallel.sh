@@ -375,10 +375,6 @@ model_path_for() {
     w4a16) echo "/models/Qwen3.5-9B-w4a16" ;;
   esac
 }
-launch_script_for() {
-  # Args: quant tp conc  -> echoes absolute path to launch_hbm_*.sh
-  echo "$REPO/scripts/launch_${1}_tp${2}_c${3}.sh"  # placeholder
-}
 
 # Run one (quant, tp, conc, workload) bench against an already-healthy server
 # on $1 (PORT). Writes the schema-conformant per-cell JSON.
