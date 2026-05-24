@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: Apache-2.0
+# Mission: f74e8645-0bfb-462a-963d-84d7196b0f6c (MI100 Fused Activation-Quant Epilogue)
+# rocprofv3 PMC counter file for M4 HBM-bytes-per-token evidence (VAL-M4-005).
+#
+# Counters (per VAL-M4-005):
+#   VALUUtilization — VALU lane occupancy (%)
+#   TCC_HIT         — L2 cache hits (sum over all TCC instances)
+#   FETCH_SIZE      — total kilobytes fetched from HBM (per kernel dispatch)
+#   WRITE_SIZE      — total kilobytes written to HBM (per kernel dispatch)
+#
+# `pmc` lines are multi-pass groups: counters within the same line are
+# collected in a single hardware pass; separate `pmc` lines trigger
+# kernel replay for multi-pass collection.
+pmc: FETCH_SIZE WRITE_SIZE
+pmc: VALUUtilization TCC_HIT

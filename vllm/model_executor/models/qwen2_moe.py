@@ -113,6 +113,20 @@ class Qwen2MoeMLP(nn.Module):
 
     def forward(self, x):
         gate_up, _ = self.gate_up_proj(x)
+        # M1 silu→quant fusion (issue #33): stash an (int8, scale) cache
+        # on ``down_proj`` so its W8A8 INT8 ``apply_weights`` consumer
+        # skips the legacy ``scaled_int8_quant`` HBM round-trip. The
+        # subsequent ``act_fn(gate_up)`` + ``down_proj`` call sequence
+        # is preserved so the captured CUDA-graph shapes match clean
+        # HEAD; the consumer prefers the cache when present. Every
+        # negative branch in the helper (env-disable, non-W8A8 path,
+        # shape mismatch) leaves the cache untouched so the fall-through
+        # is byte-identical.
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            try_stash_fused_silu_quant_int8,
+        )
+
+        try_stash_fused_silu_quant_int8(gate_up, self.down_proj)
         out = self.act_fn(gate_up)
         out, _ = self.down_proj(out)
 

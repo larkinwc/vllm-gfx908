@@ -110,18 +110,48 @@ if [[ -n "${CUDAGRAPH_MODE:-}" ]]; then
 fi
 
 OUT_ROOT=/root/bench-int8-w4a16-hbm/m4-final/launch_smoke
-mkdir -p "$OUT_ROOT/${cell_id}"
-LOG="$OUT_ROOT/${cell_id}/server.log"
+SERVER_LOG_DIR="${SERVER_LOG_DIR:-$OUT_ROOT/${cell_id}}"
+mkdir -p "$SERVER_LOG_DIR"
+LOG="$SERVER_LOG_DIR/server.log"
 
-mode=${1:---check}
+# ---------------------------------------------------------------------------
+# CLI arg parsing (backwards-compatible: no args → mode=--check, port=8000)
+# ---------------------------------------------------------------------------
+PORT=8000
+mode=--check
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --port)
+      PORT="$2"
+      shift 2
+      ;;
+    --serve-only|--check)
+      mode="$1"
+      shift
+      ;;
+    *)
+      echo "[launch_hbm_$cell_id] unknown arg: $1" >&2
+      exit 1
+      ;;
+  esac
+done
 
 # ---------------------------------------------------------------------------
 # Lifecycle helpers
 # ---------------------------------------------------------------------------
 stop_server() {
-  pkill -9 -f 'vllm.entrypoints' 2>/dev/null || true
-  pkill -9 -f 'VLLM::' 2>/dev/null || true
-  sleep 2
+  # Default mode (no HIP_VISIBLE_DEVICES override, port 8000) keeps the
+  # original global pkill teardown — required by AGENTS.md anti-pattern #8.
+  # Parallel mode (caller pins HIP_VISIBLE_DEVICES and/or a non-8000 port)
+  # kills only the server we spawned, so sibling cells survive.
+  if [[ -z "${HIP_VISIBLE_DEVICES:-}" && "${PORT:-8000}" == "8000" ]]; then
+    pkill -9 -f 'vllm.entrypoints' 2>/dev/null || true
+    pkill -9 -f 'VLLM::' 2>/dev/null || true
+    sleep 2
+  elif [[ -n "${SERVER_PID:-}" ]]; then
+    kill -9 "$SERVER_PID" 2>/dev/null || true
+    sleep 1
+  fi
 }
 
 trap stop_server EXIT
@@ -130,7 +160,12 @@ stop_server
 # ---------------------------------------------------------------------------
 # Start server
 # ---------------------------------------------------------------------------
-export CUDA_VISIBLE_DEVICES=0
+# Honor caller-supplied HIP_VISIBLE_DEVICES; otherwise preserve legacy
+# single-GPU pin (GPU 0 via CUDA_VISIBLE_DEVICES) for byte-identical default
+# behavior with prior invocations.
+if [[ -z "${HIP_VISIBLE_DEVICES:-}" ]]; then
+  export CUDA_VISIBLE_DEVICES=0
+fi
 
 /opt/vllm-env/bin/python3 -m vllm.entrypoints.openai.api_server \
     --model "$model_path" \
@@ -141,7 +176,7 @@ export CUDA_VISIBLE_DEVICES=0
     --enable-prefix-caching \
     --language-model-only \
     --gpu-memory-utilization 0.93 \
-    --port 8000  "${KV_CACHE_DTYPE_FLAG[@]}" "${MAX_NUM_BATCHED_TOKENS_FLAG[@]}" "${ENABLE_CHUNKED_PREFILL_FLAG[@]}" "${CUDAGRAPH_MODE_FLAG[@]}" > "$LOG" 2>&1 &
+    --port "$PORT"  "${KV_CACHE_DTYPE_FLAG[@]}" "${MAX_NUM_BATCHED_TOKENS_FLAG[@]}" "${ENABLE_CHUNKED_PREFILL_FLAG[@]}" "${CUDAGRAPH_MODE_FLAG[@]}" > "$LOG" 2>&1 &
 SERVER_PID=$!
 echo "[launch_hbm_$cell_id] server PID=$SERVER_PID; log=$LOG"
 
@@ -149,7 +184,7 @@ echo "[launch_hbm_$cell_id] server PID=$SERVER_PID; log=$LOG"
 HEALTH_WAIT_SECS=${LAUNCH_HEALTH_WAIT_SECS:-300}
 poll_count=$(( HEALTH_WAIT_SECS / 5 ))
 for i in $(seq 1 "$poll_count"); do
-  if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
+  if curl -sf "http://localhost:${PORT}/health" >/dev/null 2>&1; then
     echo "[launch_hbm_$cell_id] healthcheck OK after ${i} x5 s"
     break
   fi
@@ -160,7 +195,7 @@ for i in $(seq 1 "$poll_count"); do
   fi
   sleep 5
 done
-if ! curl -sf http://localhost:8000/health >/dev/null 2>&1; then
+if ! curl -sf "http://localhost:${PORT}/health" >/dev/null 2>&1; then
   echo "[launch_hbm_$cell_id] FATAL: server did not become healthy in ${HEALTH_WAIT_SECS} s"
   tail -n 60 "$LOG"
   exit 2
@@ -180,7 +215,7 @@ mkdir -p "$RAW_DIR"
 
 /opt/vllm-env/bin/python3 -m vllm.entrypoints.cli.main bench serve \
     --model "$model_path" \
-    --base-url http://127.0.0.1:8000 \
+    --base-url "http://127.0.0.1:${PORT}" \
     --num-prompts 200 \
     --request-rate inf \
     --max-concurrency 2 \

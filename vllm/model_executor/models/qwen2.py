@@ -112,6 +112,22 @@ class Qwen2MLP(nn.Module):
 
     def forward(self, x):
         gate_up, _ = self.gate_up_proj(x)
+        # M1 silu→quant fusion (issue #33): when the env-gated MI100
+        # W8A8 path is active AND ``down_proj`` is bound to
+        # MI100Int8ScaledMMLinearKernel, stash an (int8, scale) cache on
+        # ``down_proj`` so its ``apply_weights`` consumer skips the
+        # legacy ``scaled_int8_quant`` HBM round-trip. The legacy
+        # ``act_fn(gate_up)`` call remains, but is *redundant* on the
+        # fused path; the cache was computed directly from ``gate_up``
+        # by ``fused_silu_quant_int8`` and the consumer prefers it. On
+        # every negative branch (env-disable, non-W8A8 path, shape
+        # mismatch) the helper returns False with no side effects so
+        # behavior is byte-identical to clean HEAD.
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            try_stash_fused_silu_quant_int8,
+        )
+
+        try_stash_fused_silu_quant_int8(gate_up, self.down_proj)
         x = self.act_fn(gate_up)
         x, _ = self.down_proj(x)
         return x

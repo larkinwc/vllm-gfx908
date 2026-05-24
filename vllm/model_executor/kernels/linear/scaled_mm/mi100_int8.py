@@ -15,6 +15,9 @@ from vllm import _custom_ops as ops
 from vllm.model_executor.kernels.configs.gfx908.config_loader import (
     load_config as _load_mi100_autotune_config,
 )
+from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+    is_fused_silu_quant_int8_enabled,
+)
 from vllm.model_executor.layers.quantization.utils import replace_parameter
 from vllm.model_executor.layers.quantization.utils.w8a8_utils import (
     convert_to_channelwise,
@@ -26,7 +29,10 @@ from .mi100_hipblaslt import (
     mi100_hipblaslt_scaled_mm,
     mi100_hipblaslt_supports,
 )
-from .mi100_int8_dispatch import choose_backend
+from .mi100_int8_dispatch import (
+    choose_backend,
+    choose_emit_int8_next,
+)
 from .ScaledMMLinearKernel import (
     Int8ScaledMMLinearKernel,
     Int8ScaledMMLinearLayerConfig,
@@ -34,6 +40,20 @@ from .ScaledMMLinearKernel import (
 
 logger = logging.getLogger(__name__)
 _mi100_int8_logged = False
+
+# Mission-wide env probe — recorded once per import so the engine log shows
+# which silu→quant code path the W8A8 MI100 dispatcher will use. The probe
+# only inspects the env state; the actual per-call dispatch additionally
+# requires an upstream ``SiluAndMul`` to have stashed a fused cache on the
+# layer (see ``MI100Int8ScaledMMLinearKernel.apply_weights``).
+logger.info(
+    "[MI100_FUSED_ACT_QUANT] W8A8 dispatcher fused_silu_quant_int8 default: "
+    "enabled=%s (VLLM_MI100_DISABLE_FUSED_ACT_QUANT=%r, "
+    "VLLM_DISABLE_FUSED_ACT_QUANT=%r)",
+    is_fused_silu_quant_int8_enabled(),
+    os.environ.get("VLLM_MI100_DISABLE_FUSED_ACT_QUANT", "(unset)"),
+    os.environ.get("VLLM_DISABLE_FUSED_ACT_QUANT", "(unset)"),
+)
 
 # M2 GEMM-shape logging instrumentation (env-flag gated).
 # Set VLLM_LOG_GEMM_SHAPES=1 to dump (M,N,K) tuples of every W8A8
@@ -168,6 +188,8 @@ def mi100_int8_scaled_mm_kernel(
     scale_b_ptr,
     c_ptr,
     bias_ptr,
+    out_int8_ptr,
+    out_scale_ptr,
     M,
     N,
     K,
@@ -183,6 +205,7 @@ def mi100_int8_scaled_mm_kernel(
     BLOCK_SIZE_SCALE_A: tl.constexpr,
     BLOCK_SIZE_SCALE_B: tl.constexpr,
     GROUP_SIZE_M: tl.constexpr,
+    EMIT_INT8_NEXT: tl.constexpr = False,
 ):
     pid = tl.program_id(axis=0)
 
@@ -264,14 +287,67 @@ def mi100_int8_scaled_mm_kernel(
         bias_vec = tl.load(bias_ptrs, bias_mask).to(tl.float32)
         result = result + bias_vec[None, :]
 
-    c = result.to(c_ptr.type.element_ty)
-
     offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M).to(tl.int64)
     offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N).to(tl.int64)
-    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
 
-    tl.store(c_ptrs, c, mask=c_mask)
+    if EMIT_INT8_NEXT:
+        # M2 INT8-emit store epilogue (issue #26). The fp16 output tile is
+        # converted to per-token-scaled int8 in registers/LDS *before* the
+        # HBM store, so the next consuming W8A8 GEMM can read the int8 +
+        # fp32 scale tensors directly without a fp16→int8 dequant/requant
+        # round-trip through HBM. The per-token absmax is reduced across
+        # the BLOCK_SIZE_N tile dimension; the dispatcher
+        # (mi100_int8_dispatch.py) is responsible for only activating this
+        # path when BLOCK_SIZE_N covers the full row N (i.e. a single
+        # column tile per (pid_m, ...)) — otherwise the per-tile reductions
+        # would disagree across pid_n shards for the same M-row.
+        # Mask out-of-bounds columns to zero so they cannot inflate the
+        # absmax above the valid-data range.
+        col_mask = offs_cn[None, :] < N
+        result_masked = tl.where(col_mask, result, 0.0)
+        # Per-token absmax over the N tile (axis=-1).
+        row_absmax = tl.max(tl.abs(result_masked), axis=-1)
+        # Guard against zero rows (all-zero tile) — keep scale finite so
+        # the divide-and-round below stays well-defined; the resulting
+        # int8 row is still all-zero, which is the correct degenerate
+        # output for a zero input row.
+        eps = 1e-12
+        row_scale = tl.maximum(row_absmax, eps) / 127.0
+        # Quantize: int8 = round(result / scale * 127) ≡
+        # round(result / row_scale)  (since row_scale = absmax/127)
+        out_int8 = result_masked / row_scale[:, None]
+        # Symmetric round-half-to-even semantics via libdevice are not
+        # available across ROCm/CUDA in Triton 3.5.1; tl.extra.libdevice
+        # rint is fine on both. Fall back to round-to-nearest-even via
+        # the standard cast chain (float→int8 in Triton truncates toward
+        # zero, so add a 0.5 magnitude before casting).
+        out_int8 = tl.where(out_int8 >= 0, out_int8 + 0.5, out_int8 - 0.5)
+        # Clamp to int8 range before cast (defensive — should already be
+        # ≤ |127| after the scale).
+        out_int8 = tl.maximum(tl.minimum(out_int8, 127.0), -128.0)
+        out_int8 = out_int8.to(tl.int8)
+
+        out_int8_ptrs = (
+            out_int8_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+        )
+        out_int8_mask = (offs_cm[:, None] < M) & col_mask
+        tl.store(out_int8_ptrs, out_int8, mask=out_int8_mask)
+
+        # Per-token fp32 scale, shape [M, 1]. Store only when this program
+        # owns column tile 0 to avoid redundant writes across pid_n shards
+        # (dispatcher should guarantee a single pid_n in EMIT_INT8_NEXT
+        # mode, but be safe — the value is identical across shards in that
+        # configuration).
+        if pid_n == 0:
+            out_scale_ptrs = out_scale_ptr + offs_cm
+            out_scale_mask = offs_cm < M
+            tl.store(out_scale_ptrs, row_scale, mask=out_scale_mask)
+    else:
+        c = result.to(c_ptr.type.element_ty)
+        c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+        c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+
+        tl.store(c_ptrs, c, mask=c_mask)
 
 
 def mi100_int8_scaled_mm(
@@ -279,15 +355,26 @@ def mi100_int8_scaled_mm(
     weight: torch.Tensor,
     scale_a: torch.Tensor,
     scale_b: torch.Tensor,
-    out_dtype: type[torch.dtype],
+    out_dtype: type[torch.dtype] = torch.float16,
     bias: torch.Tensor | None = None,
-) -> torch.Tensor:
+    emit_int8_next: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     """MI100-optimized INT8 scaled matmul.
 
     input:  [M, K] int8
     weight: [K, N] int8
     scale_a: per-tensor [1,1] or per-token [M,1] float32
     scale_b: per-tensor [1,1] or per-channel [N,1] float32
+
+    When ``emit_int8_next=False`` (the default), behavior is byte-identical to
+    the legacy fp16 path: returns a single ``[M, N]`` tensor in ``out_dtype``.
+
+    When ``emit_int8_next=True``, the Triton kernel runs with
+    ``EMIT_INT8_NEXT=True``, fusing a per-token absmax→int8 quantization into
+    the store epilogue (issue #26). Returns ``(out_int8 [M, N] int8,
+    out_scale [M, 1] fp32)`` ready to feed the next W8A8 GEMM without an
+    intermediate fp16 HBM round-trip. The CK/hipBLASLt fast paths are skipped
+    in this mode — they emit fp16 only.
     """
     M, K = input.shape
     N = weight.shape[1]
@@ -304,27 +391,39 @@ def mi100_int8_scaled_mm(
     # defence-in-depth against the registry shifting between dispatch and
     # invocation. ``VLLM_DISABLE_CK=1`` short-circuits this branch and
     # falls through to the legacy hipBLASLt/Triton path.
-    tp_rank = _get_tp_rank()
-    backend = choose_backend(M, N, K, tp_rank)
-    if backend == "ck":
-        ck_supports = getattr(
-            getattr(torch.ops, "_rocm_C", None),
-            "ck_int8_gemm_supports",
-            None,
-        )
-        if ck_supports is not None and bool(ck_supports(M, N, K, tp_rank)):
-            return _ck_int8_dispatch(input, weight, scale_a, scale_b, out_dtype, bias)
+    # CK / hipBLASLt fast paths emit fp16 only; bypass them when the caller
+    # asks for the fused int8-emit epilogue (M2 issue #26). The Triton
+    # kernel below is the sole owner of EMIT_INT8_NEXT=True.
+    if not emit_int8_next:
+        tp_rank = _get_tp_rank()
+        backend = choose_backend(M, N, K, tp_rank)
+        if backend == "ck":
+            ck_supports = getattr(
+                getattr(torch.ops, "_rocm_C", None),
+                "ck_int8_gemm_supports",
+                None,
+            )
+            if ck_supports is not None and bool(ck_supports(M, N, K, tp_rank)):
+                return _ck_int8_dispatch(
+                    input, weight, scale_a, scale_b, out_dtype, bias
+                )
 
-    # M2 dispatch: prefer hipBLASLt for tuned shapes; otherwise fall through
-    # to the existing Triton kernel below. VLLM_DISABLE_HIPBLASLT=1 forces
-    # 100% Triton dispatch (validated by VAL-TENSILE-008).
-    if mi100_hipblaslt_supports(M, N, K):
-        return mi100_hipblaslt_scaled_mm(
-            input, weight, scale_a, scale_b, out_dtype, bias
-        )
+        # M2 dispatch: prefer hipBLASLt for tuned shapes; otherwise fall
+        # through to the existing Triton kernel below.
+        # VLLM_DISABLE_HIPBLASLT=1 forces 100% Triton dispatch (validated by
+        # VAL-TENSILE-008).
+        if mi100_hipblaslt_supports(M, N, K):
+            return mi100_hipblaslt_scaled_mm(
+                input, weight, scale_a, scale_b, out_dtype, bias
+            )
 
     scale_a = scale_a.reshape(-1, 1) if scale_a.dim() <= 1 else scale_a
     scale_b = scale_b.reshape(-1, 1) if scale_b.dim() <= 1 else scale_b
+    # Per-channel weight scales sometimes arrive as ``[1, N]`` (the call
+    # site that mirrors ``torch.matmul`` broadcasting); normalize to the
+    # ``[N, 1]`` layout the kernel expects.
+    if scale_b.dim() == 2 and scale_b.shape[0] == 1 and scale_b.shape[1] == N:
+        scale_b = scale_b.reshape(N, 1).contiguous()
 
     assert scale_a.dtype == scale_b.dtype and scale_a.is_floating_point()
     assert scale_a.shape[1] == 1 and (scale_a.shape[0] == 1 or scale_a.shape[0] == M)
@@ -335,6 +434,16 @@ def mi100_int8_scaled_mm(
     assert is_weak_contiguous(weight)
 
     result = torch.empty((M, N), dtype=out_dtype, device=input.device)
+    if emit_int8_next:
+        out_int8 = torch.empty((M, N), dtype=torch.int8, device=input.device)
+        out_scale = torch.empty((M, 1), dtype=torch.float32, device=input.device)
+    else:
+        # Tensors must be valid Triton args even when the constexpr branch
+        # is dead-code. Reuse ``result`` so the kernel sees a real buffer
+        # — the EMIT_INT8_NEXT=False branch never dereferences these
+        # pointers.
+        out_int8 = result
+        out_scale = result
 
     has_scalar = lambda x: x.shape[0] == 1 and x.shape[1] == 1
 
@@ -387,9 +496,90 @@ def mi100_int8_scaled_mm(
     block_size_sa = 1 if has_scalar(scale_a) else block_size_m
     block_size_sb = 1 if has_scalar(scale_b) else block_size_n
 
+    # --- M2 wire-in correctness guard ---------------------------------------
+    # Discovered during m2-epilogue-fusion (commit a64742222) +
+    # m2-numerics-extension (commit 3f397bd95) + this m2-wire-in fix:
+    # the EMIT_INT8_NEXT store epilogue reduces the per-token absmax over a
+    # single BLOCK_SIZE_N tile rather than the full row ``N``. Only
+    # ``pid_n == 0`` writes ``out_scale[m]``. If a caller fires
+    # EMIT_INT8_NEXT=True with ``BLOCK_SIZE_N < N``, the int8 rows from
+    # ``pid_n > 0`` carry their own tile's absmax but the stored scale is
+    # tile-0's — so ``out_int8 * out_scale`` only reconstructs tile-0 values
+    # and silently corrupts tile-1+ outputs. The default heuristic above
+    # picks BLOCK_SIZE_N ∈ {64, 128} which span NONE of Qwen3.5-9B's N
+    # values {3584, 5120, 12544, 18944} in a single tile.
+    #
+    # The fix lives in the Python wrapper (NOT in the dispatcher's
+    # whitelist) so EMIT_INT8_NEXT=True is impossible to misuse from any
+    # caller — the dispatcher, the wrapper-level smoke, and the
+    # m2-numerics-extension tests all benefit. We force BLOCK_SIZE_N to
+    # ``next_power_of_2(N)`` and assert ``block_size_n >= N`` as
+    # defense-in-depth.
+    if emit_int8_next:
+        # Clamp at 32768: forcing BLOCK_SIZE_N > 32768 would push the
+        # per-tile numel past Triton's 2**20 cap on realistic BLOCK_SIZE_M
+        # values. Qwen3.5-9B's largest N is 18944, well under this cap.
+        _EMIT_INT8_NEXT_BLOCK_N_CAP = 32768
+        forced_block_n = triton.next_power_of_2(int(N))
+        assert forced_block_n <= _EMIT_INT8_NEXT_BLOCK_N_CAP, (
+            f"EMIT_INT8_NEXT requires next_power_of_2(N) "
+            f"<= {_EMIT_INT8_NEXT_BLOCK_N_CAP}, got N={N} "
+            f"-> {forced_block_n}; route to emit_int8_next=False at dispatch."
+        )
+        block_size_n = forced_block_n
+        # gfx908 has 64 KiB LDS per CU; the kernel needs LDS for the
+        # int8 input tile (BLOCK_M × BLOCK_K) + the int8 weight tile
+        # (BLOCK_K × BLOCK_N) per pipeline stage, plus a fp32 accumulator
+        # spill for the EMIT_INT8_NEXT row-absmax reduction. With the
+        # default heuristic above, BLOCK_M=64..128 paired with the forced
+        # BLOCK_N≥256 quickly overflows the 64 KiB LDS budget. Cap
+        # BLOCK_M / BLOCK_K so the (BLOCK_M+BLOCK_N) * BLOCK_K * 1B tile
+        # stays under ~48 KiB, leaving headroom for the int32 accumulator
+        # spill and the row-absmax reduction.
+        # Rule of thumb that matches the m2-numerics-extension tests
+        # (which work for the full Qwen3.5-9B shape grid at small
+        # BLOCK_N): if forced BLOCK_N > 256, halve BLOCK_M to 32 and
+        # BLOCK_K to 64. This keeps LDS comfortably within the 64 KiB
+        # limit while still mapping to MFMA tile sizes (16×16, 32×32 on
+        # gfx908).
+        if block_size_n > 256:
+            block_size_m = min(block_size_m, 32)
+            block_size_k = min(block_size_k, 64)
+        # Per-channel weight-scale broadcast tile must match the forced
+        # BLOCK_SIZE_N so the masked load still covers the column range.
+        block_size_sb = 1 if has_scalar(scale_b) else block_size_n
+        # Per-token activation-scale broadcast tile follows the (possibly
+        # reduced) BLOCK_SIZE_M.
+        block_size_sa = 1 if has_scalar(scale_a) else block_size_m
+        # Re-derive the L2-swizzle group factor for the new BLOCK_SIZE_N
+        # so the launch metadata stays internally consistent. ``cdiv``
+        # returns >= 1 for any positive N, so the ``num_pid_n_h > 0``
+        # branch is the production path; the ternary fallback to ``1``
+        # keeps the expression exhaustive on the pathological ``N == 0``
+        # case (already caught by the early ``assert M > 0 and N > 0
+        # and K > 0`` above).
+        num_pid_n_h = triton.cdiv(N, block_size_n)
+        group_size_m = max(1, min(8, 120 // num_pid_n_h)) if num_pid_n_h > 0 else 1
+        assert block_size_n >= N, (
+            f"EMIT_INT8_NEXT requires BLOCK_SIZE_N >= N, got {block_size_n} < {N}"
+        )
+
     grid = lambda META: (
         triton.cdiv(M, META["BLOCK_SIZE_M"]) * triton.cdiv(N, META["BLOCK_SIZE_N"]),
     )
+
+    # When emit_int8_next is True the int8 store uses ``stride_cm`` /
+    # ``stride_cn`` against ``out_int8_ptr``; both ``result`` and
+    # ``out_int8`` are freshly-allocated [M, N] row-major contiguous so
+    # their element strides agree. We deliberately pass the int8 strides
+    # in that mode to keep the kernel's stride math element-correct for
+    # the active store target.
+    if emit_int8_next:
+        stride_cm = out_int8.stride(0)
+        stride_cn = out_int8.stride(1)
+    else:
+        stride_cm = result.stride(0)
+        stride_cn = result.stride(1)
 
     mi100_int8_scaled_mm_kernel[grid](
         input,
@@ -398,6 +588,8 @@ def mi100_int8_scaled_mm(
         scale_b,
         result,
         bias,
+        out_int8,
+        out_scale,
         M,
         N,
         K,
@@ -405,17 +597,20 @@ def mi100_int8_scaled_mm(
         input.stride(1),
         weight.stride(0),
         weight.stride(1),
-        result.stride(0),
-        result.stride(1),
+        stride_cm,
+        stride_cn,
         BLOCK_SIZE_M=block_size_m,
         BLOCK_SIZE_N=block_size_n,
         BLOCK_SIZE_K=block_size_k,
         BLOCK_SIZE_SCALE_A=block_size_sa,
         BLOCK_SIZE_SCALE_B=block_size_sb,
         GROUP_SIZE_M=group_size_m,
+        EMIT_INT8_NEXT=emit_int8_next,
         **extra_launch,
     )
 
+    if emit_int8_next:
+        return out_int8, out_scale
     return result
 
 
@@ -496,7 +691,83 @@ class MI100Int8ScaledMMLinearKernel(Int8ScaledMMLinearKernel):
         x: torch.Tensor,
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        """W8A8 INT8 linear forward (gfx908).
+
+        When the env-gated ``fused_silu_quant_int8`` path is active (the
+        default; disabled by ``VLLM_MI100_DISABLE_FUSED_ACT_QUANT=1`` or the
+        legacy alias ``VLLM_DISABLE_FUSED_ACT_QUANT=1``) AND an upstream
+        ``SiluAndMul`` has stashed a fused (int8, scale) cache on this layer
+        via the ``_mi100_fused_silu_cache`` attribute, the activation
+        quantization step is skipped — the cached per-token int8 + fp32 scale
+        flow straight into the W8A8 GEMM, eliminating one HBM round-trip on
+        the MLP path (issue #33).
+
+        When the cache attribute is absent (no upstream wire-in) OR the
+        env-gated flag is set, behavior is byte-identical to the legacy
+        ``scaled_int8_quant`` + ``mi100_int8_scaled_mm`` composition.
+        """
         w_q, w_s, i_s, i_zp, _ = self._get_layer_params(layer)
+
+        # M2 dispatcher wire-in (issue #26): probe ``choose_emit_int8_next``
+        # once per layer so the engine log records the per-layer fusion
+        # decision (mission step 5 of m2-wire-in). The dispatcher already
+        # logs every call at ``DEBUG`` level; we additionally raise the
+        # first per-layer firing to INFO so the launcher's default log
+        # level captures one grep-friendly line per layer for the M2
+        # smoke evidence (mission step 8). The decision is informational
+        # only — no consumer plumbing exists yet for the int8/scale
+        # outputs (a future feature stitches that across the MLP /
+        # attention boundary), so the actual ``mi100_int8_scaled_mm``
+        # call below stays on the byte-identical fp16-emit path.
+        if not getattr(layer, "_mi100_emit_int8_next_logged", False):
+            M_dim = int(x.shape[0]) if x.dim() >= 1 else 1
+            N_dim = int(w_q.shape[1])
+            K_dim = int(w_q.shape[0])
+            layer_name = getattr(layer, "prefix", None) or type(layer).__name__
+            decision = choose_emit_int8_next(M_dim, N_dim, K_dim, layer_name=layer_name)
+            logger.info(
+                "[MI100_INT8] emit_int8_next=%s dispatch on layer=%s "
+                "shape=(M=%d,N=%d,K=%d)",
+                decision,
+                layer_name,
+                M_dim,
+                N_dim,
+                K_dim,
+            )
+            layer._mi100_emit_int8_next_logged = True
+
+        # Fused-path opt-in: the upstream MLP forward
+        # (Qwen2MLP / Qwen2MoeMLP via
+        # ``try_stash_fused_silu_quant_int8``) may stash the result of
+        # ``fused_silu_quant_int8`` on this consuming layer just before
+        # invoking the GEMM. The cache shape is ``(int8 [M, K], fp32
+        # [M, 1])`` matching ``ops.scaled_int8_quant`` semantics. The
+        # producer is the single point that gates on
+        # ``VLLM_MI100_DISABLE_FUSED_ACT_QUANT`` — once the cache exists
+        # the consumer MUST honor it (the producer skipped the legacy
+        # silu_and_mul call so falling through here would feed the GEMM
+        # a 0-element placeholder and crash). Disable-path semantics
+        # are preserved end-to-end because env-disabled producers never
+        # stash in the first place.
+        fused_cache = getattr(layer, "_mi100_fused_silu_cache", None)
+        if fused_cache is not None:
+            # Always clear the cache so a stale stash from a prior layer does
+            # not leak into a later forward. Done first so an exception in
+            # the GEMM does not orphan the attribute on the layer.
+            layer._mi100_fused_silu_cache = None
+            x_q, x_s = fused_cache
+            assert x_q.dtype == torch.int8, (
+                "fused_silu_quant_int8 cache must carry int8 activations; "
+                f"got {x_q.dtype}."
+            )
+            return mi100_int8_scaled_mm(
+                x_q,
+                w_q,
+                scale_a=x_s,
+                scale_b=w_s,
+                out_dtype=x.dtype,
+                bias=bias,
+            )
 
         # Quantize activations to INT8 (dynamic per-token or static)
         x_q, x_s, x_zp = ops.scaled_int8_quant(
