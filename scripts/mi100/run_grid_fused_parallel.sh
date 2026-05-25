@@ -131,6 +131,21 @@ if [[ "$MILESTONE" == "m3-redundant-silu" ]]; then
   mkdir -p "$OUT_ROOT"
 fi
 
+# Milestone-aware kernel_backend label for postprocess_bench_result.py.
+# Distinguishes the M1/M2/M3 redundant-silu A/B runs from the M4
+# fused-act-quant grid so downstream aggregators don't confuse the trees.
+case "$MILESTONE" in
+  m1-redundant-silu|m3-redundant-silu) KERNEL_BACKEND_LABEL="fused-act-quant+redundant-silu" ;;
+  m4-fused-act-quant) KERNEL_BACKEND_LABEL="fused-act-quant" ;;
+  *) KERNEL_BACKEND_LABEL="fused-act-quant" ;;
+esac
+
+# Optional knob: LAUNCH_GPU_MEM_UTIL env override (e.g. 0.85) is honored by
+# per-cell launchers when set; bench grid passes it through unchanged. This
+# lets a future TP=4-on-3-GPU bring-up retry with reduced memory pressure
+# without editing the launcher source. Default unset preserves 0.93.
+export LAUNCH_GPU_MEM_UTIL="${LAUNCH_GPU_MEM_UTIL:-}"
+
 # Cell → GPU/port mapping for the 4-way TP=1 batch. The smoke pass only
 # exercises 4 cells (3 W8A8 + 1 W4A16, one per MI100); the full grid
 # extends this to W4A16 in additional 4-way waves and the TP=4 cells
@@ -506,7 +521,7 @@ EOF
     --num-prompts 200 \
     --launch-command "$launch_command" \
     --env-file "$env_file" \
-    --kernel-backend "fused-act-quant" \
+    --kernel-backend "${KERNEL_BACKEND_LABEL}" \
     --out "$out_file"
 }
 
@@ -561,7 +576,7 @@ EOF
     --num-prompts 200 \
     --launch-command "PLACEHOLDER (${reason})" \
     --env-file "$env_file" \
-    --kernel-backend "fused-act-quant" \
+    --kernel-backend "${KERNEL_BACKEND_LABEL}" \
     --out "$out_file"
   echo "  placeholder: $cell_id/$wl  reason='${reason}'" | tee -a "$GRID_LOG"
 }

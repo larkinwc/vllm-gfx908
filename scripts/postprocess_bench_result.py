@@ -137,7 +137,9 @@ def main() -> int:
         "kernel_backend": args.kernel_backend,
         "launch_command": args.launch_command,
         "env": env,
-        "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.datetime.now(datetime.timezone.utc)
+        .replace(tzinfo=None)
+        .isoformat() + "Z",
         "raw_vllm_bench": raw_data,
     }
 

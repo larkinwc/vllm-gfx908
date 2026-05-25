@@ -190,7 +190,7 @@ pgrep -f 'multiprocessing.resource_tracker' 2>/dev/null | xargs -r kill -KILL 2>
 sleep 5
 
 # Collect PMC counter_collection.csv from rocprofv3 outputs.
-PMC_RAW=$(ls -S "$out_dir"/pmc_*_counter_collection.csv 2>/dev/null | head -1)
+PMC_RAW=$(ls -S "$out_dir"/pmc_*/pmc_*_counter_collection.csv 2>/dev/null | head -1)
 if [[ -z "$PMC_RAW" || ! -s "$PMC_RAW" ]]; then
   log "WARN: no PMC counter_collection.csv produced; writing stub note"
   echo "# rocprofv3 PMC capture failed — see pmc.log" > "$out_dir/pmc.csv"
