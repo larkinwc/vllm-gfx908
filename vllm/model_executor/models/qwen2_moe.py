@@ -123,19 +123,11 @@ class Qwen2MoeMLP(nn.Module):
         # shape mismatch) leaves the cache untouched so the fall-through
         # is byte-identical.
         from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
-            silu_elimination_placeholder,
             try_stash_fused_silu_quant_int8,
         )
 
-        stashed = try_stash_fused_silu_quant_int8(gate_up, self.down_proj)
-        # M1 path-1 (placeholder-view, issue #33): see ``Qwen2MLP.forward``
-        # comment for the §13 cudagraph rationale. Returning a real-shaped
-        # fp16 view of ``gate_up[:, :H]`` skips the redundant
-        # ``silu_and_mul`` write when MODE=placeholder; falls back to the
-        # byte-identical legacy ``act_fn(gate_up)`` path in every other
-        # mode (legacy / prefill-gate / master kill-switch).
-        placeholder = silu_elimination_placeholder(gate_up) if stashed else None
-        out = placeholder if placeholder is not None else self.act_fn(gate_up)
+        try_stash_fused_silu_quant_int8(gate_up, self.down_proj)
+        out = self.act_fn(gate_up)
         out, _ = self.down_proj(out)
 
         if self.expert_gate is not None:

@@ -124,25 +124,11 @@ class Qwen2MLP(nn.Module):
         # mismatch) the helper returns False with no side effects so
         # behavior is byte-identical to clean HEAD.
         from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
-            silu_elimination_placeholder,
             try_stash_fused_silu_quant_int8,
         )
 
-        stashed = try_stash_fused_silu_quant_int8(gate_up, self.down_proj)
-        # M1 path-1 (placeholder-view, issue #33): when the producer
-        # actually stashed the (int8, scale) cache AND the user opted
-        # into MODE=placeholder, skip the redundant fp16 silu_and_mul
-        # write entirely. The consumer in
-        # ``MI100Int8ScaledMMLinearKernel.apply_weights`` reads only
-        # ``x.dtype`` from this placeholder and consumes the cached
-        # int8 + scale directly, so feeding a real-shaped fp16 view of
-        # ``gate_up[:, :H]`` honors the §13 cudagraph constraint
-        # (correct shape/stride/dtype) without doing the silu work.
-        # The helper returns ``None`` on every negative branch
-        # (legacy/prefill-gate/disable/shape-mismatch) so the
-        # fall-through is byte-identical to clean HEAD.
-        placeholder = silu_elimination_placeholder(gate_up) if stashed else None
-        x = placeholder if placeholder is not None else self.act_fn(gate_up)
+        try_stash_fused_silu_quant_int8(gate_up, self.down_proj)
+        x = self.act_fn(gate_up)
         x, _ = self.down_proj(x)
         return x
 
