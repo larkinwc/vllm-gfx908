@@ -20,6 +20,7 @@ The launcher is `nohup vllm.entrypoints.openai.api_server` so we can attach
 client requests; once the script exits, the server is killed and the CSV
 contains every (M,N,K) recorded.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -35,7 +36,7 @@ from pathlib import Path
 
 REPO = Path(
     "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/"
-    "emdash/fuzzy-hornets-see-szfl4"
+    "emdash/cold-points-sit-rancb"
 )
 PY = "/opt/vllm-env/bin/python3"
 
@@ -43,11 +44,13 @@ PY = "/opt/vllm-env/bin/python3"
 def _kill_orphans() -> None:
     subprocess.run(
         ["pkill", "-9", "-f", "vllm.entrypoints"],
-        check=False, stderr=subprocess.DEVNULL,
+        check=False,
+        stderr=subprocess.DEVNULL,
     )
     subprocess.run(
         ["pkill", "-9", "-f", "VLLM::"],
-        check=False, stderr=subprocess.DEVNULL,
+        check=False,
+        stderr=subprocess.DEVNULL,
     )
     time.sleep(2)
 
@@ -57,7 +60,8 @@ def _wait_health(port: int, timeout_sec: int = 600) -> bool:
     while time.time() - start < timeout_sec:
         rc = subprocess.run(
             ["curl", "-sf", f"http://127.0.0.1:{port}/health"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             check=False,
         ).returncode
         if rc == 0:
@@ -66,24 +70,43 @@ def _wait_health(port: int, timeout_sec: int = 600) -> bool:
     return False
 
 
-def _bench_serve_once(model: str, port: int, n_prompts: int,
-                      max_concurrency: int) -> int:
+def _bench_serve_once(
+    model: str, port: int, n_prompts: int, max_concurrency: int
+) -> int:
     cmd = [
-        PY, "-m", "vllm.entrypoints.cli.main", "bench", "serve",
-        "--model", model,
-        "--base-url", f"http://127.0.0.1:{port}",
-        "--num-prompts", str(n_prompts),
-        "--request-rate", "inf",
-        "--max-concurrency", str(max_concurrency),
-        "--seed", "42",
-        "--dataset-name", "random",
-        "--random-input-len", "512",
-        "--random-output-len", "64",
+        PY,
+        "-m",
+        "vllm.entrypoints.cli.main",
+        "bench",
+        "serve",
+        "--model",
+        model,
+        "--base-url",
+        f"http://127.0.0.1:{port}",
+        "--num-prompts",
+        str(n_prompts),
+        "--request-rate",
+        "inf",
+        "--max-concurrency",
+        str(max_concurrency),
+        "--seed",
+        "42",
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "512",
+        "--random-output-len",
+        "64",
         "--ignore-eos",
         "--trust-remote-code",
     ]
-    proc = subprocess.run(cmd, cwd=str(REPO), check=False,
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc = subprocess.run(
+        cmd,
+        cwd=str(REPO),
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
     return proc.returncode
 
 
@@ -124,21 +147,37 @@ def main() -> int:
     ap.add_argument("--model", default="/models/Qwen3.5-9B-w8a8")
     ap.add_argument("--tp", type=int, default=1)
     ap.add_argument("--port", type=int, default=8000)
-    ap.add_argument("--duration-sec", type=int, default=60,
-                    help="Wall time the server stays up for shape capture.")
-    ap.add_argument("--n-prompts", type=int, default=80,
-                    help="Per-concurrency prompt count for the warmup hits.")
-    ap.add_argument("--concurrencies", default="1,2,4",
-                    help="Comma-separated concurrency levels to exercise.")
-    ap.add_argument("--out", type=Path,
-                    default=Path("/root/bench-int8-w4a16/tensilelite/"
-                                 "gemm_shapes_w8a8.csv"))
-    ap.add_argument("--raw-out", type=Path,
-                    default=Path("/root/bench-int8-w4a16/tensilelite/"
-                                 "gemm_shapes_w8a8_raw.csv"))
-    ap.add_argument("--server-log",
-                    default="/root/bench-int8-w4a16/tensilelite/"
-                            "shape_dump_server.log")
+    ap.add_argument(
+        "--duration-sec",
+        type=int,
+        default=60,
+        help="Wall time the server stays up for shape capture.",
+    )
+    ap.add_argument(
+        "--n-prompts",
+        type=int,
+        default=80,
+        help="Per-concurrency prompt count for the warmup hits.",
+    )
+    ap.add_argument(
+        "--concurrencies",
+        default="1,2,4",
+        help="Comma-separated concurrency levels to exercise.",
+    )
+    ap.add_argument(
+        "--out",
+        type=Path,
+        default=Path("/root/bench-int8-w4a16/tensilelite/gemm_shapes_w8a8.csv"),
+    )
+    ap.add_argument(
+        "--raw-out",
+        type=Path,
+        default=Path("/root/bench-int8-w4a16/tensilelite/gemm_shapes_w8a8_raw.csv"),
+    )
+    ap.add_argument(
+        "--server-log",
+        default="/root/bench-int8-w4a16/tensilelite/shape_dump_server.log",
+    )
     args = ap.parse_args()
 
     raw_out = args.raw_out
@@ -148,18 +187,20 @@ def main() -> int:
         raw_out.unlink()
 
     env = os.environ.copy()
-    env.update({
-        "VLLM_LOG_GEMM_SHAPES": "1",
-        "VLLM_GEMM_SHAPES_OUT": str(raw_out),
-        "LD_LIBRARY_PATH": "/opt/rocm/core-7.12/lib",
-        "ROCM_PATH": "/opt/rocm/core-7.12",
-        "PATH": "/opt/rocm/core-7.12/bin:" + env.get("PATH", "/usr/bin"),
-        "PYTORCH_ROCM_ARCH": "gfx908",
-        "VLLM_ROCM_USE_AITER": "1",
-        "VLLM_ROCM_USE_SKINNY_GEMM": "0",
-        "TORCH_COMPILE_DISABLE": "1",
-        "HF_HUB_OFFLINE": "1",
-    })
+    env.update(
+        {
+            "VLLM_LOG_GEMM_SHAPES": "1",
+            "VLLM_GEMM_SHAPES_OUT": str(raw_out),
+            "LD_LIBRARY_PATH": "/opt/rocm/core-7.12/lib",
+            "ROCM_PATH": "/opt/rocm/core-7.12",
+            "PATH": "/opt/rocm/core-7.12/bin:" + env.get("PATH", "/usr/bin"),
+            "PYTORCH_ROCM_ARCH": "gfx908",
+            "VLLM_ROCM_USE_AITER": "1",
+            "VLLM_ROCM_USE_SKINNY_GEMM": "0",
+            "TORCH_COMPILE_DISABLE": "1",
+            "HF_HUB_OFFLINE": "1",
+        }
+    )
     if args.tp > 1:
         env["VLLM_MI100_DISABLE_CUSTOM_AR"] = "1"
     else:
@@ -167,25 +208,37 @@ def main() -> int:
 
     _kill_orphans()
     server_args = [
-        PY, "-m", "vllm.entrypoints.openai.api_server",
-        "--model", args.model,
-        "--dtype", "float16",
-        "--tensor-parallel-size", str(args.tp),
-        "--max-model-len", "8192",
-        "--block-size", "32",
+        PY,
+        "-m",
+        "vllm.entrypoints.openai.api_server",
+        "--model",
+        args.model,
+        "--dtype",
+        "float16",
+        "--tensor-parallel-size",
+        str(args.tp),
+        "--max-model-len",
+        "8192",
+        "--block-size",
+        "32",
         "--enable-prefix-caching",
         "--language-model-only",
         "--trust-remote-code",
-        "--gpu-memory-utilization", "0.93",
-        "--port", str(args.port),
+        "--gpu-memory-utilization",
+        "0.93",
+        "--port",
+        str(args.port),
     ]
     if args.tp > 1:
         server_args.append("--disable-custom-all-reduce")
 
     log_handle = open(args.server_log, "w")  # noqa: SIM115 — long-lived proc
     proc = subprocess.Popen(
-        server_args, cwd=str(REPO), env=env,
-        stdout=log_handle, stderr=subprocess.STDOUT,
+        server_args,
+        cwd=str(REPO),
+        env=env,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
         preexec_fn=os.setsid,
     )
     print(f"[dump_gemm_shapes] vLLM PID={proc.pid}, log={args.server_log}")
@@ -200,8 +253,10 @@ def main() -> int:
             print("[dump_gemm_shapes] HEALTH TIMEOUT", file=sys.stderr)
             return 2
 
-        print(f"[dump_gemm_shapes] server healthy, hitting concurrencies "
-              f"{args.concurrencies}")
+        print(
+            f"[dump_gemm_shapes] server healthy, hitting concurrencies "
+            f"{args.concurrencies}"
+        )
         for c in [int(x) for x in args.concurrencies.split(",")]:
             print(f"[dump_gemm_shapes]   concurrency={c}")
             _bench_serve_once(args.model, args.port, args.n_prompts, c)

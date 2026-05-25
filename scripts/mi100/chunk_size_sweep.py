@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """M2 chunked-prefill chunk-size sweep (VAL-CHUNKED-001).
 
 For the prefill-dominated cell ``<quant>_tp1_c4_coding`` (TP=1, c=4 on the
@@ -37,6 +38,7 @@ Usage:
 
 Per VAL-CHUNKED-001, this script does NOT push to git.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -54,7 +56,7 @@ from pathlib import Path
 
 REPO = Path(
     "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/"
-    "emdash/fuzzy-hornets-see-szfl4"
+    "emdash/cold-points-sit-rancb"
 )
 PY = "/opt/vllm-env/bin/python3"
 OUT_ROOT = Path("/root/bench-int8-w4a16-hbm/m2-chunked")
@@ -78,9 +80,7 @@ QUANT_MODELS = {
 # Lifecycle helpers
 # ---------------------------------------------------------------------------
 def _log(msg: str) -> None:
-    ts = datetime.datetime.now(datetime.timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"[{ts}] {msg}", flush=True)
 
 
@@ -203,8 +203,7 @@ def _detect_failure_reason(quant: str, cell_dir: Path) -> tuple[str, Path | None
             "is determined by the model's mamba-aligned block_size."
         ), archived
     if "EngineCore failed to start" in text:
-        return ("EngineCore failed to start; see engine.log for traceback",
-                archived)
+        return ("EngineCore failed to start; see engine.log for traceback", archived)
     return ("server startup / healthcheck failure", archived)
 
 
@@ -337,10 +336,9 @@ def _load_existing() -> dict:
 def _upsert_cell(state: dict, row: dict) -> None:
     cells = state.setdefault("cells", [])
     for i, existing in enumerate(cells):
-        if (
-            existing.get("quant") == row["quant"]
-            and int(existing.get("chunk_size", -1)) == int(row["chunk_size"])
-        ):
+        if existing.get("quant") == row["quant"] and int(
+            existing.get("chunk_size", -1)
+        ) == int(row["chunk_size"]):
             cells[i] = row
             return
     cells.append(row)
@@ -386,14 +384,12 @@ def _render_summary_md(state: dict) -> str:
         "(`/root/bench-int8-w4a16/datasets/coding_agent.jsonl`)"
     )
     lines.append(
-        "- NUM_PROMPTS: 200, --request-rate inf, "
-        "--max-concurrency 4, --seed 42"
+        "- NUM_PROMPTS: 200, --request-rate inf, --max-concurrency 4, --seed 42"
     )
     lines.append("- KV-cache: `int8_per_token_head` (M1 winner stacked)")
     lines.append("- chunked-prefill: enabled")
     lines.append(
-        "- Primary metric: `request_throughput_req_s` "
-        "(coding-only this iteration)"
+        "- Primary metric: `request_throughput_req_s` (coding-only this iteration)"
     )
     lines.append("")
 
@@ -450,9 +446,7 @@ def _render_summary_md(state: dict) -> str:
     if failed_rows:
         lines.append("## FAILED rows")
         lines.append("")
-        for c in sorted(
-            failed_rows, key=lambda r: (r["quant"], int(r["chunk_size"]))
-        ):
+        for c in sorted(failed_rows, key=lambda r: (r["quant"], int(r["chunk_size"]))):
             reason = (c.get("reason") or "").strip()
             key = f"{c['quant']}/{c['chunk_size']}/{reason[:80]}"
             if key in seen_reasons:
@@ -463,8 +457,10 @@ def _render_summary_md(state: dict) -> str:
             )
         lines.append("")
 
-    lines.append("Persisted machine-readable copy: "
-                 "`/root/bench-int8-w4a16-hbm/m2-chunked/chunk_sweep.json`.")
+    lines.append(
+        "Persisted machine-readable copy: "
+        "`/root/bench-int8-w4a16-hbm/m2-chunked/chunk_sweep.json`."
+    )
     lines.append("")
     return "\n".join(lines)
 

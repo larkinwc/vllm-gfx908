@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """M3 NCCL-algorithm sweep on TP=4 cells (VAL-TP-001).
 
 For each of the 6 TP=4 cells (3 concurrency × 2 quant), measure under
@@ -43,6 +44,7 @@ Usage:
 
 Per VAL-CROSS-001, this script does NOT push to git.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -57,7 +59,7 @@ from pathlib import Path
 
 REPO = Path(
     "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/"
-    "emdash/fuzzy-hornets-see-szfl4"
+    "emdash/cold-points-sit-rancb"
 )
 PY = "/opt/vllm-env/bin/python3"
 
@@ -83,9 +85,7 @@ SLEEP_BETWEEN_RUNS_SECS = 2
 # Helpers
 # ---------------------------------------------------------------------------
 def _log(msg: str) -> None:
-    ts = datetime.datetime.now(datetime.timezone.utc).strftime(
-        "%Y-%m-%dT%H:%M:%SZ"
-    )
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"[{ts}] {msg}", flush=True)
 
 
@@ -112,8 +112,7 @@ def _load_m2_chunk_per_quant() -> dict[str, int]:
     opt = raw.get("optimum_per_quant") or {}
     if not all(q in opt for q in QUANTS):
         raise SystemExit(
-            f"FATAL: optimum_per_quant missing keys in {M2_CHUNK_SWEEP_JSON}: "
-            f"{opt!r}"
+            f"FATAL: optimum_per_quant missing keys in {M2_CHUNK_SWEEP_JSON}: {opt!r}"
         )
     return {q: int(opt[q]) for q in QUANTS}
 
@@ -252,7 +251,7 @@ def _run_one(
             "algo": algo,
             "status": "FAILED",
             "reason": (
-                f"raw.json not found under {LAUNCH_SMOKE_ROOT/cell_id} after "
+                f"raw.json not found under {LAUNCH_SMOKE_ROOT / cell_id} after "
                 f"launch script exit={rc}"
             ),
             "launch_exit_code": rc,
@@ -329,19 +328,14 @@ def _render_summary_md(state: dict) -> str:
         "M2 `optimum_per_quant`"
     )
     lines.append(
-        "- Primary metric: `output_throughput_toks_s` "
-        "(synthetic-only this iteration)"
+        "- Primary metric: `output_throughput_toks_s` (synthetic-only this iteration)"
     )
     lines.append("")
 
     lines.append("## Results")
     lines.append("")
-    lines.append(
-        "| Cell | Ring (tok/s) | Tree (tok/s) | default (tok/s) | Winner |"
-    )
-    lines.append(
-        "|:-----|-------------:|-------------:|----------------:|:-------|"
-    )
+    lines.append("| Cell | Ring (tok/s) | Tree (tok/s) | default (tok/s) | Winner |")
+    lines.append("|:-----|-------------:|-------------:|----------------:|:-------|")
     for cell in state.get("cells", []):
         cell_id = cell["cell_id"]
         winner = cell.get("winner_algo") or "—"
@@ -354,8 +348,7 @@ def _render_summary_md(state: dict) -> str:
             else:
                 marker = " *" if algo == winner else ""
                 cells_row.append(
-                    f"{float(row.get('output_throughput_toks_s') or 0):.2f}"
-                    f"{marker}"
+                    f"{float(row.get('output_throughput_toks_s') or 0):.2f}{marker}"
                 )
         lines.append(
             f"| {cell_id} | {cells_row[0]} | {cells_row[1]} "
@@ -434,8 +427,9 @@ def _load_existing(chunk_per_quant: dict[str, int]) -> dict:
     }
 
 
-def _upsert_cell_algo(state: dict, cell_id: str, quant: str, conc: int,
-                      algo_row: dict) -> None:
+def _upsert_cell_algo(
+    state: dict, cell_id: str, quant: str, conc: int, algo_row: dict
+) -> None:
     """Insert or replace an algo row inside state['cells'][<cell>].algos."""
     cells = state.setdefault("cells", [])
     cell_entry = None
@@ -483,7 +477,7 @@ def sweep(
 
     n_failed = 0
     n_total = 0
-    for (quant, conc) in target_cells:
+    for quant, conc in target_cells:
         cell_id = f"{quant}_tp4_c{conc}"
         for algo in target_algos:
             n_total += 1
@@ -513,9 +507,7 @@ def sweep(
             time.sleep(SLEEP_BETWEEN_RUNS_SECS)
 
     # Final order: by quant then concurrency for stable rendering.
-    state["cells"].sort(
-        key=lambda c: (c["w8a8_or_w4a16"], int(c["concurrency"]))
-    )
+    state["cells"].sort(key=lambda c: (c["w8a8_or_w4a16"], int(c["concurrency"])))
     _persist(state)
 
     _log(f"sweep complete: {n_total - n_failed}/{n_total} runs OK")
@@ -555,8 +547,7 @@ def _parse_algos(arg: str) -> tuple[str, ...]:
             continue
         if token not in ALGOS:
             raise SystemExit(
-                f"FATAL: invalid --algos token: {token!r}; "
-                f"expected one of {ALGOS}"
+                f"FATAL: invalid --algos token: {token!r}; expected one of {ALGOS}"
             )
         out.append(token)
     return tuple(out)
@@ -576,10 +567,7 @@ def main() -> int:
     ap.add_argument(
         "--algos",
         default="all",
-        help=(
-            "Comma-separated NCCL algos to sweep "
-            "(default: Ring,Tree,default)."
-        ),
+        help=("Comma-separated NCCL algos to sweep (default: Ring,Tree,default)."),
     )
     args = ap.parse_args()
 

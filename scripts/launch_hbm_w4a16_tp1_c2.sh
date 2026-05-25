@@ -83,7 +83,7 @@ export PINNED_ROCM=7.12
 export PINNED_TORCH=2.11.0+rocm7.2
 export PINNED_TRITON=3.5.1
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
 export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
 
 # ---------------------------------------------------------------------------
@@ -175,7 +175,7 @@ fi
     --block-size 32 \
     --enable-prefix-caching \
     --language-model-only \
-    --gpu-memory-utilization 0.93 \
+    --gpu-memory-utilization ${LAUNCH_GPU_MEM_UTIL:-0.93} \
     --port "$PORT"  "${KV_CACHE_DTYPE_FLAG[@]}" "${MAX_NUM_BATCHED_TOKENS_FLAG[@]}" "${ENABLE_CHUNKED_PREFILL_FLAG[@]}" "${CUDAGRAPH_MODE_FLAG[@]}" > "$LOG" 2>&1 &
 SERVER_PID=$!
 echo "[launch_hbm_$cell_id] server PID=$SERVER_PID; log=$LOG"

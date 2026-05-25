@@ -44,7 +44,7 @@
 # Exit code: 0 if every smoke gate (≤±5 %) passes; non-zero otherwise.
 set -euo pipefail
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
 
 # ---------------------------------------------------------------------------
 # Mode dispatch

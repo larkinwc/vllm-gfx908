@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Render BENCH_INT8_W4A16_FINAL.md from on-disk artifacts.
 
 Reads:
@@ -16,6 +17,7 @@ Reads:
 
 Writes BENCH_INT8_W4A16_FINAL.md to the repo root.
 """
+
 from __future__ import annotations
 
 import csv
@@ -23,7 +25,7 @@ import json
 from pathlib import Path
 
 REPO = Path(  # noqa: E501
-    "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4"
+    "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb"
 )
 FINAL_DIR = Path("/root/bench-int8-w4a16/final")
 REPORT = REPO / "BENCH_INT8_W4A16_FINAL.md"
@@ -78,7 +80,11 @@ def column_value(row: dict, key: str, applies: bool) -> str:
 def main() -> int:
     rows = list(csv.DictReader((FINAL_DIR / "final_grid.csv").open()))
     reasons = json.loads((FINAL_DIR / "final_grid_reasons.json").read_text())
-    tuning = json.loads((FINAL_DIR / "tuning_hashes.json").read_text()) if (FINAL_DIR / "tuning_hashes.json").exists() else {}  # noqa: E501
+    tuning = (
+        json.loads((FINAL_DIR / "tuning_hashes.json").read_text())
+        if (FINAL_DIR / "tuning_hashes.json").exists()
+        else {}
+    )  # noqa: E501
 
     coding_eval = None
     for cand in (
@@ -95,11 +101,21 @@ def main() -> int:
     if p.exists():
         needle = json.loads(p.read_text())
 
-    ppl_fp16 = json.loads((Path("/root/bench-int8-w4a16/baseline") / "ppl_fp16.json").read_text())["perplexity"]  # noqa: E501
-    ppl_w8a8_m0 = json.loads((Path("/root/bench-int8-w4a16/baseline") / "ppl_w8a8.json").read_text())["perplexity"]  # noqa: E501
-    ppl_w4a16_m0 = json.loads((Path("/root/bench-int8-w4a16/baseline") / "ppl_w4a16.json").read_text())["perplexity"]  # noqa: E501
-    ppl_w8a8_m4 = json.loads((Path("/root/bench-int8-w4a16/m4") / "ppl_w8a8_m4_ck.json").read_text())["perplexity"]  # noqa: E501
-    ppl_w4a16_m3 = json.loads((Path("/root/bench-int8-w4a16/m3") / "ppl_w4a16_m3.json").read_text())["perplexity"]  # noqa: E501
+    ppl_fp16 = json.loads(
+        (Path("/root/bench-int8-w4a16/baseline") / "ppl_fp16.json").read_text()
+    )["perplexity"]  # noqa: E501
+    ppl_w8a8_m0 = json.loads(
+        (Path("/root/bench-int8-w4a16/baseline") / "ppl_w8a8.json").read_text()
+    )["perplexity"]  # noqa: E501
+    ppl_w4a16_m0 = json.loads(
+        (Path("/root/bench-int8-w4a16/baseline") / "ppl_w4a16.json").read_text()
+    )["perplexity"]  # noqa: E501
+    ppl_w8a8_m4 = json.loads(
+        (Path("/root/bench-int8-w4a16/m4") / "ppl_w8a8_m4_ck.json").read_text()
+    )["perplexity"]  # noqa: E501
+    ppl_w4a16_m3 = json.loads(
+        (Path("/root/bench-int8-w4a16/m3") / "ppl_w4a16_m3.json").read_text()
+    )["perplexity"]  # noqa: E501
     ppl_w8a8_m6_path = FINAL_DIR / "ppl_w8a8_m6.json"
     ppl_w4a16_m6_path = FINAL_DIR / "ppl_w4a16_m6.json"
     ppl_w8a8_m6 = (
@@ -114,21 +130,39 @@ def main() -> int:
     )
 
     spotcheck_path = FINAL_DIR / "m6_repro_spotcheck.csv"
-    spotcheck = list(csv.DictReader(spotcheck_path.open())) if spotcheck_path.exists() else []  # noqa: E501
+    spotcheck = (
+        list(csv.DictReader(spotcheck_path.open())) if spotcheck_path.exists() else []
+    )  # noqa: E501
 
     lines: list[str] = []
-    lines.append("# BENCH_INT8_W4A16_FINAL — gfx908 (MI100) custom kernels, final aggregate")  # noqa: E501
+    lines.append(
+        "# BENCH_INT8_W4A16_FINAL — gfx908 (MI100) custom kernels, final aggregate"
+    )  # noqa: E501
     lines.append("")
-    lines.append("Final Pareto report for the MI100 (gfx908) custom INT8 / W4A16 kernel mission.")  # noqa: E501
-    lines.append("Aggregates milestones M0–M5 into a single grid with per-(cell × metric) winners,")  # noqa: E501
-    lines.append("production recommendations, full quality-gate evidence, and per-cell reproducible")  # noqa: E501
+    lines.append(
+        "Final Pareto report for the MI100 (gfx908) custom INT8 / W4A16 kernel mission."
+    )  # noqa: E501
+    lines.append(
+        "Aggregates milestones M0–M5 into a single grid with per-(cell × metric) winners,"  # noqa: E501
+    )  # noqa: E501
+    lines.append(
+        "production recommendations, full quality-gate evidence, and per-cell reproducible"  # noqa: E501
+    )  # noqa: E501
     lines.append("launch scripts.")
     lines.append("")
     lines.append("Cross-links: ")
-    lines.append("[BENCH_INT8_W4A16_BASELINE.md](BENCH_INT8_W4A16_BASELINE.md) (M0+M1), ")  # noqa: E501
-    lines.append("[BENCH_INT8_W4A16_M2.md](BENCH_INT8_W4A16_M2.md) (TensileLite three-way), ")  # noqa: E501
-    lines.append("[BENCH_INT8_W4A16_M3.md](BENCH_INT8_W4A16_M3.md) (Triton W8A8 + W4A16), ")  # noqa: E501
-    lines.append("[BENCH_M4_CK.md](BENCH_M4_CK.md) (Composable Kernel W8A8 + W4A16-negative), ")  # noqa: E501
+    lines.append(
+        "[BENCH_INT8_W4A16_BASELINE.md](BENCH_INT8_W4A16_BASELINE.md) (M0+M1), "
+    )  # noqa: E501
+    lines.append(
+        "[BENCH_INT8_W4A16_M2.md](BENCH_INT8_W4A16_M2.md) (TensileLite three-way), "
+    )  # noqa: E501
+    lines.append(
+        "[BENCH_INT8_W4A16_M3.md](BENCH_INT8_W4A16_M3.md) (Triton W8A8 + W4A16), "
+    )  # noqa: E501
+    lines.append(
+        "[BENCH_M4_CK.md](BENCH_M4_CK.md) (Composable Kernel W8A8 + W4A16-negative), "
+    )  # noqa: E501
     lines.append("[BENCH_M5_ISA.md](BENCH_M5_ISA.md) (Hand-ISA negative result).")
     lines.append("")
     lines.append("## Hardware / software manifest")
@@ -140,9 +174,15 @@ def main() -> int:
     lines.append("| ROCm | 7.12 (`/opt/rocm/core-7.12`) |")
     lines.append("| PyTorch | 2.11.0+rocm7.2 |")
     lines.append("| pytorch-triton-rocm | 3.5.1 |")
-    lines.append("| vLLM | 0.20.2rc1.dev107+gd960f21e4 (mission worktree, editable install) |")  # noqa: E501
-    lines.append("| Models | `/models/Qwen3.5-9B-{w8a8,w4a16}`, FP16 ref `/models/Qwen3.5-9B` |")  # noqa: E501
-    lines.append(f"| Tuning manifest | `/root/bench-int8-w4a16/final/tuning_hashes.json` ({len(tuning)} pinned files) |")  # noqa: E501
+    lines.append(
+        "| vLLM | 0.20.2rc1.dev107+gd960f21e4 (mission worktree, editable install) |"
+    )  # noqa: E501
+    lines.append(
+        "| Models | `/models/Qwen3.5-9B-{w8a8,w4a16}`, FP16 ref `/models/Qwen3.5-9B` |"
+    )  # noqa: E501
+    lines.append(
+        f"| Tuning manifest | `/root/bench-int8-w4a16/final/tuning_hashes.json` ({len(tuning)} pinned files) |"  # noqa: E501
+    )  # noqa: E501
     lines.append("")
     lines.append("## Quality gates (Wikitext-2 perplexity, coding-agent, 32 k needle)")
     lines.append("")
@@ -152,15 +192,23 @@ def main() -> int:
     lines.append("| --- | ---: | ---: | ---: |")
     lines.append(f"| FP16 reference (`/models/Qwen3.5-9B`) | {ppl_fp16:.4f} | — | — |")
     d_fp16_w8a8 = (ppl_w8a8_m0 - ppl_fp16) / ppl_fp16 * 100
-    lines.append(f"| M0 W8A8 (`/models/Qwen3.5-9B-w8a8`) | {ppl_w8a8_m0:.4f} | {d_fp16_w8a8:+.3f} % | — (reference) |")  # noqa: E501
+    lines.append(
+        f"| M0 W8A8 (`/models/Qwen3.5-9B-w8a8`) | {ppl_w8a8_m0:.4f} | {d_fp16_w8a8:+.3f} % | — (reference) |"  # noqa: E501
+    )  # noqa: E501
     d_fp16_w4a16 = (ppl_w4a16_m0 - ppl_fp16) / ppl_fp16 * 100
-    lines.append(f"| M0 W4A16 (`/models/Qwen3.5-9B-w4a16`) | {ppl_w4a16_m0:.4f} | {d_fp16_w4a16:+.3f} % | — (reference) |")  # noqa: E501
+    lines.append(
+        f"| M0 W4A16 (`/models/Qwen3.5-9B-w4a16`) | {ppl_w4a16_m0:.4f} | {d_fp16_w4a16:+.3f} % | — (reference) |"  # noqa: E501
+    )  # noqa: E501
     d_m6_w8a8_fp16 = (ppl_w8a8_m6 - ppl_fp16) / ppl_fp16 * 100
     d_m6_w8a8_m0 = (ppl_w8a8_m6 - ppl_w8a8_m0) / ppl_w8a8_m0 * 100
-    lines.append(f"| **M6 W8A8 stack (best path per cell)** | **{ppl_w8a8_m6:.4f}** | **{d_m6_w8a8_fp16:+.3f} %** | **{d_m6_w8a8_m0:+.3f} %** |")  # noqa: E501
+    lines.append(
+        f"| **M6 W8A8 stack (best path per cell)** | **{ppl_w8a8_m6:.4f}** | **{d_m6_w8a8_fp16:+.3f} %** | **{d_m6_w8a8_m0:+.3f} %** |"  # noqa: E501
+    )  # noqa: E501
     d_m6_w4a16_fp16 = (ppl_w4a16_m6 - ppl_fp16) / ppl_fp16 * 100
     d_m6_w4a16_m0 = (ppl_w4a16_m6 - ppl_w4a16_m0) / ppl_w4a16_m0 * 100
-    lines.append(f"| **M6 W4A16 stack (best path per cell)** | **{ppl_w4a16_m6:.4f}** | **{d_m6_w4a16_fp16:+.3f} %** | **{d_m6_w4a16_m0:+.3f} %** |")  # noqa: E501
+    lines.append(
+        f"| **M6 W4A16 stack (best path per cell)** | **{ppl_w4a16_m6:.4f}** | **{d_m6_w4a16_fp16:+.3f} %** | **{d_m6_w4a16_m0:+.3f} %** |"  # noqa: E501
+    )  # noqa: E501
     lines.append("")
     lines.append(
         f"- VAL-FINAL-002 gate (Δ ≤ +3 % vs FP16 + Δ ≤ +0.5 % vs M0): "
@@ -170,11 +218,15 @@ def main() -> int:
     lines.append(
         "- Command: `scripts/m0_perplexity.py --model <path> --dataset wikitext-2-raw-v1 --chunks 50 --chunk-tokens 512 --seed 0` ; seed=0; numbers fixed."  # noqa: E501
     )
-    lines.append("- Evidence: `/root/bench-int8-w4a16/{baseline,m3,m4,final}/ppl_*.json`.")  # noqa: E501
+    lines.append(
+        "- Evidence: `/root/bench-int8-w4a16/{baseline,m3,m4,final}/ppl_*.json`."
+    )  # noqa: E501
     lines.append("")
 
     # Coding-agent
-    lines.append("Coding-agent qualitative pass (10 prompts, rubric compiles/runs/correct):")  # noqa: E501
+    lines.append(
+        "Coding-agent qualitative pass (10 prompts, rubric compiles/runs/correct):"
+    )  # noqa: E501
     lines.append("")
     if coding_eval is None:
         lines.append("| Total | Pass-all | Gate ≥ 9/10 |")
@@ -197,20 +249,28 @@ def main() -> int:
                 f"{chk(g.get('runs'))} | {chk(g.get('correct'))} |"
             )
     lines.append("")
-    lines.append("- Evidence: `tests/eval/coding_prompts.json`, `/root/bench-int8-w4a16/final/m6_coding_eval_m6.{json,md}`.")  # noqa: E501
-    lines.append("- Failures (if any) include diff vs FP16-baseline response in the JSON `response` field.")  # noqa: E501
+    lines.append(
+        "- Evidence: `tests/eval/coding_prompts.json`, `/root/bench-int8-w4a16/final/m6_coding_eval_m6.{json,md}`."  # noqa: E501
+    )  # noqa: E501
+    lines.append(
+        "- Failures (if any) include diff vs FP16-baseline response in the JSON `response` field."  # noqa: E501
+    )  # noqa: E501
     lines.append("")
 
     # Needle
     lines.append("Long-Context needle-in-haystack @ 32 k:")
     lines.append("")
     if needle is None:
-        lines.append("- (not yet run — see `scripts/eval_needle.py --ctx 32768 --probes 5`)")  # noqa: E501
+        lines.append(
+            "- (not yet run — see `scripts/eval_needle.py --ctx 32768 --probes 5`)"
+        )  # noqa: E501
     else:
         passes = needle["passes"]
         total = needle["total"]
         gate = needle.get("gate_5_of_5")
-        lines.append(f"- Result: **{passes}/{total}**, gate {'✅ PASS' if gate else '❌ FAIL'} (5/5 required by VAL-FINAL-004)")  # noqa: E501
+        lines.append(
+            f"- Result: **{passes}/{total}**, gate {'✅ PASS' if gate else '❌ FAIL'} (5/5 required by VAL-FINAL-004)"  # noqa: E501
+        )  # noqa: E501
         lines.append("- Depths probed: " + ", ".join(f"{d}%" for d in needle["depths"]))
         for r in needle["results"]:
             lines.append(
@@ -225,33 +285,55 @@ def main() -> int:
     lines.append("")
     lines.append("Each row is one (cell, workload, metric). Columns:")
     lines.append("")
-    lines.append("- **stock** = first vLLM run on the artifact (May 7 baseline, commit `fc20b6f4f`).")  # noqa: E501
-    lines.append("- **+TensileLite** = M2 hipBLASLt + merged TensileLite library "
-                 "(commit `b69172e07` / re-baseline `73f7e629a`). W4A16 has no TensileLite path.")  # noqa: E501
-    lines.append("- **+Triton** = M3 custom Triton kernels (`mi100_int8`, `mi100_w4a16`, commit `9699d1f0a`).")  # noqa: E501
-    lines.append("- **+CK** = M4 Composable Kernel `DeviceGemm_Xdl_CShuffle` W8A8 instances "  # noqa: E501
-                 "(commits `a852f2600` → `f4bf9e503`). W4A16 CK declined as negative result "  # noqa: E501
-                 "(see [BENCH_M4_CK.md](BENCH_M4_CK.md)).")
-    lines.append("- **+ISA** = n/a (M5 hand-ISA declined; see [BENCH_M5_ISA.md](BENCH_M5_ISA.md)).")  # noqa: E501
-    lines.append("- **winner** = best-of-row across the present paths "
-                 "(higher-better for throughput, lower-better for latency).")
+    lines.append(
+        "- **stock** = first vLLM run on the artifact (May 7 baseline, commit `fc20b6f4f`)."  # noqa: E501
+    )  # noqa: E501
+    lines.append(
+        "- **+TensileLite** = M2 hipBLASLt + merged TensileLite library "
+        "(commit `b69172e07` / re-baseline `73f7e629a`). W4A16 has no TensileLite path."
+    )  # noqa: E501
+    lines.append(
+        "- **+Triton** = M3 custom Triton kernels (`mi100_int8`, `mi100_w4a16`, commit `9699d1f0a`)."  # noqa: E501
+    )  # noqa: E501
+    lines.append(
+        "- **+CK** = M4 Composable Kernel `DeviceGemm_Xdl_CShuffle` W8A8 instances "  # noqa: E501
+        "(commits `a852f2600` → `f4bf9e503`). W4A16 CK declined as negative result "  # noqa: E501
+        "(see [BENCH_M4_CK.md](BENCH_M4_CK.md))."
+    )
+    lines.append(
+        "- **+ISA** = n/a (M5 hand-ISA declined; see [BENCH_M5_ISA.md](BENCH_M5_ISA.md))."  # noqa: E501
+    )  # noqa: E501
+    lines.append(
+        "- **winner** = best-of-row across the present paths "
+        "(higher-better for throughput, lower-better for latency)."
+    )
     lines.append("")
-    lines.append("Workload key: `synth`=synthetic random (1024 in / 256 out, num_prompts=200); "  # noqa: E501
-                 "`coding`=coding-agent realistic. Metric key: `tput`=output toks/s; "
-                 "`req_tput`=req/s; `*_ttft`/`*_tpot` in ms.")
+    lines.append(
+        "Workload key: `synth`=synthetic random (1024 in / 256 out, num_prompts=200); "  # noqa: E501
+        "`coding`=coding-agent realistic. Metric key: `tput`=output toks/s; "
+        "`req_tput`=req/s; `*_ttft`/`*_tpot` in ms."
+    )
     lines.append("")
-    lines.append("| cell | workload | metric | stock | +TensileLite | +Triton | +CK | +ISA | winner |")  # noqa: E501
+    lines.append(
+        "| cell | workload | metric | stock | +TensileLite | +Triton | +CK | +ISA | winner |"  # noqa: E501
+    )  # noqa: E501
     lines.append("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | :-: |")
     for row in rows:
         model = row["cell"].split("_", 1)[0]
         w8a8 = model == "w8a8"
-        applies = {"stock": True, "tensilelite": w8a8, "triton": True, "ck": w8a8, "isa": False}  # noqa: E501
+        applies = {
+            "stock": True,
+            "tensilelite": w8a8,
+            "triton": True,
+            "ck": w8a8,
+            "isa": False,
+        }  # noqa: E501
         winner_label_str = winner_label(row["winner_path"], applies)
         higher = row["higher_better"] == "True"  # noqa: F841
         wl = row["workload"]
         cell_id = row["cell"]
         lines.append(
-            f"| {cell_id} | {'synth' if wl=='synthetic' else 'coding'} | {row['metric']} | "  # noqa: E501
+            f"| {cell_id} | {'synth' if wl == 'synthetic' else 'coding'} | {row['metric']} | "  # noqa: E501
             f"{column_value(row, 'stock', applies['stock'])} | "
             f"{column_value(row, 'tensilelite', applies['tensilelite'])} | "
             f"{column_value(row, 'triton', applies['triton'])} | "
@@ -265,7 +347,9 @@ def main() -> int:
     for path, reason in reasons.items():
         lines.append(f"- _{path}_: {reason}")
     lines.append("")
-    lines.append("Raw CSV (importable): `/root/bench-int8-w4a16/final/final_grid.csv` (144 rows).")  # noqa: E501
+    lines.append(
+        "Raw CSV (importable): `/root/bench-int8-w4a16/final/final_grid.csv` (144 rows)."  # noqa: E501
+    )  # noqa: E501
     lines.append("")
 
     # Production recommendations
@@ -277,7 +361,9 @@ def main() -> int:
         "Each row carries one-sentence justification + the env flags required to ship the path."  # noqa: E501
     )
     lines.append("")
-    lines.append("| model shape | TP | concurrency | recommended path | justification | env flags |")  # noqa: E501
+    lines.append(
+        "| model shape | TP | concurrency | recommended path | justification | env flags |"  # noqa: E501
+    )  # noqa: E501
     lines.append("| --- | :-: | :-: | --- | --- | --- |")
 
     # Compute per (model, tp, c) the winning path averaged over workloads
@@ -371,14 +457,16 @@ def main() -> int:
         )
         lines.append("| --- | --- | ---: | ---: | ---: | :-: | :-: |")
         for row in spotcheck:
-            in2 = (row.get("within_band_2pct") or row.get("within_band") or "False").lower() == "true"  # noqa: E501
+            in2 = (
+                row.get("within_band_2pct") or row.get("within_band") or "False"
+            ).lower() == "true"  # noqa: E501
             in5 = (row.get("within_band_5pct") or "False").lower() == "true"
             lines.append(
-                f"| {row['cell']} | {row.get('ref_path','—')} | {row['recorded']} | "
+                f"| {row['cell']} | {row.get('ref_path', '—')} | {row['recorded']} | "
                 f"{row['actual']} | {row['delta_pct']} | "
                 f"{'✅' if in2 else '❌'} | {'✅' if in5 else '❌'} |"
             )
-        if row.get('note'):
+        if row.get("note"):
             lines.append("")
             lines.append(f"_Note_: {row['note']}.")
         lines.append("")
@@ -460,7 +548,9 @@ def main() -> int:
     lines.append("    - `/root/bench-int8-w4a16/m3/pareto_exceptions.md`")
     lines.append("    - `/root/bench-int8-w4a16/m4/pareto_exceptions.md`")
     lines.append("- Profiling artifacts (M1, omniperf-equivalent):")
-    lines.append("    - `/root/bench-int8-w4a16/baseline/profile/omniperf/omniperf_summary_{w8a8,w4a16}.json`")  # noqa: E501
+    lines.append(
+        "    - `/root/bench-int8-w4a16/baseline/profile/omniperf/omniperf_summary_{w8a8,w4a16}.json`"  # noqa: E501
+    )  # noqa: E501
     lines.append("    - `/root/bench-int8-w4a16/baseline/hot_shapes.json`")
     lines.append("- Tuning artifacts (TensileLite):")
     lines.append("    - `/root/bench-int8-w4a16/tensilelite/merged_library/library/`")
@@ -472,8 +562,10 @@ def main() -> int:
     lines.append("    - `scripts/verify_tuning_hashes.py`")
     lines.append("    - `scripts/eval_coding_prompts.py`, `scripts/eval_needle.py`")
     lines.append("")
-    lines.append("Run `scripts/validate_final_report.py --check-links BENCH_INT8_W4A16_FINAL.md` "  # noqa: E501
-                 "to assert schema and link integrity.")
+    lines.append(
+        "Run `scripts/validate_final_report.py --check-links BENCH_INT8_W4A16_FINAL.md` "  # noqa: E501
+        "to assert schema and link integrity."
+    )
     lines.append("")
 
     REPORT.write_text("\n".join(lines))

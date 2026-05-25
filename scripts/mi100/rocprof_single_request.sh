@@ -40,7 +40,7 @@ cell_id=${1:?cell_id required (e.g. w8a8_tp1_c4_coding)}
 fused_state=${2:?fused_state required (on | off)}
 out_dir=${3:?out_dir required (absolute path)}
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
 PY=/opt/vllm-env/bin/python3
 PMC_FILE="$REPO/scripts/mi100/pmc_counters.txt"
 MODEL=/models/Qwen3.5-9B-w8a8
@@ -190,7 +190,7 @@ pgrep -f 'multiprocessing.resource_tracker' 2>/dev/null | xargs -r kill -KILL 2>
 sleep 5
 
 # Collect PMC counter_collection.csv from rocprofv3 outputs.
-PMC_RAW=$(ls -S "$out_dir"/pmc_*_counter_collection.csv 2>/dev/null | head -1)
+PMC_RAW=$(ls -S "$out_dir"/pmc_*/pmc_*_counter_collection.csv 2>/dev/null | head -1)
 if [[ -z "$PMC_RAW" || ! -s "$PMC_RAW" ]]; then
   log "WARN: no PMC counter_collection.csv produced; writing stub note"
   echo "# rocprofv3 PMC capture failed — see pmc.log" > "$out_dir/pmc.csv"

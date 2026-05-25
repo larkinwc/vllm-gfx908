@@ -65,7 +65,7 @@ from pathlib import Path
 
 REPO = Path(
     "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/"
-    "emdash/fuzzy-hornets-see-szfl4"
+    "emdash/cold-points-sit-rancb"
 )
 DEFAULT_CACHE = Path("/root/bench-int8-w4a16/baseline/triton_cache_w4a16")
 DEFAULT_MODEL = "/models/Qwen3.5-9B-w4a16"
@@ -220,11 +220,11 @@ def _drive_workload() -> bool:
     # block-size buckets via prefill chunked-to-bucket and decode steps).
     sequential = [
         # (label, prompt_tokens, max_tokens)
-        ("decode-only-1tok",  8,    32),    # tiny prefill + 32 decode steps (M=1)
-        ("prefill-32",        32,   8),     # prefill bucket (16, 64]
-        ("prefill-128",       128,  8),     # prefill bucket > 64
-        ("prefill-512",       512,  8),     # larger prefill
-        ("prefill-1024",     1024,  4),     # even larger prefill
+        ("decode-only-1tok", 8, 32),  # tiny prefill + 32 decode steps (M=1)
+        ("prefill-32", 32, 8),  # prefill bucket (16, 64]
+        ("prefill-128", 128, 8),  # prefill bucket > 64
+        ("prefill-512", 512, 8),  # larger prefill
+        ("prefill-1024", 1024, 4),  # even larger prefill
     ]
     for label, ptok, mtok in sequential:
         _log(f"-> driving '{label}' p={ptok} m={mtok}")
@@ -240,9 +240,7 @@ def _drive_workload() -> bool:
     _log(f"-> driving 'decode-burst' parallel={burst_n}")
     prompts = [_make_prompt(8)] * burst_n
     with ThreadPoolExecutor(max_workers=burst_n) as ex:
-        futs = [
-            ex.submit(_post_completion, prompts[i], 32, i) for i in range(burst_n)
-        ]
+        futs = [ex.submit(_post_completion, prompts[i], 32, i) for i in range(burst_n)]
         results = [f.result() for f in futs]
     if not all(results):
         _log(f"   FAIL on decode-burst ({sum(results)}/{burst_n} ok)")

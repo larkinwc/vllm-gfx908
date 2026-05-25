@@ -15,7 +15,7 @@
 # =============================================================================
 set -uo pipefail
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
 M1_HARNESS=/root/bench-int8-w4a16/baseline/run_baseline.sh
 OUT_ROOT=/root/bench-int8-w4a16/tensilelite/triton_fallback
 mkdir -p "$OUT_ROOT/synthetic" "$OUT_ROOT/coding"

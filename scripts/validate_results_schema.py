@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 Validate every per-cell result JSON in `<root>/{synthetic,coding}/`
 against `scripts/bench_schema.json`. Prints "<N> files validated, <K>
@@ -9,6 +10,7 @@ Usage:
     /opt/vllm-env/bin/python3 scripts/validate_results_schema.py \
         /root/bench-int8-w4a16/baseline/
 """
+
 from __future__ import annotations
 
 import json
@@ -19,7 +21,7 @@ import jsonschema
 
 REPO = Path(
     "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/"
-    "emdash/fuzzy-hornets-see-szfl4"
+    "emdash/cold-points-sit-rancb"
 )
 SCHEMA_PATH = REPO / "scripts" / "bench_schema.json"
 

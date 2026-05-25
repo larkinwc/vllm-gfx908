@@ -35,7 +35,7 @@ import json
 from pathlib import Path
 
 REPO = Path(
-    "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4"
+    "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb"
 )  # noqa: E501
 TUNING_DIR = REPO / "vllm" / "model_executor" / "kernels" / "configs" / "gfx908"
 PRIOR_MANIFEST = Path("/root/bench-int8-w4a16/final/tuning_hashes.json")

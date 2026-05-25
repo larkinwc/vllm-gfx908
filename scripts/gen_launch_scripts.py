@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Generate per-cell reproducible launch scripts (VAL-FINAL-005).
 
 For each (model, tp, concurrency) we emit a single shell script at
@@ -16,13 +17,16 @@ The recorded reference value per cell is the *winner* row in
 ``/root/bench-int8-w4a16/final/final_grid.csv``, selected on
 ``output_throughput_toks_s``.
 """
+
 from __future__ import annotations
 
 import argparse
 import csv
 from pathlib import Path
 
-REPO = Path("/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4")  # noqa: E501
+REPO = Path(
+    "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb"
+)  # noqa: E501
 LAUNCH_DIR = REPO / "scripts"
 
 CELLS = []
@@ -32,7 +36,9 @@ for model in ("w8a8", "w4a16"):
             CELLS.append((model, tp, c))
 
 
-def reference_throughput(grid_rows: list[dict], cell_id: str) -> tuple[float | None, str | None]:  # noqa: E501
+def reference_throughput(
+    grid_rows: list[dict], cell_id: str
+) -> tuple[float | None, str | None]:  # noqa: E501
     """Return (output_tput, ref-path) for synthetic+tput row of cell.
 
     For *reproducibility purposes* (VAL-FINAL-005), the reference is the
@@ -189,7 +195,7 @@ export PINNED_ROCM=7.12
 export PINNED_TORCH=2.11.0+rocm7.2
 export PINNED_TRITON=3.5.1
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
 export PYTHONPATH="$REPO${{PYTHONPATH:+:$PYTHONPATH}}"
 
 # ---------------------------------------------------------------------------
@@ -255,7 +261,7 @@ stop_server
     --block-size 32 \
     --enable-prefix-caching \
     --language-model-only \
-    --gpu-memory-utilization 0.93 \
+    --gpu-memory-utilization ${{LAUNCH_GPU_MEM_UTIL:-0.93}} \
     --port 8000 {extra_serve_args} "${{KV_CACHE_DTYPE_FLAG[@]}}" "${{MAX_NUM_BATCHED_TOKENS_FLAG[@]}}" "${{ENABLE_CHUNKED_PREFILL_FLAG[@]}}" "${{CUDAGRAPH_MODE_FLAG[@]}}" > "$LOG" 2>&1 &
 SERVER_PID=$!
 echo "[launch_$cell_id] server PID=$SERVER_PID; log=$LOG"
@@ -354,7 +360,9 @@ def tuning_dir_for_model(model: str) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--grid", type=Path, default=Path("/root/bench-int8-w4a16/final/final_grid.csv"))  # noqa: E501
+    ap.add_argument(
+        "--grid", type=Path, default=Path("/root/bench-int8-w4a16/final/final_grid.csv")
+    )  # noqa: E501
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 

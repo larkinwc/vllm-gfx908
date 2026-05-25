@@ -14,7 +14,7 @@
 # Override CELLS env-var to pick specific cells.
 set -euo pipefail
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
 OUT_CSV=/root/bench-int8-w4a16/final/m6_repro_spotcheck.csv
 OUT_DIR=/root/bench-int8-w4a16/final/launch_smoke
 NUM_PROMPTS=${NUM_PROMPTS:-50}

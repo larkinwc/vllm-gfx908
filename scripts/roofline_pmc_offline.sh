@@ -15,7 +15,7 @@ set -uo pipefail
 HOT=${1:?path to hot_shapes.json required}
 QUANT=${2:-w8a8}    # which quant to roofline (w8a8 by default since it's the M2/M3 scope)
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
 BASELINE_ROOT=/root/bench-int8-w4a16/baseline
 PY=/opt/vllm-env/bin/python3
 OUT_DIR=$BASELINE_ROOT/profile/omniperf

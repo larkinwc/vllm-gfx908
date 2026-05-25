@@ -59,7 +59,7 @@
 # =============================================================================
 set -uo pipefail
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
 OUT_ROOT=/root/bench-int8-w4a16-fused/m4-bench
 mkdir -p "$OUT_ROOT"
 LOG_FILE="$OUT_ROOT/parallel_harness_test.log"
@@ -107,10 +107,44 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$MODE" == "--milestone" && "$MILESTONE" != "m4-fused-act-quant" ]]; then
-  echo "unsupported milestone: $MILESTONE (only m4-fused-act-quant)" >&2
+if [[ "$MODE" == "--milestone" \
+      && "$MILESTONE" != "m4-fused-act-quant" \
+      && "$MILESTONE" != "m1-redundant-silu" \
+      && "$MILESTONE" != "m3-redundant-silu" ]]; then
+  echo "unsupported milestone: $MILESTONE (allowed: m4-fused-act-quant, m1-redundant-silu, m3-redundant-silu)" >&2
   exit 2
 fi
+
+# Milestone-specific output root override. The redundant-silu mission M2-F1
+# bench grid writes to a sibling tree and intentionally runs with
+# VLLM_MI100_DISABLE_FUSED_ACT_QUANT=1 (fused-off A/B against the prior
+# fused-on tree).
+if [[ "$MILESTONE" == "m1-redundant-silu" ]]; then
+  OUT_ROOT=/root/bench-int8-w4a16-redundant-silu/m2-bench
+  mkdir -p "$OUT_ROOT"
+fi
+# M3-F1: full 24-cell grid with the M1-promoted (placeholder-view) code.
+# Fused-on default-on state — VLLM_MI100_DISABLE_FUSED_ACT_QUANT must be
+# unset, identical sanity to m4-fused-act-quant.
+if [[ "$MILESTONE" == "m3-redundant-silu" ]]; then
+  OUT_ROOT=/root/bench-int8-w4a16-redundant-silu/m3-bench
+  mkdir -p "$OUT_ROOT"
+fi
+
+# Milestone-aware kernel_backend label for postprocess_bench_result.py.
+# Distinguishes the M1/M2/M3 redundant-silu A/B runs from the M4
+# fused-act-quant grid so downstream aggregators don't confuse the trees.
+case "$MILESTONE" in
+  m1-redundant-silu|m3-redundant-silu) KERNEL_BACKEND_LABEL="fused-act-quant+redundant-silu" ;;
+  m4-fused-act-quant) KERNEL_BACKEND_LABEL="fused-act-quant" ;;
+  *) KERNEL_BACKEND_LABEL="fused-act-quant" ;;
+esac
+
+# Optional knob: LAUNCH_GPU_MEM_UTIL env override (e.g. 0.85) is honored by
+# per-cell launchers when set; bench grid passes it through unchanged. This
+# lets a future TP=4-on-3-GPU bring-up retry with reduced memory pressure
+# without editing the launcher source. Default unset preserves 0.93.
+export LAUNCH_GPU_MEM_UTIL="${LAUNCH_GPU_MEM_UTIL:-}"
 
 # Cell → GPU/port mapping for the 4-way TP=1 batch. The smoke pass only
 # exercises 4 cells (3 W8A8 + 1 W4A16, one per MI100); the full grid
@@ -339,17 +373,29 @@ DATASET=/root/bench-int8-w4a16/datasets/coding_agent.jsonl
   echo
 } | tee -a "$GRID_LOG"
 
-# Sanity: refuse to run if the disable env-var is set — m4-bench-grid is the
-# default-on (fused) grid. The disable-path smoke is a sibling feature
-# (m4-disable-path-smoke).
-if [[ "${VLLM_MI100_DISABLE_FUSED_ACT_QUANT:-0}" != "0" || \
-      "${VLLM_DISABLE_FUSED_ACT_QUANT:-0}" != "0" ]]; then
-  {
-    echo "[grid] FATAL: VLLM_MI100_DISABLE_FUSED_ACT_QUANT or"
-    echo "       VLLM_DISABLE_FUSED_ACT_QUANT is set; m4-bench-grid must"
-    echo "       run with the default-on fused state. Unset and retry."
-  } | tee -a "$GRID_LOG"
-  exit 2
+# Sanity: m4-fused-act-quant is the default-on (fused) grid and refuses to
+# run if the disable env-var is set. The m1-redundant-silu W4A16 A/B grid
+# intentionally runs fused-off (VLLM_MI100_DISABLE_FUSED_ACT_QUANT=1) per
+# M2-F1 spec, so the check is inverted there.
+if [[ "$MILESTONE" == "m4-fused-act-quant" || "$MILESTONE" == "m3-redundant-silu" ]]; then
+  if [[ "${VLLM_MI100_DISABLE_FUSED_ACT_QUANT:-0}" != "0" || \
+        "${VLLM_DISABLE_FUSED_ACT_QUANT:-0}" != "0" ]]; then
+    {
+      echo "[grid] FATAL: VLLM_MI100_DISABLE_FUSED_ACT_QUANT or"
+      echo "       VLLM_DISABLE_FUSED_ACT_QUANT is set; $MILESTONE grid must"
+      echo "       run with the default-on fused state. Unset and retry."
+    } | tee -a "$GRID_LOG"
+    exit 2
+  fi
+elif [[ "$MILESTONE" == "m1-redundant-silu" ]]; then
+  if [[ "${VLLM_MI100_DISABLE_FUSED_ACT_QUANT:-0}" != "1" ]]; then
+    {
+      echo "[grid] FATAL: m1-redundant-silu M2-F1 grid requires"
+      echo "       VLLM_MI100_DISABLE_FUSED_ACT_QUANT=1 (fused-off A/B)."
+      echo "       Export it and retry."
+    } | tee -a "$GRID_LOG"
+    exit 2
+  fi
 fi
 
 # Disable EXIT cleanup trap during the grid so per-cell teardowns own the
@@ -400,7 +446,7 @@ keep = [
     "VLLM_MI100_DISABLE_FUSED_ACT_QUANT","VLLM_DISABLE_FUSED_ACT_QUANT",
 ]
 d = {k: os.environ.get(k, "") for k in keep}
-d["milestone"] = "m4-fused-act-quant"
+d["milestone"] = "${MILESTONE}"
 d["fused_act_quant_state"] = (
     "off" if (
         os.environ.get("VLLM_MI100_DISABLE_FUSED_ACT_QUANT", "0") == "1"
@@ -425,8 +471,8 @@ EOF
     --metric-percentiles "50,90,99"
     --metadata "cell_id=${cell_id}" "workload=${wl}" "tp=${tp}" \
                "concurrency=${conc}" "num_prompts=200" \
-               "milestone=m4-fused-act-quant" \
-               "fused_act_quant_state=${d_fused_state:-on}"
+               "milestone=${MILESTONE}" \
+               "fused_act_quant_state=$( [[ "${VLLM_MI100_DISABLE_FUSED_ACT_QUANT:-0}" == "1" || "${VLLM_DISABLE_FUSED_ACT_QUANT:-0}" == "1" ]] && echo off || echo on )"
   )
   if [[ "$wl" == synthetic ]]; then
     bench_args+=(
@@ -475,7 +521,7 @@ EOF
     --num-prompts 200 \
     --launch-command "$launch_command" \
     --env-file "$env_file" \
-    --kernel-backend "fused-act-quant" \
+    --kernel-backend "${KERNEL_BACKEND_LABEL}" \
     --out "$out_file"
 }
 
@@ -497,7 +543,7 @@ emit_placeholder() {
   $PY - >"$env_file" <<EOF
 import json, os
 d = {
-    "milestone": "m4-fused-act-quant",
+    "milestone": "${MILESTONE}",
     "fused_act_quant_state": (
         "off" if (
             os.environ.get("VLLM_MI100_DISABLE_FUSED_ACT_QUANT", "0") == "1"
@@ -530,7 +576,7 @@ EOF
     --num-prompts 200 \
     --launch-command "PLACEHOLDER (${reason})" \
     --env-file "$env_file" \
-    --kernel-backend "fused-act-quant" \
+    --kernel-backend "${KERNEL_BACKEND_LABEL}" \
     --out "$out_file"
   echo "  placeholder: $cell_id/$wl  reason='${reason}'" | tee -a "$GRID_LOG"
 }
@@ -561,10 +607,19 @@ server_log_dir_for() {
 # single GPU; up to $PARALLEL_CAP pairs run concurrently. 4 concurrencies
 # {1, 2, 4, 8} per quant per TP.
 # ---------------------------------------------------------------------------
-TP1_PAIRS=(
-  "w8a8:1" "w8a8:2" "w8a8:4"
-  "w4a16:1" "w4a16:2" "w4a16:4"
-)
+if [[ "$MILESTONE" == "m1-redundant-silu" ]]; then
+  # M2-F1 covers W4A16 cells only (12 total: TP={1,4} × conc={1,2,4} × wl={syn,coding}).
+  TP1_PAIRS=(
+    "w4a16:1" "w4a16:2" "w4a16:4"
+  )
+  GRID_QUANTS=(w4a16)
+else
+  TP1_PAIRS=(
+    "w8a8:1" "w8a8:2" "w8a8:4"
+    "w4a16:1" "w4a16:2" "w4a16:4"
+  )
+  GRID_QUANTS=(w8a8 w4a16)
+fi
 
 # Run one TP=1 (quant, conc) pair on the given GPU + port: launch server,
 # bench synthetic + coding, tear down.
@@ -693,7 +748,7 @@ echo "===== TP=4 serial cells =====" | tee -a "$GRID_LOG"
 if (( VISIBLE_GPUS < 4 )); then
   echo "[tp4] visible_gpus=$VISIBLE_GPUS < 4 -- emitting placeholders for all TP=4 cells" \
     | tee -a "$GRID_LOG"
-  for quant in w8a8 w4a16; do
+  for quant in "${GRID_QUANTS[@]}"; do
     for conc in 1 2 4; do
       for wl in synthetic coding; do
         emit_placeholder "$quant" 4 "$conc" "$wl" \
@@ -702,7 +757,7 @@ if (( VISIBLE_GPUS < 4 )); then
     done
   done
 else
-  for quant in w8a8 w4a16; do
+  for quant in "${GRID_QUANTS[@]}"; do
     for conc in 1 2 4; do
       cell_id="${quant}_tp4_c${conc}"
       svc_log_dir=$(server_log_dir_for "$quant" 4 "$conc")
@@ -749,7 +804,7 @@ fi
 # benefit from this layout — the latter scans <root>/{synthetic,coding}/.
 # ---------------------------------------------------------------------------
 mkdir -p "$OUT_ROOT/synthetic" "$OUT_ROOT/coding"
-for quant in w8a8 w4a16; do
+for quant in "${GRID_QUANTS[@]}"; do
   for tp in 1 4; do
     for conc in 1 2 4; do
       for wl in synthetic coding; do
