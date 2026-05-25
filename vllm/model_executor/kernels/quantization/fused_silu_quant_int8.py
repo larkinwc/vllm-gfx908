@@ -84,6 +84,96 @@ logger = logging.getLogger(__name__)
 _ENV_PRIMARY = "VLLM_MI100_DISABLE_FUSED_ACT_QUANT"
 _ENV_LEGACY = "VLLM_DISABLE_FUSED_ACT_QUANT"
 
+# M1 redundant-silu elimination (issue #33). Temporary mission env flag —
+# removed in M1-F5 after the winner of {placeholder, prefill-gate} is
+# selected from rocprofv3 evidence and promoted to unconditional firing.
+# See library/redundant-silu-mission-context.md §2 and validation contract
+# VAL-M1-001 / VAL-X-003.
+#
+# Valid values (case-insensitive): ``legacy``, ``placeholder``, ``prefill-gate``.
+# Anything else (unset, typo, empty string) falls back to ``legacy`` so the
+# default behavior is byte-identical to clean HEAD.
+_ENV_SILU_ELIMINATION_MODE = "VLLM_MI100_SILU_ELIMINATION_MODE"
+_SILU_ELIMINATION_MODES_VALID: frozenset[str] = frozenset(
+    {"legacy", "placeholder", "prefill-gate"}
+)
+
+
+def silu_elimination_mode() -> str:
+    """Return the current silu-elimination mode.
+
+    Reads ``VLLM_MI100_SILU_ELIMINATION_MODE`` and validates it against the
+    closed value set ``{legacy, placeholder, prefill-gate}``. Unset / empty
+    / unrecognized values fall back to ``legacy`` so any misconfiguration
+    fails open to the byte-identical clean-HEAD behavior.
+
+    NOTE: this env flag is TEMPORARY for the M1 path-1 / path-2 A/B
+    selection. M1-F5 removes it after the winner is promoted to
+    unconditional firing; until then, this is the only Python entry point
+    that interprets the env value.
+    """
+    val = os.environ.get(_ENV_SILU_ELIMINATION_MODE)
+    if val is None:
+        return "legacy"
+    val_normalized = val.strip().lower()
+    if val_normalized in _SILU_ELIMINATION_MODES_VALID:
+        return val_normalized
+    return "legacy"
+
+
+def silu_elimination_placeholder(gate_up: torch.Tensor) -> torch.Tensor | None:
+    """Path-1 (placeholder-view) helper for the M1 silu-elimination A/B.
+
+    When ``VLLM_MI100_SILU_ELIMINATION_MODE=placeholder`` AND the master
+    fused-act-quant kill-switch is NOT set, returns a real-shaped fp16
+    view of ``gate_up[:, :H]`` (where ``H = gate_up.shape[-1] // 2``). The
+    caller (``Qwen2MLP.forward`` / ``Qwen2MoeMLP.forward``) substitutes
+    this view in place of the legacy ``self.act_fn(gate_up)`` call so the
+    redundant ``silu_and_mul`` kernel never fires; the substituted tensor
+    still satisfies the §13 cudagraph constraint (real shape ``[M, H]``,
+    correct dtype ``fp16``, valid pointer) so ``RowParallelLinear`` /
+    all-reduce see the same captured shapes as clean HEAD.
+
+    Returns ``None`` in EVERY negative branch so the caller's fall-through
+    to ``self.act_fn(gate_up)`` keeps clean-HEAD behavior byte-identical:
+
+        * MODE is ``legacy`` (default) or ``prefill-gate`` (path-2 owns
+          the silu decision in that mode).
+        * Master kill-switch ``VLLM_MI100_DISABLE_FUSED_ACT_QUANT`` (or
+          the legacy alias) is set — the disable-path MUST stay
+          byte-identical.
+        * ``gate_up`` is not a 2-D fp16 CUDA tensor with an even last
+          dim (same preconditions the fused producer enforces).
+
+    Lifecycle: the producer (``try_stash_fused_silu_quant_int8``) is the
+    component that computed ``fused_silu_quant_int8`` and stashed the
+    (int8, scale) cache on ``down_proj`` — the consumer
+    (``MI100Int8ScaledMMLinearKernel.apply_weights``) prefers the cache
+    when present and only consults ``x.dtype`` from the placeholder. The
+    placeholder is therefore never read for its values; it exists purely
+    to satisfy the captured cudagraph's shape/dtype contract.
+    """
+    # Fast negative branches — keep cheap so the legacy path eats near-zero
+    # overhead when MODE!=placeholder.
+    if silu_elimination_mode() != "placeholder":
+        return None
+    if is_fused_silu_quant_int8_disabled():
+        return None
+    # Same preconditions the fused producer enforces (kept in lock-step so
+    # the placeholder-view never lies about the shape the producer would
+    # accept; if the producer would fall through, we must too).
+    if gate_up.dim() != 2 or gate_up.dtype != torch.float16:
+        return None
+    if gate_up.shape[-1] % 2 != 0:
+        return None
+    if not gate_up.is_cuda:
+        return None
+    H = gate_up.shape[-1] // 2
+    # Real-shape view (zero-alloc): the basic slice returns a view with the
+    # same data_ptr; the captured cudagraph sees an ``[M, H]`` fp16 tensor
+    # with correct stride and a live CUDA pointer.
+    return gate_up[:, :H]
+
 
 def _truthy(val: str | None) -> bool:
     """Return True iff ``val`` looks like a truthy env-var value."""

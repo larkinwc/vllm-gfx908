@@ -615,3 +615,201 @@ class TestMi100Int8ScaledMmEmitInt8Next:
         ref_int8, ref_scale = _quantize_per_tile_reference(ref_fp32, block_n)
         torch.testing.assert_close(out_scale, ref_scale, atol=1e-4, rtol=0.0)
         torch.testing.assert_close(out_int8, ref_int8, atol=1, rtol=0.0)
+
+
+# ============================================================================
+# M1 — Redundant-Silu Elimination, Path-1 (placeholder-view).
+# ============================================================================
+#
+# Issue #33 (mission validation contract VAL-M1-001). Under
+# ``VLLM_MI100_SILU_ELIMINATION_MODE=placeholder``, the MLP forward must
+# replace the legacy ``silu_and_mul`` call with a real-shaped fp16 view
+# of ``gate_up[:, :hidden_size]`` so the captured cudagraph shape is
+# preserved while the redundant fp16 ``silu_and_mul`` write to HBM is
+# eliminated.
+#
+# These tests target the new env-mode accessor + placeholder-view helper
+# directly so they exercise the §13 cudagraph constraint (real shape,
+# correct dtype, view-not-copy) without standing up a full Qwen2MLP
+# instance.
+
+
+class TestSiluEliminationModePlaceholder:
+    """Path-1 (placeholder-view) mode contract for
+    ``VLLM_MI100_SILU_ELIMINATION_MODE``.
+
+    Verifies:
+      * The new env-mode accessor honors the 3 valid values
+        {``legacy``, ``placeholder``, ``prefill-gate``} and falls back to
+        ``legacy`` on unset / unknown values.
+      * The new placeholder-view helper returns a real-shaped fp16 view
+        of ``gate_up[:, :H]`` (same data_ptr, no allocation) when
+        MODE=``placeholder`` AND fusion is enabled.
+      * It returns ``None`` in all other modes (legacy, prefill-gate)
+        and when the master kill-switch
+        (``VLLM_MI100_DISABLE_FUSED_ACT_QUANT``) is set — so the caller
+        falls through to the byte-identical ``act_fn(gate_up)`` path.
+    """
+
+    @pytest.mark.parametrize(
+        "env_value,expected",
+        [
+            (None, "legacy"),
+            ("legacy", "legacy"),
+            ("placeholder", "placeholder"),
+            ("prefill-gate", "prefill-gate"),
+            ("garbage", "legacy"),
+            ("", "legacy"),
+        ],
+        ids=[
+            "unset",
+            "legacy",
+            "placeholder",
+            "prefill-gate",
+            "invalid",
+            "empty",
+        ],
+    )
+    def test_mode_accessor(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        env_value: str | None,
+        expected: str,
+    ) -> None:
+        """``silu_elimination_mode()`` returns one of the 3 valid modes,
+        defaulting to ``legacy`` on unset / invalid input."""
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            silu_elimination_mode,
+        )
+
+        if env_value is None:
+            monkeypatch.delenv("VLLM_MI100_SILU_ELIMINATION_MODE", raising=False)
+        else:
+            monkeypatch.setenv("VLLM_MI100_SILU_ELIMINATION_MODE", env_value)
+        assert silu_elimination_mode() == expected
+
+    @torch.inference_mode()
+    def test_placeholder_view_is_real_shape_fp16_view_of_gate_half(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Core path-1 contract.
+
+        Under MODE=``placeholder`` AND fusion enabled, the helper
+        returns a real-shaped fp16 view of ``gate_up[:, :H]`` so the
+        captured cudagraph shape (which expects an ``[M, H]`` fp16
+        tensor as the ``down_proj`` input) is preserved while the
+        redundant ``silu_and_mul`` kernel becomes a no-op (we never
+        call it).
+
+        Honors §13 cudagraph constraint: real shape ``[M, H]``, correct
+        dtype ``fp16``, correct device, and is a *view* (same underlying
+        data_ptr as ``gate_up``) so there is zero allocation cost.
+        """
+        monkeypatch.setenv("VLLM_MI100_SILU_ELIMINATION_MODE", "placeholder")
+        monkeypatch.delenv("VLLM_MI100_DISABLE_FUSED_ACT_QUANT", raising=False)
+        monkeypatch.delenv("VLLM_DISABLE_FUSED_ACT_QUANT", raising=False)
+
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            silu_elimination_placeholder,
+        )
+
+        M, H = 4, 3584
+        gate_up = torch.randn((M, 2 * H), dtype=torch.float16, device="cuda")
+        ph = silu_elimination_placeholder(gate_up)
+
+        assert ph is not None, (
+            "MODE=placeholder must return a placeholder view (got None)."
+        )
+        assert ph.shape == (M, H), f"expected ({M},{H}); got {tuple(ph.shape)}"
+        assert ph.dtype == torch.float16
+        assert ph.device == gate_up.device
+        # Must be a view (no allocation): same underlying storage.
+        assert ph.data_ptr() == gate_up.data_ptr(), (
+            "placeholder MUST be a view of gate_up (zero-alloc), not a copy."
+        )
+        # Specifically the gate half (``gate_up[:, :H]``).
+        torch.testing.assert_close(ph, gate_up[:, :H], atol=0.0, rtol=0.0)
+
+    @torch.inference_mode()
+    def test_placeholder_view_none_in_legacy_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """MODE=``legacy`` (default) returns ``None`` so the caller
+        takes the byte-identical ``act_fn(gate_up)`` path."""
+        monkeypatch.delenv("VLLM_MI100_SILU_ELIMINATION_MODE", raising=False)
+        monkeypatch.delenv("VLLM_MI100_DISABLE_FUSED_ACT_QUANT", raising=False)
+        monkeypatch.delenv("VLLM_DISABLE_FUSED_ACT_QUANT", raising=False)
+
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            silu_elimination_placeholder,
+        )
+
+        gate_up = torch.randn((4, 7168), dtype=torch.float16, device="cuda")
+        assert silu_elimination_placeholder(gate_up) is None
+
+    @torch.inference_mode()
+    def test_placeholder_view_none_in_prefill_gate_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """MODE=``prefill-gate`` is path-2's territory (M1-F2); the
+        path-1 helper must return ``None`` so the prefill-gate
+        dispatcher logic owns the silu decision."""
+        monkeypatch.setenv("VLLM_MI100_SILU_ELIMINATION_MODE", "prefill-gate")
+        monkeypatch.delenv("VLLM_MI100_DISABLE_FUSED_ACT_QUANT", raising=False)
+        monkeypatch.delenv("VLLM_DISABLE_FUSED_ACT_QUANT", raising=False)
+
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            silu_elimination_placeholder,
+        )
+
+        gate_up = torch.randn((4, 7168), dtype=torch.float16, device="cuda")
+        assert silu_elimination_placeholder(gate_up) is None
+
+    @pytest.mark.parametrize(
+        "disable_env",
+        ["VLLM_MI100_DISABLE_FUSED_ACT_QUANT", "VLLM_DISABLE_FUSED_ACT_QUANT"],
+    )
+    @torch.inference_mode()
+    def test_placeholder_view_none_when_master_killswitch_set(
+        self, monkeypatch: pytest.MonkeyPatch, disable_env: str
+    ) -> None:
+        """Even with MODE=``placeholder``, the master kill-switch
+        (primary or legacy alias) forces the helper to return ``None``
+        so the disable-path is byte-identical to clean HEAD."""
+        monkeypatch.setenv("VLLM_MI100_SILU_ELIMINATION_MODE", "placeholder")
+        monkeypatch.setenv(disable_env, "1")
+
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            silu_elimination_placeholder,
+        )
+
+        gate_up = torch.randn((4, 7168), dtype=torch.float16, device="cuda")
+        assert silu_elimination_placeholder(gate_up) is None
+
+    @torch.inference_mode()
+    def test_placeholder_view_none_on_unsupported_shape_or_dtype(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The helper guards the same preconditions as the producer
+        (2-D fp16 CUDA tensor with even last dim); otherwise returns
+        ``None`` so the caller's legacy path stays byte-identical."""
+        monkeypatch.setenv("VLLM_MI100_SILU_ELIMINATION_MODE", "placeholder")
+        monkeypatch.delenv("VLLM_MI100_DISABLE_FUSED_ACT_QUANT", raising=False)
+        monkeypatch.delenv("VLLM_DISABLE_FUSED_ACT_QUANT", raising=False)
+
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            silu_elimination_placeholder,
+        )
+
+        # bf16 (not fp16): falls back to None.
+        gate_up_bf16 = torch.randn((4, 7168), dtype=torch.bfloat16, device="cuda")
+        assert silu_elimination_placeholder(gate_up_bf16) is None
+        # 3-D tensor: falls back to None.
+        gate_up_3d = torch.randn((2, 4, 7168), dtype=torch.float16, device="cuda")
+        assert silu_elimination_placeholder(gate_up_3d) is None
+        # Odd last dim: falls back to None.
+        gate_up_odd = torch.randn((4, 7167), dtype=torch.float16, device="cuda")
+        assert silu_elimination_placeholder(gate_up_odd) is None
+        # CPU tensor: falls back to None.
+        gate_up_cpu = torch.randn((4, 7168), dtype=torch.float16, device="cpu")
+        assert silu_elimination_placeholder(gate_up_cpu) is None
