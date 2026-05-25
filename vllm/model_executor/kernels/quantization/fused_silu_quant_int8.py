@@ -98,36 +98,6 @@ _SILU_ELIMINATION_MODES_VALID: frozenset[str] = frozenset(
     {"legacy", "placeholder", "prefill-gate"}
 )
 
-# M1-F2 (VAL-M1-002) prefill-gate threshold. Under
-# ``VLLM_MI100_SILU_ELIMINATION_MODE=prefill-gate`` the fused producer
-# (``try_stash_fused_silu_quant_int8``) fires only when the activation
-# batch dim ``M > PREFILL_GATE_THRESHOLD``; decode-sized batches stay on
-# the byte-identical legacy ``silu_and_mul`` + ``scaled_int8_quant``
-# composition.
-#
-# Threshold justification: ``scripts/mi100/dump_gemm_shapes.py`` recon
-# on Qwen3.5-9B (artifact:
-# ``/root/bench-int8-w4a16/tensilelite/gemm_shapes_w8a8_tp1.csv``) shows
-# decode shapes occupy ``M ∈ {1, 2, 4, 8, ..., 256}`` (40 unique 8-step
-# decode values) while prefill shapes jump to
-# ``M ∈ {512, 513, 1024, 1026, 2048, ...}``. THRESHOLD=256 with strict
-# ``>`` cleanly separates the two regimes — ``M == 256`` is the largest
-# decode tile and remains on legacy; ``M == 257`` and up is prefill and
-# uses the fused producer.
-PREFILL_GATE_THRESHOLD: int = 256
-
-
-def should_fire_under_prefill_gate(M: int) -> bool:
-    """Path-2 (prefill-gate) firing predicate.
-
-    Strict ``M > PREFILL_GATE_THRESHOLD``: at the boundary
-    ``M == PREFILL_GATE_THRESHOLD`` the producer stays OFF (legacy
-    composition handles the largest decode tile). Used by
-    :func:`try_stash_fused_silu_quant_int8` to gate the fused-producer
-    fire under ``VLLM_MI100_SILU_ELIMINATION_MODE=prefill-gate``.
-    """
-    return M > PREFILL_GATE_THRESHOLD
-
 
 def silu_elimination_mode() -> str:
     """Return the current silu-elimination mode.
@@ -372,17 +342,6 @@ def try_stash_fused_silu_quant_int8(
     if torch.cuda.is_current_stream_capturing():
         return False
     if not _down_proj_is_mi100_w8a8_int8(down_proj):
-        return False
-    # M1-F2 (VAL-M1-002) path-2 gate: under MODE=``prefill-gate`` only
-    # fire on prefill-sized batches. Decode-sized batches (M ≤ 256) fall
-    # through to the byte-identical legacy ``silu_and_mul`` +
-    # ``scaled_int8_quant`` composition. Other modes (legacy, placeholder,
-    # unset, invalid → legacy) DO NOT apply this gate — they retain the
-    # pre-M1-F2 firing behavior (path-1 owns the silu decision separately
-    # for MODE=placeholder via ``silu_elimination_placeholder``).
-    if silu_elimination_mode() == "prefill-gate" and not should_fire_under_prefill_gate(
-        gate_up.shape[0]
-    ):
         return False
 
     try:
