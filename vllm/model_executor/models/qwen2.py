@@ -112,37 +112,28 @@ class Qwen2MLP(nn.Module):
 
     def forward(self, x):
         gate_up, _ = self.gate_up_proj(x)
-        # M1 silu→quant fusion (issue #33): when the env-gated MI100
-        # W8A8 path is active AND ``down_proj`` is bound to
-        # MI100Int8ScaledMMLinearKernel, stash an (int8, scale) cache on
-        # ``down_proj`` so its ``apply_weights`` consumer skips the
-        # legacy ``scaled_int8_quant`` HBM round-trip. The legacy
-        # ``act_fn(gate_up)`` call remains, but is *redundant* on the
-        # fused path; the cache was computed directly from ``gate_up``
-        # by ``fused_silu_quant_int8`` and the consumer prefers it. On
-        # every negative branch (env-disable, non-W8A8 path, shape
-        # mismatch) the helper returns False with no side effects so
-        # behavior is byte-identical to clean HEAD.
+        # M1 silu→quant fusion (issue #33): when ``down_proj`` is bound to
+        # MI100Int8ScaledMMLinearKernel and the master kill-switch is not
+        # set, the producer stashes an (int8, scale) cache on ``down_proj``
+        # so its ``apply_weights`` consumer skips the legacy
+        # ``scaled_int8_quant`` HBM round-trip. When the cache is stashed,
+        # we also skip the redundant ``silu_and_mul`` fp16 write by feeding
+        # a real-shaped fp16 view of ``gate_up[:, :H]`` into ``down_proj``
+        # (placeholder-view path, winner of the M1 A/B — see
+        # library/m1-winner.md). The view honors the §13 cudagraph
+        # constraint (correct shape/stride/dtype) and the consumer only
+        # reads ``x.dtype`` from it; values come from the cache.
+        # On every negative branch (kill-switch, non-W8A8 path, shape
+        # mismatch) the helper returns False and the fall-through to
+        # ``self.act_fn(gate_up)`` is byte-identical to clean HEAD.
         from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
-            silu_elimination_placeholder,
             try_stash_fused_silu_quant_int8,
         )
 
-        stashed = try_stash_fused_silu_quant_int8(gate_up, self.down_proj)
-        # M1 path-1 (placeholder-view, issue #33): when the producer
-        # actually stashed the (int8, scale) cache AND the user opted
-        # into MODE=placeholder, skip the redundant fp16 silu_and_mul
-        # write entirely. The consumer in
-        # ``MI100Int8ScaledMMLinearKernel.apply_weights`` reads only
-        # ``x.dtype`` from this placeholder and consumes the cached
-        # int8 + scale directly, so feeding a real-shaped fp16 view of
-        # ``gate_up[:, :H]`` honors the §13 cudagraph constraint
-        # (correct shape/stride/dtype) without doing the silu work.
-        # The helper returns ``None`` on every negative branch
-        # (legacy/prefill-gate/disable/shape-mismatch) so the
-        # fall-through is byte-identical to clean HEAD.
-        placeholder = silu_elimination_placeholder(gate_up) if stashed else None
-        x = placeholder if placeholder is not None else self.act_fn(gate_up)
+        if try_stash_fused_silu_quant_int8(gate_up, self.down_proj):
+            x = gate_up[:, : gate_up.shape[-1] // 2]
+        else:
+            x = self.act_fn(gate_up)
         x, _ = self.down_proj(x)
         return x
 
