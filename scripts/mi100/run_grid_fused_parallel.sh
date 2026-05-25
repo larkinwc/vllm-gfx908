@@ -109,8 +109,9 @@ done
 
 if [[ "$MODE" == "--milestone" \
       && "$MILESTONE" != "m4-fused-act-quant" \
-      && "$MILESTONE" != "m1-redundant-silu" ]]; then
-  echo "unsupported milestone: $MILESTONE (allowed: m4-fused-act-quant, m1-redundant-silu)" >&2
+      && "$MILESTONE" != "m1-redundant-silu" \
+      && "$MILESTONE" != "m3-redundant-silu" ]]; then
+  echo "unsupported milestone: $MILESTONE (allowed: m4-fused-act-quant, m1-redundant-silu, m3-redundant-silu)" >&2
   exit 2
 fi
 
@@ -120,6 +121,13 @@ fi
 # fused-on tree).
 if [[ "$MILESTONE" == "m1-redundant-silu" ]]; then
   OUT_ROOT=/root/bench-int8-w4a16-redundant-silu/m2-bench
+  mkdir -p "$OUT_ROOT"
+fi
+# M3-F1: full 24-cell grid with the M1-promoted (placeholder-view) code.
+# Fused-on default-on state — VLLM_MI100_DISABLE_FUSED_ACT_QUANT must be
+# unset, identical sanity to m4-fused-act-quant.
+if [[ "$MILESTONE" == "m3-redundant-silu" ]]; then
+  OUT_ROOT=/root/bench-int8-w4a16-redundant-silu/m3-bench
   mkdir -p "$OUT_ROOT"
 fi
 
@@ -354,12 +362,12 @@ DATASET=/root/bench-int8-w4a16/datasets/coding_agent.jsonl
 # run if the disable env-var is set. The m1-redundant-silu W4A16 A/B grid
 # intentionally runs fused-off (VLLM_MI100_DISABLE_FUSED_ACT_QUANT=1) per
 # M2-F1 spec, so the check is inverted there.
-if [[ "$MILESTONE" == "m4-fused-act-quant" ]]; then
+if [[ "$MILESTONE" == "m4-fused-act-quant" || "$MILESTONE" == "m3-redundant-silu" ]]; then
   if [[ "${VLLM_MI100_DISABLE_FUSED_ACT_QUANT:-0}" != "0" || \
         "${VLLM_DISABLE_FUSED_ACT_QUANT:-0}" != "0" ]]; then
     {
       echo "[grid] FATAL: VLLM_MI100_DISABLE_FUSED_ACT_QUANT or"
-      echo "       VLLM_DISABLE_FUSED_ACT_QUANT is set; m4-bench-grid must"
+      echo "       VLLM_DISABLE_FUSED_ACT_QUANT is set; $MILESTONE grid must"
       echo "       run with the default-on fused state. Unset and retry."
     } | tee -a "$GRID_LOG"
     exit 2
