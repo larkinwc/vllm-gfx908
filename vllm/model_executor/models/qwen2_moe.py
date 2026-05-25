@@ -115,21 +115,27 @@ class Qwen2MoeMLP(nn.Module):
         gate_up, _ = self.gate_up_proj(x)
         # M1 silu→quant fusion (issue #33): stash an (int8, scale) cache
         # on ``down_proj`` so its W8A8 INT8 ``apply_weights`` consumer
-        # skips the legacy ``scaled_int8_quant`` HBM round-trip. When
-        # the cache is stashed, we also skip the redundant
-        # ``silu_and_mul`` fp16 write by feeding a real-shaped fp16 view
-        # of ``gate_up[:, :H]`` into ``down_proj`` (placeholder-view
-        # path, winner of the M1 A/B — see library/m1-winner.md). The
-        # view honors the §13 cudagraph constraint and the consumer
-        # only reads ``x.dtype`` from it.
+        # skips the legacy ``scaled_int8_quant`` HBM round-trip. The
+        # subsequent ``act_fn(gate_up)`` + ``down_proj`` call sequence
+        # is preserved so the captured CUDA-graph shapes match clean
+        # HEAD; the consumer prefers the cache when present. Every
+        # negative branch in the helper (env-disable, non-W8A8 path,
+        # shape mismatch) leaves the cache untouched so the fall-through
+        # is byte-identical.
         from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            silu_elimination_placeholder,
             try_stash_fused_silu_quant_int8,
         )
 
-        if try_stash_fused_silu_quant_int8(gate_up, self.down_proj):
-            out = gate_up[:, : gate_up.shape[-1] // 2]
-        else:
-            out = self.act_fn(gate_up)
+        stashed = try_stash_fused_silu_quant_int8(gate_up, self.down_proj)
+        # M1 path-1 (placeholder-view, issue #33): see ``Qwen2MLP.forward``
+        # comment for the §13 cudagraph rationale. Returning a real-shaped
+        # fp16 view of ``gate_up[:, :H]`` skips the redundant
+        # ``silu_and_mul`` write when MODE=placeholder; falls back to the
+        # byte-identical legacy ``act_fn(gate_up)`` path in every other
+        # mode (legacy / prefill-gate / master kill-switch).
+        placeholder = silu_elimination_placeholder(gate_up) if stashed else None
+        out = placeholder if placeholder is not None else self.act_fn(gate_up)
         out, _ = self.down_proj(out)
 
         if self.expert_gate is not None:

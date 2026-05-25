@@ -618,31 +618,226 @@ class TestMi100Int8ScaledMmEmitInt8Next:
 
 
 # ============================================================================
-# M1 — Redundant-Silu Elimination, promoted (M1-F5).
+# M1 — Redundant-Silu Elimination, Path-1 (placeholder-view).
 # ============================================================================
 #
-# Issue #33 (mission validation contract VAL-M1-001 / VAL-M1-002, see also
-# library/m1-winner.md). After M1-F4 rocprofv3 evidence on cell
-# ``w8a8_tp1_c4``, the path-1 (placeholder-view) approach was selected
-# as the winner (FETCH+WRITE −0.72%, act_and_mul_kernel −23.0% vs
-# legacy; strictly better than path-2 prefill-gate which only ties on
-# act_and_mul). M1-F5 promotes path-1 to unconditional firing and
-# deletes the ``VLLM_MI100_SILU_ELIMINATION_MODE`` env flag and the
-# path-2 (prefill-gate) loser-path code.
+# Issue #33 (mission validation contract VAL-M1-001). Under
+# ``VLLM_MI100_SILU_ELIMINATION_MODE=placeholder``, the MLP forward must
+# replace the legacy ``silu_and_mul`` call with a real-shaped fp16 view
+# of ``gate_up[:, :hidden_size]`` so the captured cudagraph shape is
+# preserved while the redundant fp16 ``silu_and_mul`` write to HBM is
+# eliminated.
 #
-# Under the promoted contract, whenever the producer
-# ``try_stash_fused_silu_quant_int8`` stashes a cache, the MLP forward
-# substitutes a real-shaped fp16 view of ``gate_up[:, :H]`` for the
-# legacy ``self.act_fn(gate_up)`` call (placeholder-view path). The
-# master kill-switch ``VLLM_MI100_DISABLE_FUSED_ACT_QUANT`` (and its
-# legacy alias) still forces the byte-identical legacy composition.
+# These tests target the new env-mode accessor + placeholder-view helper
+# directly so they exercise the §13 cudagraph constraint (real shape,
+# correct dtype, view-not-copy) without standing up a full Qwen2MLP
+# instance.
+
+
+class TestSiluEliminationModePlaceholder:
+    """Path-1 (placeholder-view) mode contract for
+    ``VLLM_MI100_SILU_ELIMINATION_MODE``.
+
+    Verifies:
+      * The new env-mode accessor honors the 3 valid values
+        {``legacy``, ``placeholder``, ``prefill-gate``} and falls back to
+        ``legacy`` on unset / unknown values.
+      * The new placeholder-view helper returns a real-shaped fp16 view
+        of ``gate_up[:, :H]`` (same data_ptr, no allocation) when
+        MODE=``placeholder`` AND fusion is enabled.
+      * It returns ``None`` in all other modes (legacy, prefill-gate)
+        and when the master kill-switch
+        (``VLLM_MI100_DISABLE_FUSED_ACT_QUANT``) is set — so the caller
+        falls through to the byte-identical ``act_fn(gate_up)`` path.
+    """
+
+    @pytest.mark.parametrize(
+        "env_value,expected",
+        [
+            (None, "legacy"),
+            ("legacy", "legacy"),
+            ("placeholder", "placeholder"),
+            ("prefill-gate", "prefill-gate"),
+            ("garbage", "legacy"),
+            ("", "legacy"),
+        ],
+        ids=[
+            "unset",
+            "legacy",
+            "placeholder",
+            "prefill-gate",
+            "invalid",
+            "empty",
+        ],
+    )
+    def test_mode_accessor(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        env_value: str | None,
+        expected: str,
+    ) -> None:
+        """``silu_elimination_mode()`` returns one of the 3 valid modes,
+        defaulting to ``legacy`` on unset / invalid input."""
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            silu_elimination_mode,
+        )
+
+        if env_value is None:
+            monkeypatch.delenv("VLLM_MI100_SILU_ELIMINATION_MODE", raising=False)
+        else:
+            monkeypatch.setenv("VLLM_MI100_SILU_ELIMINATION_MODE", env_value)
+        assert silu_elimination_mode() == expected
+
+    @torch.inference_mode()
+    def test_placeholder_view_is_real_shape_fp16_view_of_gate_half(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Core path-1 contract.
+
+        Under MODE=``placeholder`` AND fusion enabled, the helper
+        returns a real-shaped fp16 view of ``gate_up[:, :H]`` so the
+        captured cudagraph shape (which expects an ``[M, H]`` fp16
+        tensor as the ``down_proj`` input) is preserved while the
+        redundant ``silu_and_mul`` kernel becomes a no-op (we never
+        call it).
+
+        Honors §13 cudagraph constraint: real shape ``[M, H]``, correct
+        dtype ``fp16``, correct device, and is a *view* (same underlying
+        data_ptr as ``gate_up``) so there is zero allocation cost.
+        """
+        monkeypatch.setenv("VLLM_MI100_SILU_ELIMINATION_MODE", "placeholder")
+        monkeypatch.delenv("VLLM_MI100_DISABLE_FUSED_ACT_QUANT", raising=False)
+        monkeypatch.delenv("VLLM_DISABLE_FUSED_ACT_QUANT", raising=False)
+
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            silu_elimination_placeholder,
+        )
+
+        M, H = 4, 3584
+        gate_up = torch.randn((M, 2 * H), dtype=torch.float16, device="cuda")
+        ph = silu_elimination_placeholder(gate_up)
+
+        assert ph is not None, (
+            "MODE=placeholder must return a placeholder view (got None)."
+        )
+        assert ph.shape == (M, H), f"expected ({M},{H}); got {tuple(ph.shape)}"
+        assert ph.dtype == torch.float16
+        assert ph.device == gate_up.device
+        # Must be a view (no allocation): same underlying storage.
+        assert ph.data_ptr() == gate_up.data_ptr(), (
+            "placeholder MUST be a view of gate_up (zero-alloc), not a copy."
+        )
+        # Specifically the gate half (``gate_up[:, :H]``).
+        torch.testing.assert_close(ph, gate_up[:, :H], atol=0.0, rtol=0.0)
+
+    @torch.inference_mode()
+    def test_placeholder_view_none_in_legacy_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """MODE=``legacy`` (default) returns ``None`` so the caller
+        takes the byte-identical ``act_fn(gate_up)`` path."""
+        monkeypatch.delenv("VLLM_MI100_SILU_ELIMINATION_MODE", raising=False)
+        monkeypatch.delenv("VLLM_MI100_DISABLE_FUSED_ACT_QUANT", raising=False)
+        monkeypatch.delenv("VLLM_DISABLE_FUSED_ACT_QUANT", raising=False)
+
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            silu_elimination_placeholder,
+        )
+
+        gate_up = torch.randn((4, 7168), dtype=torch.float16, device="cuda")
+        assert silu_elimination_placeholder(gate_up) is None
+
+    @torch.inference_mode()
+    def test_placeholder_view_none_in_prefill_gate_mode(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """MODE=``prefill-gate`` is path-2's territory (M1-F2); the
+        path-1 helper must return ``None`` so the prefill-gate
+        dispatcher logic owns the silu decision."""
+        monkeypatch.setenv("VLLM_MI100_SILU_ELIMINATION_MODE", "prefill-gate")
+        monkeypatch.delenv("VLLM_MI100_DISABLE_FUSED_ACT_QUANT", raising=False)
+        monkeypatch.delenv("VLLM_DISABLE_FUSED_ACT_QUANT", raising=False)
+
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            silu_elimination_placeholder,
+        )
+
+        gate_up = torch.randn((4, 7168), dtype=torch.float16, device="cuda")
+        assert silu_elimination_placeholder(gate_up) is None
+
+    @pytest.mark.parametrize(
+        "disable_env",
+        ["VLLM_MI100_DISABLE_FUSED_ACT_QUANT", "VLLM_DISABLE_FUSED_ACT_QUANT"],
+    )
+    @torch.inference_mode()
+    def test_placeholder_view_none_when_master_killswitch_set(
+        self, monkeypatch: pytest.MonkeyPatch, disable_env: str
+    ) -> None:
+        """Even with MODE=``placeholder``, the master kill-switch
+        (primary or legacy alias) forces the helper to return ``None``
+        so the disable-path is byte-identical to clean HEAD."""
+        monkeypatch.setenv("VLLM_MI100_SILU_ELIMINATION_MODE", "placeholder")
+        monkeypatch.setenv(disable_env, "1")
+
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            silu_elimination_placeholder,
+        )
+
+        gate_up = torch.randn((4, 7168), dtype=torch.float16, device="cuda")
+        assert silu_elimination_placeholder(gate_up) is None
+
+    @torch.inference_mode()
+    def test_placeholder_view_none_on_unsupported_shape_or_dtype(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The helper guards the same preconditions as the producer
+        (2-D fp16 CUDA tensor with even last dim); otherwise returns
+        ``None`` so the caller's legacy path stays byte-identical."""
+        monkeypatch.setenv("VLLM_MI100_SILU_ELIMINATION_MODE", "placeholder")
+        monkeypatch.delenv("VLLM_MI100_DISABLE_FUSED_ACT_QUANT", raising=False)
+        monkeypatch.delenv("VLLM_DISABLE_FUSED_ACT_QUANT", raising=False)
+
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            silu_elimination_placeholder,
+        )
+
+        # bf16 (not fp16): falls back to None.
+        gate_up_bf16 = torch.randn((4, 7168), dtype=torch.bfloat16, device="cuda")
+        assert silu_elimination_placeholder(gate_up_bf16) is None
+        # 3-D tensor: falls back to None.
+        gate_up_3d = torch.randn((2, 4, 7168), dtype=torch.float16, device="cuda")
+        assert silu_elimination_placeholder(gate_up_3d) is None
+        # Odd last dim: falls back to None.
+        gate_up_odd = torch.randn((4, 7167), dtype=torch.float16, device="cuda")
+        assert silu_elimination_placeholder(gate_up_odd) is None
+        # CPU tensor: falls back to None.
+        gate_up_cpu = torch.randn((4, 7168), dtype=torch.float16, device="cpu")
+        assert silu_elimination_placeholder(gate_up_cpu) is None
+
+
+# ============================================================================
+# M1 — Redundant-Silu Elimination, Path-2 (prefill-gate).
+# ============================================================================
+#
+# Issue #33 (mission validation contract VAL-M1-002). Under
+# ``VLLM_MI100_SILU_ELIMINATION_MODE=prefill-gate``, the fused producer
+# (``try_stash_fused_silu_quant_int8``) MUST fire ONLY when the batch is
+# prefill-sized (``M > PREFILL_GATE_THRESHOLD``); decode-sized batches
+# stay on the byte-identical legacy ``silu_and_mul`` + ``scaled_int8_quant``
+# composition.
+#
+# Threshold justification: ``scripts/mi100/dump_gemm_shapes.py`` recon on
+# Qwen3.5-9B (artifacts at
+# ``/root/bench-int8-w4a16/tensilelite/gemm_shapes_w8a8_tp1.csv``) shows
+# decode shapes occupy M ∈ [1, 256] (8-step grid, 40 unique M values) while
+# prefill shapes jump to M ∈ {512, 513, 1024, 1026, 2048, ...}. THRESHOLD=256
+# (strict ``>``) cleanly separates the two regimes.
 
 
 class _FakeMI100Kernel:
-    """Stand-in for ``MI100Int8ScaledMMLinearKernel`` that satisfies
-    the producer's class-name match without dragging the real kernel
-    module (which requires gfx908 device probe at import time on some
-    hosts)."""
+    """Stand-in for ``MI100Int8ScaledMMLinearKernel`` that satisfies the
+    producer's class-name match without dragging the real kernel module
+    (which requires gfx908 device probe at import time on some hosts)."""
 
 
 _FakeMI100Kernel.__name__ = "MI100Int8ScaledMMLinearKernel"
@@ -654,87 +849,101 @@ class _FakeScheme:
 
 
 class _FakeDownProj:
-    """Minimal stand-in for a CompressedTensors-wired Linear bound to
-    the MI100 W8A8 INT8 kernel. The producer's
-    ``_down_proj_is_mi100_w8a8_int8`` helper walks
-    ``down_proj.scheme.kernel`` and matches on the class name, so this
-    is sufficient to exercise the promoted unconditional dispatch."""
+    """Minimal stand-in for a CompressedTensors-wired Linear bound to the
+    MI100 W8A8 INT8 kernel. The producer's ``_down_proj_is_mi100_w8a8_int8``
+    helper walks ``down_proj.scheme.kernel`` and matches on the class
+    name, so this is sufficient to exercise the prefill-gate dispatch."""
 
     def __init__(self) -> None:
         self.scheme = _FakeScheme()
 
 
-class TestPromotedPlaceholderUnconditional:
-    """Promoted-path contract for the M1 silu→quant fusion (M1-F5).
+class TestSiluEliminationModePrefillGate:
+    """Path-2 (prefill-gate) mode contract for
+    ``VLLM_MI100_SILU_ELIMINATION_MODE``.
 
     Verifies:
-      * The deleted env flag ``VLLM_MI100_SILU_ELIMINATION_MODE`` has
-        no module-level entry points
-        (``silu_elimination_mode``, ``silu_elimination_placeholder``,
-        ``PREFILL_GATE_THRESHOLD``, ``should_fire_under_prefill_gate``
-        are gone).
-      * Under the master kill-switch (primary or legacy alias) the
-        producer does NOT stash — so the legacy composition runs
-        unchanged for users who explicitly opt out of the fusion.
-      * Without the kill-switch, the producer stashes the (int8,
-        scale) cache for any M (no threshold gate).
-      * Setting ``VLLM_MI100_SILU_ELIMINATION_MODE`` to any value has
-        ZERO effect on producer firing — confirming the flag has been
-        removed from the dispatch decision.
+      * The path-2 threshold constant ``PREFILL_GATE_THRESHOLD`` exists
+        and equals 256 (per the ``dump_gemm_shapes.py`` recon on
+        Qwen3.5-9B).
+      * ``should_fire_under_prefill_gate(M)`` is a strict ``M > THRESHOLD``
+        predicate (so M == THRESHOLD stays on legacy).
+      * Under MODE=``prefill-gate``, ``try_stash_fused_silu_quant_int8``
+        returns False (no cache stashed) for decode-sized M, and True
+        (cache stashed) for prefill-sized M.
+      * Other modes (legacy / placeholder / unset) DO NOT apply the
+        threshold gate — they retain the byte-identical pre-M1-F2
+        behavior (path-1 owns the silu decision separately for
+        MODE=placeholder; MODE=legacy is the disable-path).
     """
 
-    def test_deleted_symbols_no_longer_importable(self) -> None:
-        """The path-2 / mode-helper symbols MUST be gone from the
-        module's public surface after the M1-F5 promotion."""
-        from vllm.model_executor.kernels.quantization import (
-            fused_silu_quant_int8 as mod,
+    def test_prefill_gate_threshold_constant_is_256(self) -> None:
+        """The threshold MUST be 256 per the Qwen3.5-9B shape recon."""
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            PREFILL_GATE_THRESHOLD,
         )
 
-        for name in (
-            "silu_elimination_mode",
-            "silu_elimination_placeholder",
-            "PREFILL_GATE_THRESHOLD",
-            "should_fire_under_prefill_gate",
-        ):
-            assert not hasattr(mod, name), (
-                f"{name!r} must be deleted by M1-F5 (winner promotion); "
-                "found leftover module attribute."
-            )
+        assert PREFILL_GATE_THRESHOLD == 256, (
+            "PREFILL_GATE_THRESHOLD must equal 256 (see "
+            "scripts/mi100/dump_gemm_shapes.py recon: decode M ∈ [1,256], "
+            "prefill M ≥ 512)."
+        )
 
     @pytest.mark.parametrize(
-        "disable_env",
-        ["VLLM_MI100_DISABLE_FUSED_ACT_QUANT", "VLLM_DISABLE_FUSED_ACT_QUANT"],
+        "M,expected",
+        [
+            (1, False),
+            (8, False),
+            (64, False),
+            (256, False),  # strict >; equal to threshold stays on legacy
+            (257, True),
+            (512, True),
+            (1024, True),
+            (2048, True),
+        ],
     )
+    def test_should_fire_under_prefill_gate(self, M: int, expected: bool) -> None:
+        """Strict ``M > THRESHOLD`` predicate. M == 256 stays on legacy."""
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            should_fire_under_prefill_gate,
+        )
+
+        assert should_fire_under_prefill_gate(M) is expected
+
+    @pytest.mark.parametrize("M", [1, 8, 64, 248, 256])
     @torch.inference_mode()
-    def test_master_killswitch_skips_stash(
-        self, monkeypatch: pytest.MonkeyPatch, disable_env: str
+    def test_try_stash_skips_decode_under_prefill_gate(
+        self, monkeypatch: pytest.MonkeyPatch, M: int
     ) -> None:
-        """Master kill-switch (primary or legacy alias) MUST force the
-        producer to fall through to the legacy composition — disable
-        path stays byte-identical to clean HEAD."""
-        monkeypatch.setenv(disable_env, "1")
-        # Even if a user sets the deleted env flag, behavior is
-        # controlled entirely by the kill-switch.
-        monkeypatch.delenv("VLLM_MI100_SILU_ELIMINATION_MODE", raising=False)
+        """Under MODE=``prefill-gate``, decode-sized batches (M ≤ 256)
+        MUST NOT stash; the legacy composition handles them."""
+        monkeypatch.setenv("VLLM_MI100_SILU_ELIMINATION_MODE", "prefill-gate")
+        monkeypatch.delenv("VLLM_MI100_DISABLE_FUSED_ACT_QUANT", raising=False)
+        monkeypatch.delenv("VLLM_DISABLE_FUSED_ACT_QUANT", raising=False)
 
         from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
             try_stash_fused_silu_quant_int8,
         )
 
-        M, H = 1024, 3584
+        H = 3584
         gate_up = torch.randn((M, 2 * H), dtype=torch.float16, device="cuda")
         down_proj = _FakeDownProj()
-        assert try_stash_fused_silu_quant_int8(gate_up, down_proj) is False
-        assert not hasattr(down_proj, "_mi100_fused_silu_cache")
+        stashed = try_stash_fused_silu_quant_int8(gate_up, down_proj)
+        assert stashed is False, (
+            f"prefill-gate must NOT fire for decode M={M} (≤ THRESHOLD=256)."
+        )
+        assert not hasattr(down_proj, "_mi100_fused_silu_cache"), (
+            "No cache should be stashed when prefill-gate skips the producer."
+        )
 
-    @pytest.mark.parametrize("M", [1, 8, 64, 256, 257, 512, 1024])
+    @pytest.mark.parametrize("M", [257, 512, 1024])
     @torch.inference_mode()
-    def test_producer_fires_unconditionally_for_any_M(
+    def test_try_stash_fires_prefill_under_prefill_gate(
         self, monkeypatch: pytest.MonkeyPatch, M: int
     ) -> None:
-        """After M1-F5 promotion the prefill-gate threshold is GONE —
-        the producer stashes for both decode-sized and prefill-sized
-        batches whenever the kill-switch is off."""
+        """Under MODE=``prefill-gate``, prefill-sized batches (M > 256)
+        MUST stash the fused (int8, scale) cache on ``down_proj``."""
+        monkeypatch.setenv("VLLM_MI100_SILU_ELIMINATION_MODE", "prefill-gate")
         monkeypatch.delenv("VLLM_MI100_DISABLE_FUSED_ACT_QUANT", raising=False)
         monkeypatch.delenv("VLLM_DISABLE_FUSED_ACT_QUANT", raising=False)
 
@@ -747,27 +956,33 @@ class TestPromotedPlaceholderUnconditional:
         down_proj = _FakeDownProj()
         stashed = try_stash_fused_silu_quant_int8(gate_up, down_proj)
         assert stashed is True, (
-            f"Promoted path must fire unconditionally for M={M} (no "
-            "prefill-gate threshold remains)."
+            f"prefill-gate MUST fire for prefill M={M} (> THRESHOLD=256)."
         )
         cache = getattr(down_proj, "_mi100_fused_silu_cache", None)
-        assert cache is not None
+        assert cache is not None, "Producer must stash (int8, scale) cache."
         q, scale = cache
         assert q.shape == (M, H) and q.dtype == torch.int8
         assert scale.shape == (M, 1) and scale.dtype == torch.float32
 
     @pytest.mark.parametrize(
-        "stale_env_value",
-        ["placeholder", "prefill-gate", "legacy", "garbage", ""],
+        "mode_env",
+        [None, "legacy", "placeholder", "garbage"],
     )
     @torch.inference_mode()
-    def test_deleted_env_flag_has_no_effect(
-        self, monkeypatch: pytest.MonkeyPatch, stale_env_value: str
+    def test_other_modes_do_not_apply_threshold_gate(
+        self, monkeypatch: pytest.MonkeyPatch, mode_env: str | None
     ) -> None:
-        """Any value of the deleted ``VLLM_MI100_SILU_ELIMINATION_MODE``
-        env flag MUST have zero effect on producer firing: the
-        promoted path always fires when the kill-switch is off."""
-        monkeypatch.setenv("VLLM_MI100_SILU_ELIMINATION_MODE", stale_env_value)
+        """Threshold gate is path-2's territory ONLY. Other modes
+        (legacy / placeholder / unset / invalid → legacy) MUST retain
+        their pre-M1-F2 stash behavior: decode-sized batches still
+        stash (path-1 owns the silu decision separately for
+        MODE=placeholder via ``silu_elimination_placeholder``; for
+        MODE=legacy the cache is stashed but ``silu_and_mul`` still
+        fires — that is the pre-elimination baseline)."""
+        if mode_env is None:
+            monkeypatch.delenv("VLLM_MI100_SILU_ELIMINATION_MODE", raising=False)
+        else:
+            monkeypatch.setenv("VLLM_MI100_SILU_ELIMINATION_MODE", mode_env)
         monkeypatch.delenv("VLLM_MI100_DISABLE_FUSED_ACT_QUANT", raising=False)
         monkeypatch.delenv("VLLM_DISABLE_FUSED_ACT_QUANT", raising=False)
 
@@ -775,7 +990,34 @@ class TestPromotedPlaceholderUnconditional:
             try_stash_fused_silu_quant_int8,
         )
 
-        M, H = 64, 3584  # decode-sized: would have been skipped by prefill-gate
+        # M=64 is decode-sized; under prefill-gate this would NOT fire,
+        # but under any other mode the threshold MUST be ignored.
+        M, H = 64, 3584
         gate_up = torch.randn((M, 2 * H), dtype=torch.float16, device="cuda")
         down_proj = _FakeDownProj()
-        assert try_stash_fused_silu_quant_int8(gate_up, down_proj) is True
+        stashed = try_stash_fused_silu_quant_int8(gate_up, down_proj)
+        assert stashed is True, (
+            f"MODE={mode_env!r} must NOT apply prefill-gate threshold "
+            f"(decode M={M} should still stash)."
+        )
+
+    @torch.inference_mode()
+    def test_prefill_gate_disable_killswitch_overrides(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Master kill-switch ``VLLM_MI100_DISABLE_FUSED_ACT_QUANT=1``
+        forces no-stash even on prefill-sized batches under
+        MODE=``prefill-gate`` so the disable-path stays byte-identical
+        to clean HEAD."""
+        monkeypatch.setenv("VLLM_MI100_SILU_ELIMINATION_MODE", "prefill-gate")
+        monkeypatch.setenv("VLLM_MI100_DISABLE_FUSED_ACT_QUANT", "1")
+
+        from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+            try_stash_fused_silu_quant_int8,
+        )
+
+        M, H = 1024, 3584  # prefill-sized
+        gate_up = torch.randn((M, 2 * H), dtype=torch.float16, device="cuda")
+        down_proj = _FakeDownProj()
+        assert try_stash_fused_silu_quant_int8(gate_up, down_proj) is False
+        assert not hasattr(down_proj, "_mi100_fused_silu_cache")
