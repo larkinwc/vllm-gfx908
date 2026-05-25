@@ -20,7 +20,7 @@ import csv
 import re
 from pathlib import Path
 
-REPO = Path("/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4")  # noqa: E501
+REPO = Path("/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb")  # noqa: E501
 DEFAULT_REPORT = REPO / "BENCH_INT8_W4A16_FINAL.md"
 GRID_CSV = Path("/root/bench-int8-w4a16/final/final_grid.csv")
 

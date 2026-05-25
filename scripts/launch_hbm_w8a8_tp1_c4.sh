@@ -83,7 +83,7 @@ export PINNED_ROCM=7.12
 export PINNED_TORCH=2.11.0+rocm7.2
 export PINNED_TRITON=3.5.1
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
 export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
 
 # ---------------------------------------------------------------------------

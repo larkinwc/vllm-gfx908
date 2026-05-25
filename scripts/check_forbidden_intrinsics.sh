@@ -16,7 +16,7 @@ set -euo pipefail
 OBJDUMP=${OBJDUMP:-/opt/rocm/core-7.12/lib/llvm/bin/llvm-objdump}
 [ -x "$OBJDUMP" ] || OBJDUMP=llvm-objdump
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
 
 if [ "$#" -eq 0 ]; then
   set -- \

@@ -73,7 +73,7 @@ esac
 CELLS_FILTER=${2:-.*}
 
 # ---------- Paths ----------
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
 # m1-flash-tune is the follow-on Triton flash-decoding tuning mission; its
 # bench outputs land under /root/bench-int8-w4a16-hbm-fa/m1-tuning/ (parallel
 # to the prior HBM mission's /root/bench-int8-w4a16-hbm/ namespace).

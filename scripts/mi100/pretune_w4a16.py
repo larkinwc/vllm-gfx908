@@ -65,7 +65,7 @@ from pathlib import Path
 
 REPO = Path(
     "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/"
-    "emdash/fuzzy-hornets-see-szfl4"
+    "emdash/cold-points-sit-rancb"
 )
 DEFAULT_CACHE = Path("/root/bench-int8-w4a16/baseline/triton_cache_w4a16")
 DEFAULT_MODEL = "/models/Qwen3.5-9B-w4a16"

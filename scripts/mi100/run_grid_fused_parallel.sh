@@ -59,7 +59,7 @@
 # =============================================================================
 set -uo pipefail
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
 OUT_ROOT=/root/bench-int8-w4a16-fused/m4-bench
 mkdir -p "$OUT_ROOT"
 LOG_FILE="$OUT_ROOT/parallel_harness_test.log"

@@ -12,7 +12,7 @@
 # =============================================================================
 set -uo pipefail
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
 PY=/opt/vllm-env/bin/python3
 # Use the FULL prebuilt hipBLASLt library directory from our M2 build —
 # it ships the gfx908 INT8 contraction logic (TensileLibrary_I8I8_II8_*)

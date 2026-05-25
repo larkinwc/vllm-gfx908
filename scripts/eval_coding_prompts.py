@@ -29,7 +29,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-REPO = Path("/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4")  # noqa: E501
+REPO = Path("/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb")  # noqa: E501
 DEFAULT_PROMPTS = REPO / "tests" / "eval" / "coding_prompts.json"
 DEFAULT_OUT_DIR = Path("/root/bench-int8-w4a16/final")
 SERVER = "http://127.0.0.1:8000"

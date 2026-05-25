@@ -29,7 +29,7 @@ tp=${3:?tp required}             # 1 | 4
 conc=${4:?concurrency required}  # 1 | 4
 workload=${5:?workload required} # synthetic | coding
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
 BASELINE_ROOT=/root/bench-int8-w4a16/baseline
 DATASET=/root/bench-int8-w4a16/datasets/coding_agent.jsonl
 PY=/opt/vllm-env/bin/python3

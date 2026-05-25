@@ -40,7 +40,7 @@ cell_id=${1:?cell_id required (e.g. w8a8_tp1_c4_coding)}
 fused_state=${2:?fused_state required (on | off)}
 out_dir=${3:?out_dir required (absolute path)}
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4
+REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
 PY=/opt/vllm-env/bin/python3
 PMC_FILE="$REPO/scripts/mi100/pmc_counters.txt"
 MODEL=/models/Qwen3.5-9B-w8a8
