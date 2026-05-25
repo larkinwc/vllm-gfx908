@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 Generate BENCH_INT8_W4A16_BASELINE.md M1 sections from the per-cell JSONs
 plus the harness manifest, hot_shapes.json, top_gemm_shapes.csv, and
@@ -14,13 +15,15 @@ Usage:
         --baseline-root /root/bench-int8-w4a16/baseline \
         --report /home/aimeme/.../BENCH_INT8_W4A16_BASELINE.md
 """
+
 from __future__ import annotations
 
 import argparse
 import datetime
 import json
-import re
 from pathlib import Path
+
+import regex as re
 
 REPO = Path(
     "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/"
@@ -81,9 +84,7 @@ def render_results_table(cells: dict) -> list[str]:
     for m, tp, c, w in CELLS:
         d = cells.get((m, tp, c, w))
         if d is None:
-            lines.append(
-                f"| {m} | {tp} | {c} | {w} | _missing_ | — | — | — | — | — |"
-            )
+            lines.append(f"| {m} | {tp} | {c} | {w} | _missing_ | — | — | — | — | — |")
             continue
         lines.append(
             f"| {m} | {tp} | {c} | {w} | "
@@ -166,13 +167,12 @@ def render_roofline(omn_json: Path) -> list[str]:
         hbm = q.get("achieved_HBM_GB_s")
         hbm_pct = q.get("percent_of_peak_hbm")
         tf = q.get("achieved_TFLOPs_VALU_proxy") or q.get("achieved_TFLOPs")
-        tf_pct = (
-            q.get("percent_of_peak_compute") or q.get("percent_of_peak_int8")
-        )
+        tf_pct = q.get("percent_of_peak_compute") or q.get("percent_of_peak_int8")
         lines.append(
             f"| {quant} | `{kn}` | {q.get('n_calls', '—')} | "
             f"{ms:.2f} | "
-            f"{hbm:.2f}" + (f" | **{hbm_pct:.2f}%** " if hbm_pct else " | — ")
+            f"{hbm:.2f}"
+            + (f" | **{hbm_pct:.2f}%** " if hbm_pct else " | — ")
             + f"| {(f'{tf:.3f}' if tf else '—')} | "
             f"{(f'{tf_pct:.3f}%' if tf_pct else '—')} |"
         )
@@ -322,8 +322,8 @@ def replace_m1_section(text: str, new_section: str) -> str:
         return text.rstrip() + "\n\n" + new_section + "\n"
     pre, _, after = text.partition(M1_HEADER)
     # find next H2 header in `after`
-    m = re.search(r"^## ", after[len(M1_HEADER):], re.MULTILINE)
-    post = after[len(M1_HEADER) + m.start():] if m else ""
+    m = re.search(r"^## ", after[len(M1_HEADER) :], re.MULTILINE)
+    post = after[len(M1_HEADER) + m.start() :] if m else ""
     # `pre` ends just before the M1 header.  Drop trailing whitespace.
     pre = pre.rstrip() + "\n\n"
     return pre + new_section + "\n\n" + post.lstrip()
@@ -331,10 +331,10 @@ def replace_m1_section(text: str, new_section: str) -> str:
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--baseline-root", type=Path,
-                   default=Path("/root/bench-int8-w4a16/baseline"))
-    p.add_argument("--report", type=Path,
-                   default=REPO / "BENCH_INT8_W4A16_BASELINE.md")
+    p.add_argument(
+        "--baseline-root", type=Path, default=Path("/root/bench-int8-w4a16/baseline")
+    )
+    p.add_argument("--report", type=Path, default=REPO / "BENCH_INT8_W4A16_BASELINE.md")
     p.add_argument("--print-only", action="store_true")
     args = p.parse_args()
 

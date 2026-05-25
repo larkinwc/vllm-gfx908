@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """VAL-FINAL-001 / VAL-FINAL-007 — validate ``BENCH_INT8_W4A16_FINAL.md``.
 
 Two modes:
@@ -13,14 +14,18 @@ Two modes:
    repo) must exist, and every URL-style fragment of the form
    ``BENCH_M*.md`` must resolve to a file in the repo root.
 """
+
 from __future__ import annotations
 
 import argparse
 import csv
-import re
 from pathlib import Path
 
-REPO = Path("/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb")  # noqa: E501
+import regex as re
+
+REPO = Path(
+    "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb"
+)  # noqa: E501
 DEFAULT_REPORT = REPO / "BENCH_INT8_W4A16_FINAL.md"
 GRID_CSV = Path("/root/bench-int8-w4a16/final/final_grid.csv")
 
@@ -60,9 +65,7 @@ def check_schema(report: str, errors: list[str]) -> None:
             "metric, stock, +TensileLite, +Triton, +CK, +ISA, winner)"
         )
     if not RECOMMENDATION_HEADER_RE.search(report):
-        errors.append(
-            "Production-recommendation matrix header not found"
-        )
+        errors.append("Production-recommendation matrix header not found")
 
     # Cross-reference grid row count vs CSV row count (excluding header).
     if GRID_CSV.exists():
@@ -87,9 +90,7 @@ def check_schema(report: str, errors: list[str]) -> None:
                 if not p.exists():
                     missing_launches.append(p.name)
     if missing_launches:
-        errors.append(
-            f"Missing per-cell launch scripts: {missing_launches}"
-        )
+        errors.append(f"Missing per-cell launch scripts: {missing_launches}")
 
     # Quality numbers must appear.
     for s in ("perplexity", "9/10", "5/5", "needle"):
@@ -148,8 +149,10 @@ def main() -> int:
     out_log.write_text(
         f"validate_final_report.py {('--check-links ' if args.check_links else '')}{args.path}: PASS\n"  # noqa: E501
     )
-    print(f"{args.path}: schema OK; link-check {'ON' if args.check_links else 'OFF'}; "
-          f"wrote {out_log}")
+    print(
+        f"{args.path}: schema OK; link-check {'ON' if args.check_links else 'OFF'}; "
+        f"wrote {out_log}"
+    )
     return 0
 
 

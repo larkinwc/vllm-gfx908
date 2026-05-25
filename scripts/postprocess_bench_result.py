@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 Wrap the JSON file written by `vllm bench serve --save-result` and emit
 a schema-conformant result file at the canonical path.
@@ -19,6 +20,7 @@ Usage:
         --env-file <path-to-env.json> \
         --out <path-to-cell.json>
 """
+
 from __future__ import annotations
 
 import argparse
@@ -37,12 +39,9 @@ REPO = Path(
 
 def _git_sha(path: Path) -> str:
     try:
-        return (
-            subprocess.check_output(
-                ["git", "rev-parse", "HEAD"], cwd=str(path), text=True
-            )
-            .strip()
-        )
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=str(path), text=True
+        ).strip()
     except subprocess.SubprocessError:
         return "unknown"
 
@@ -53,14 +52,16 @@ def _detect_versions() -> tuple[str, str, str, str]:
     try:
         torch_version = subprocess.check_output(
             [py, "-c", "import torch; print(torch.__version__)"],
-            text=True, stderr=subprocess.DEVNULL,
+            text=True,
+            stderr=subprocess.DEVNULL,
         ).strip()
     except Exception:  # noqa: BLE001
         torch_version = "unknown"
     try:
         triton_version = subprocess.check_output(
             [py, "-c", "import triton; print(triton.__version__)"],
-            text=True, stderr=subprocess.DEVNULL,
+            text=True,
+            stderr=subprocess.DEVNULL,
         ).strip()
     except Exception:  # noqa: BLE001
         triton_version = "unknown"
@@ -68,7 +69,8 @@ def _detect_versions() -> tuple[str, str, str, str]:
         vllm_version = subprocess.check_output(
             [py, "-c", "import vllm; print(vllm.__version__)"],
             cwd=str(REPO),
-            text=True, stderr=subprocess.DEVNULL,
+            text=True,
+            stderr=subprocess.DEVNULL,
         ).strip()
     except Exception:  # noqa: BLE001
         vllm_version = "unknown"
@@ -83,8 +85,7 @@ def main() -> int:
     p.add_argument("--quant", required=True, choices=["w8a8-int8", "w4a16"])
     p.add_argument("--tp", type=int, required=True)
     p.add_argument("--concurrency", type=int, required=True)
-    p.add_argument("--request-rate", required=True,
-                   help="Numeric or 'inf'.")
+    p.add_argument("--request-rate", required=True, help="Numeric or 'inf'.")
     p.add_argument("--workload", required=True, choices=["synthetic", "coding"])
     p.add_argument("--num-prompts", type=int, required=True)
     p.add_argument("--launch-command", required=True)
