@@ -6,6 +6,7 @@ Keys: top-level `output_throughput_toks_s` and `mean_ttft_ms` (long-form).
 
 Δ = fused-off − fused-on. Positive Δ throughput / negative Δ TTFT = fused-off wins.
 
+<!-- markdownlint-disable MD060 -->
 | cell | tput_on (tok/s) | tput_off (tok/s) | Δ tput (tok/s) | Δ tput (%) | ttft_on (ms) | ttft_off (ms) | Δ ttft (ms) | Δ ttft (%) |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | w4a16_tp1_c1_coding | 30.395 | 30.785 | +0.391 | +1.29% | 353.83 | 340.61 | -13.22 | -3.74% |
@@ -20,6 +21,7 @@ Keys: top-level `output_throughput_toks_s` and `mean_ttft_ms` (long-form).
 | w4a16_tp4_c2_synthetic | 106.302 | 106.451 | +0.149 | +0.14% | 207.57 | 207.62 | +0.05 | +0.03% |
 | w4a16_tp4_c4_coding | 192.597 | 193.217 | +0.620 | +0.32% | 182.26 | 184.37 | +2.10 | +1.15% |
 | w4a16_tp4_c4_synthetic | 198.977 | 199.902 | +0.925 | +0.46% | 366.25 | 367.95 | +1.71 | +0.47% |
+<!-- markdownlint-enable MD060 -->
 
 ## Retraction Rule
 
@@ -54,6 +56,7 @@ All 12 prior W4A16 wins are retracted. Every cell had a prior cross-host
 retraction band of ≤ +0.5 % and far above the confirmation band of
 ≤ −2 %).
 
+<!-- markdownlint-disable MD060 -->
 | cell | workload | prior Δ_tput vs cross-host | same-host A/B Δ_tput (off − on) | verdict |
 |---|---|---:|---:|:-:|
 | w4a16_tp1_c1 | synthetic | +5.72 % | +1.23 % | RETRACT |
@@ -68,6 +71,7 @@ retraction band of ≤ +0.5 % and far above the confirmation band of
 | w4a16_tp4_c2 | coding    | +17.27 % | −0.36 % | RETRACT |
 | w4a16_tp4_c4 | synthetic | +2.57 % | +0.46 % | RETRACT |
 | w4a16_tp4_c4 | coding    | +18.90 % | +0.32 % | RETRACT |
+<!-- markdownlint-enable MD060 -->
 
 Prior-mission cross-host deltas pulled from
 [BENCH_FUSED_ACT_QUANT.md](../BENCH_FUSED_ACT_QUANT.md) §(f) table,

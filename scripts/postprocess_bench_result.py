@@ -139,7 +139,8 @@ def main() -> int:
         "env": env,
         "timestamp": datetime.datetime.now(datetime.timezone.utc)
         .replace(tzinfo=None)
-        .isoformat() + "Z",
+        .isoformat()
+        + "Z",
         "raw_vllm_bench": raw_data,
     }
 

@@ -140,7 +140,8 @@ def main() -> int:
         out.append(f"## {quant.upper()} ({len(qrows)} cells)")
         out.append("")
         out.append(
-            "| cell | wl | baseline_tput | M3_tput | Δ_tput | baseline_ttft | M3_ttft | Δ_ttft | status |"
+            "| cell | wl | baseline_tput | M3_tput | Δ_tput | "
+            "baseline_ttft | M3_ttft | Δ_ttft | status |"
         )
         out.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |")
         for r in qrows:
@@ -177,12 +178,14 @@ def main() -> int:
     out.append(f"- Wins ≥ +3% tput: {len(bigwins)}")
     for r in bigwins:
         out.append(
-            f"  - {r['cell_id']}_{r['workload']}: {fmt(r['d_tput'])} tput, {fmt(r['d_ttft'])} ttft"
+            f"  - {r['cell_id']}_{r['workload']}: "
+            f"{fmt(r['d_tput'])} tput, {fmt(r['d_ttft'])} ttft"
         )
     out.append(f"- Regressions ≤ −3% tput: {len(bigregs)}")
     for r in bigregs:
         out.append(
-            f"  - {r['cell_id']}_{r['workload']}: {fmt(r['d_tput'])} tput, {fmt(r['d_ttft'])} ttft"
+            f"  - {r['cell_id']}_{r['workload']}: "
+            f"{fmt(r['d_tput'])} tput, {fmt(r['d_ttft'])} ttft"
         )
     out.append("")
 

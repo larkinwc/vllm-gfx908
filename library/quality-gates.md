@@ -9,15 +9,18 @@
 
 ## Gate Summary
 
+<!-- markdownlint-disable MD060 -->
 | Gate                    | Threshold              | This run                    | Verdict |
 |-------------------------|------------------------|-----------------------------|---------|
 | W8A8 perplexity (wikitext-2-raw-v1, 50×512 chunks, seed=0) | ≤ +1 % over **9.6518** (i.e. ≤ 9.7483) | **9.6936** (Δ = +0.43 %) | **PASS** |
 | Coding-agent eval (10 prompts, temperature=0, seed=0)      | ≥ 9 / 10               | **8 / 10**                  | **FAIL** |
 | Needle-in-haystack @ ctx 32 768 (5 needles)                | 5 / 5                  | **5 / 5**                   | **PASS** |
+<!-- markdownlint-enable MD060 -->
 
 ## Overall Verdict — VAL-M3-002 FAIL
 
 2 of 3 gates pass. **Coding gate fails reproducibly** (8/10 on two consecutive independent runs against the same server). This blocks promotion of the M1-F5 placeholder-view path until either:
+
 1. the regression is root-caused and fixed in M3 code, or
 2. the orchestrator explicitly waives the coding gate with documented justification.
 
@@ -34,7 +37,7 @@
 
 ### 1. W8A8 Perplexity — PASS
 
-```
+```text
 $ scripts/m0_perplexity.py --model /models/Qwen3.5-9B-w8a8 \
     --tokenizer /models/Qwen3.5-9B-w8a8 --base-url http://127.0.0.1:8000/v1 \
     --chunks 50 --chunk-tokens 512 --seed 0
@@ -57,10 +60,12 @@ The +0.43 % drift is well inside the +1 % gate and is consistent with the prior 
 
 Two independent passes over `tests/eval/coding_prompts.json` against the same warm server, each invoked via `scripts/eval_coding_prompts.py` with `temperature=0, seed=0`:
 
+<!-- markdownlint-disable MD060 -->
 | Run            | Pass count | Failing prompts                            |
 |----------------|------------|--------------------------------------------|
 | run-1 (m3_w8a8)        | 8 / 10  | `anagram`, `max_subarray`         |
 | run-2 (m3_w8a8_retry)  | 8 / 10  | `anagram`, `max_subarray`         |
+<!-- markdownlint-enable MD060 -->
 
 Prior M6 reference (`/root/bench-int8-w4a16/final/m6_coding_eval_m6_w8a8.json`): **9 / 10** (only `max_subarray` failed). The new failure is `anagram`.
 
@@ -76,6 +81,7 @@ def is_anagram(a: str, b: str) -> bool:
 ```
 
 Failing sanity cases (expected `True`, got `False`):
+
 - `("listen", "silent")` — different character orders
 - `("Hello", "olleh")` — different character orders
 
@@ -87,7 +93,7 @@ Same Kadane's-algorithm scaffolding emitted with leading indent that breaks `py_
 
 ### 3. Needle-in-Haystack @ 32 k — PASS
 
-```
+```text
 $ scripts/eval_needle.py --ctx 32768 --probes 5 --model /models/Qwen3.5-9B-w8a8
 [1/5] Magic apple count        depth=10% — PASS
 [2/5] Crimson tower height     depth=30% — PASS
