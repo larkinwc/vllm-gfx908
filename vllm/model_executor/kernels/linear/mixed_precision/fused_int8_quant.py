@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import torch
 
+from vllm.model_executor.kernels.configs.gfx908.config_loader import (
+    load_fused_act_config as _load_fused_act_config,
+)
 from vllm.platforms import current_platform
 from vllm.triton_utils import tl, triton
 
@@ -145,16 +148,37 @@ def fused_per_token_quant_int8(
             scales_ref.view(*original_shape[:-1], 1),
         )
 
-    # One program per row. MI100 has 120 CUs, and with M tokens we want at
-    # least that many programs to fill the machine. Multi-row tiling was
-    # tried and hurts — parallelism matters more than per-program work here
-    # because the kernel is already bandwidth-bound.
-    block_m = 1
-    num_warps = _pick_num_warps(block_n)
-    # This kernel has no K-dim loop (single-tile reduction across the hidden
-    # dim), so num_stages=1 avoids the pipeline prologue cost. The "gfx908
-    # needs num_stages=2" rule applies to kernels that *do* loop over K.
-    num_stages = 1
+    # Prefer the per-shape pinned config when present
+    # (vllm/model_executor/kernels/configs/gfx908/fused_int8_quant_M<M>_H<N>.json).
+    # The fused_int8_quant kernel uses ``N`` as the per-row reduction width,
+    # which the loader keys on as ``H`` to match the fused-activation
+    # naming convention. Missing-file lookups return ``None`` and the
+    # caller falls back to the static heuristic below — preserving the
+    # existing pre-M3 behaviour byte-identically.
+    pinned_cfg = _load_fused_act_config("fused_int8_quant", M=M, H=N)
+    if pinned_cfg is not None:
+        block_m = int(pinned_cfg["BLOCK_M"])
+        # The pinned config may legitimately request a smaller BLOCK_N
+        # than the next_power_of_2(N) heuristic; honor it as long as it
+        # still covers N (the kernel's single-tile reduction requires
+        # BLOCK_N >= N).
+        pinned_block_n = int(pinned_cfg.get("BLOCK_N", block_n))
+        if pinned_block_n >= N:
+            block_n = pinned_block_n
+        num_warps = int(pinned_cfg.get("num_warps", _pick_num_warps(block_n)))
+        num_stages = int(pinned_cfg.get("num_stages", 1))
+    else:
+        # One program per row. MI100 has 120 CUs, and with M tokens we want
+        # at least that many programs to fill the machine. Multi-row tiling
+        # was tried and hurts — parallelism matters more than per-program
+        # work here because the kernel is already bandwidth-bound.
+        block_m = 1
+        num_warps = _pick_num_warps(block_n)
+        # This kernel has no K-dim loop (single-tile reduction across the
+        # hidden dim), so num_stages=1 avoids the pipeline prologue cost.
+        # The "gfx908 needs num_stages=2" rule applies to kernels that *do*
+        # loop over K.
+        num_stages = 1
 
     grid = (triton.cdiv(M, block_m),)
     _fused_int8_quant_kernel[grid](

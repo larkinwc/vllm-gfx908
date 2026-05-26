@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "kernel": "mi100_int8",
+  "shape": {
+    "M": 8192,
+    "N": 10240,
+    "K": 4096,
+    "H": null,
+    "group_size": null,
+    "emit_int8_next": true
+  },
+  "config": {
+    "BLOCK_M": 16,
+    "BLOCK_N": 16384,
+    "BLOCK_K": 32,
+    "GROUP_SIZE_M": 8,
+    "matrix_instr_nonkdim": 16,
+    "kpack": 2,
+    "waves_per_eu": 1,
+    "num_warps": 4,
+    "num_stages": 1
+  },
+  "measured_ms_per_iter": null,
+  "measured_tok_s": null,
+  "autotune_runs_evaluated": 0,
+  "autotune_runs_pruned": 14,
+  "autotune_cartesian_total": 14,
+  "autotune_legal_subset": 0,
+  "autotune_legal_coverage_pct": 0.0,
+  "autotune_hard_invariant_eliminated": 14,
+  "timestamp": "2026-05-26T00:30:00+00:00",
+  "vllm_commit": "d251ff7f758c0d225f8712b2c8df3138f02a4365",
+  "rocm_version": "7.12",
+  "kernel_source_sha256": "807f6ecb3c139114e047c12b33d20314b34a231e56f892058c1ad31ca655d25c",
+  "notes": "LDS budget unrunnable on gfx908 (prefill M=8192 corner; Qwen3.5-9B qkv_proj N=10240). EMIT_INT8_NEXT=True forces BLOCK_N=next_power_of_2(N)=16384 per the wrapper's correctness guard (single-tile row-absmax reduction). With any usable BLOCK_K, the int8 A+B tile (BLOCK_M*BLOCK_K + BLOCK_K*BLOCK_N) overflows the 64 KiB LDS/CU budget on gfx908. The config above pins the smallest legal tile (BLOCK_M=16, BLOCK_K=32) so the runtime loader returns a deterministic answer; the M2 producer wire-in catches the resulting Triton 'out of resource: shared memory' exception in its try/except and falls through to the legacy fp16-emit path for this (M, N) corner. This matches the m1-shape-survey addendum non_blocking issue #1 and the m1-autotune-jsons feature spec's documented fall-back. The model cold-start gate (m1-cold-start-gate) does NOT depend on this path firing for the prefill M=8192 shape (M2 wire-in stashes the cache only when the producer kernel succeeded)."
+}

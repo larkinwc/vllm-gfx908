@@ -69,6 +69,9 @@ import os
 
 import torch
 
+from vllm.model_executor.kernels.configs.gfx908.config_loader import (
+    load_fused_act_config as _load_fused_act_config,
+)
 from vllm.triton_utils import tl, triton
 
 logger = logging.getLogger(__name__)
@@ -462,35 +465,50 @@ def fused_silu_quant_int8(
     q = torch.empty((M, H), dtype=torch.int8, device=x.device)
     scale = torch.empty((M, 1), dtype=torch.float32, device=x.device)
 
-    # Mirror the BLOCK_M default from mi100_int8.py with the same
-    # decode-like / prefill-like split. BLOCK_M=64 default; smaller for tiny
-    # M. We intentionally cap at BLOCK_M=64 (never BLOCK_M=128) because the
-    # BLOCK_M=128 path at H=12288 (Qwen3.5-9B intermediate) cold-compiles in
-    # ~285 s on Triton 3.5.1 / ROCm 7.12, which is long enough to trip the
-    # vLLM EngineCore warmup watchdog and silently terminate the engine
-    # during dummy_run (exit 0, no traceback). For larger M we just dispatch
-    # more grid programs at BLOCK_M=64 — the kernel is memory-bound on HBM
-    # anyway so the extra programs cost almost nothing at runtime.
-    next_pow2_m = _next_power_of_2(max(1, M))
-    if next_pow2_m <= 16:
-        block_m = 16
-    elif next_pow2_m <= 32:
-        block_m = 32
+    # Prefer the per-shape pinned config when present
+    # (vllm/model_executor/kernels/configs/gfx908/fused_silu_quant_int8_M<M>_H<H>.json).
+    # The loader returns ``None`` for shapes that have not been autotuned,
+    # in which case we fall back to the static heuristic below — preserving
+    # the existing pre-M3 behaviour byte-identically.
+    pinned_cfg = _load_fused_act_config("fused_silu_quant_int8", M=M, H=H)
+    if pinned_cfg is not None:
+        block_m = int(pinned_cfg["BLOCK_M"])
+        block_h = int(pinned_cfg["BLOCK_H"])
+        num_warps = int(pinned_cfg.get("num_warps", 4))
+        num_stages = int(pinned_cfg.get("num_stages", 2))
     else:
-        block_m = 64
+        # Mirror the BLOCK_M default from mi100_int8.py with the same
+        # decode-like / prefill-like split. BLOCK_M=64 default; smaller for
+        # tiny M. We intentionally cap at BLOCK_M=64 (never BLOCK_M=128)
+        # because the BLOCK_M=128 path at H=12288 (Qwen3.5-9B intermediate)
+        # cold-compiles in ~285 s on Triton 3.5.1 / ROCm 7.12, which is long
+        # enough to trip the vLLM EngineCore warmup watchdog and silently
+        # terminate the engine during dummy_run (exit 0, no traceback). For
+        # larger M we just dispatch more grid programs at BLOCK_M=64 — the
+        # kernel is memory-bound on HBM anyway so the extra programs cost
+        # almost nothing at runtime.
+        next_pow2_m = _next_power_of_2(max(1, M))
+        if next_pow2_m <= 16:
+            block_m = 16
+        elif next_pow2_m <= 32:
+            block_m = 32
+        else:
+            block_m = 64
 
-    # Static BLOCK_H cap (see module docstring): keeps per-program numel and
-    # the per-row reduction tree small enough for sub-60s cold compile across
-    # the full Qwen3.5-9B H grid {3584, 5120, 12544, 18944}. For very small H
-    # (e.g. test cases), round down to next_pow2(H) to avoid a single h-tile
-    # holding more masked-off lanes than live ones.
-    block_h = min(_BLOCK_H_DEFAULT, _next_power_of_2(H))
-    block_h = max(block_h, 32)
+        # Static BLOCK_H cap (see module docstring): keeps per-program numel
+        # and the per-row reduction tree small enough for sub-60s cold
+        # compile across the full Qwen3.5-9B H grid {3584, 5120, 12544,
+        # 18944}. For very small H (e.g. test cases), round down to
+        # next_pow2(H) to avoid a single h-tile holding more masked-off
+        # lanes than live ones.
+        block_h = min(_BLOCK_H_DEFAULT, _next_power_of_2(H))
+        block_h = max(block_h, 32)
 
-    # Launch heuristics mirror mi100_int8.py: 2 warps for small reductions,
-    # 4 warps once the tile reaches a full wavefront-64 worth of work.
-    num_warps = 2 if block_h <= 256 else 4
-    num_stages = 2
+        # Launch heuristics mirror mi100_int8.py: 2 warps for small
+        # reductions, 4 warps once the tile reaches a full wavefront-64
+        # worth of work.
+        num_warps = 2 if block_h <= 256 else 4
+        num_stages = 2
 
     grid = (triton.cdiv(M, block_m),)
     _fused_silu_quant_int8_kernel[grid](

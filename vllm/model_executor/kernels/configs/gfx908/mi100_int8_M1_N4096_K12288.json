@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "kernel": "mi100_int8",
+  "shape": {
+    "M": 1,
+    "N": 4096,
+    "K": 12288,
+    "H": null,
+    "group_size": null,
+    "emit_int8_next": false
+  },
+  "config": {
+    "BLOCK_M": 16,
+    "BLOCK_N": 64,
+    "BLOCK_K": 128,
+    "GROUP_SIZE_M": 8,
+    "matrix_instr_nonkdim": 16,
+    "kpack": 2,
+    "waves_per_eu": 1,
+    "num_warps": 4,
+    "num_stages": 2
+  },
+  "measured_ms_per_iter": 0.20440900698304176,
+  "measured_tok_s": 4892.15233105145,
+  "autotune_runs_evaluated": 14,
+  "autotune_runs_pruned": 0,
+  "autotune_cartesian_total": 14,
+  "autotune_legal_subset": 14,
+  "autotune_legal_coverage_pct": 100.0,
+  "autotune_hard_invariant_eliminated": 0,
+  "timestamp": "2026-05-26T00:26:24.919390+00:00",
+  "vllm_commit": "d251ff7f758c0d225f8712b2c8df3138f02a4365",
+  "rocm_version": "7.12",
+  "kernel_source_sha256": "807f6ecb3c139114e047c12b33d20314b34a231e56f892058c1ad31ca655d25c"
+}

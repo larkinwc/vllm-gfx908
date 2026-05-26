@@ -453,7 +453,9 @@ def mi100_int8_scaled_mm(
     # vllm/model_executor/kernels/configs/gfx908/mi100_int8_M*_N*_K*.json
     # falling back to the static heuristic below for shapes that have not
     # been autotuned yet.
-    cfg = _load_mi100_autotune_config("mi100_int8", M=M, N=N, K=K)
+    cfg = _load_mi100_autotune_config(
+        "mi100_int8", M=M, N=N, K=K, emit_int8_next=emit_int8_next
+    )
     extra_launch: dict = {}
 
     if cfg is not None:
@@ -542,7 +544,14 @@ def mi100_int8_scaled_mm(
         # BLOCK_K to 64. This keeps LDS comfortably within the 64 KiB
         # limit while still mapping to MFMA tile sizes (16×16, 32×32 on
         # gfx908).
-        if block_size_n > 256:
+        # When a pinned EMIT_INT8_NEXT=True config has been loaded for
+        # this shape (mi100_int8_M*_N*_K*_e1.json), the autotuned
+        # BLOCK_M / BLOCK_K already encode the LDS-budget-safe choice
+        # and the default halving heuristic below would only push the
+        # tile farther under the limit (or, worse, force a smaller-than-
+        # autotuned tile that the autotune sweep already disqualified).
+        # Skip the halving clamp in that case so the pinned config wins.
+        if cfg is None and block_size_n > 256:
             block_size_m = min(block_size_m, 32)
             block_size_k = min(block_size_k, 64)
         # Per-channel weight-scale broadcast tile must match the forced
