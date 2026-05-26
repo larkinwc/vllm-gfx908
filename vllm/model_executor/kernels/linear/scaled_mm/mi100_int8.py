@@ -746,6 +746,38 @@ class MI100Int8ScaledMMLinearKernel(Int8ScaledMMLinearKernel):
             )
             layer._mi100_emit_int8_next_logged = True
 
+        # M2 consumer wire-in (issue #26): the upstream W8A8 producer
+        # (e.g. ``qkv_proj`` for the attn block) may have stashed the
+        # EMIT_INT8_NEXT kernel's ``(int8 [M, N], fp32 [M, 1])`` output
+        # on this consuming layer via the ``_mi100_fused_mm_cache``
+        # attribute. The cache shape matches ``ops.scaled_int8_quant``
+        # semantics, so it flows straight into the dispatcher's W8A8
+        # GEMM call below — no intermediate fp16 HBM round-trip, no
+        # redundant per-token requantization. The producer is the
+        # single point that gates on
+        # ``VLLM_MI100_DISABLE_FUSED_ACT_QUANT``; the consumer
+        # additionally re-checks here as defense-in-depth in case the
+        # env flips between producer-stash and consumer-consume (e.g.
+        # an `os.environ` mutation between forwards). Per anti-pattern
+        # #14 the cache is single-shot: ``del`` it immediately so a
+        # stale stash from a prior forward (whose M dimension differs
+        # from the current batch) cannot leak into the next call. This
+        # branch runs BEFORE the M1 silu-fusion cache check so that —
+        # although the two caches correspond to different layer pairs
+        # (qkv→o_proj for attn vs gate_up→down_proj for MLP) and are
+        # mutually exclusive in practice — the M2 cache always takes
+        # priority if both happen to be present on the same layer.
+        mm_cache = getattr(layer, "_mi100_fused_mm_cache", None)
+        if mm_cache is not None and not is_fused_silu_quant_int8_disabled():
+            x_q, x_s = mm_cache
+            del layer._mi100_fused_mm_cache  # one-shot — anti-pattern #14
+            assert x_q.dtype == torch.int8, (
+                f"_mi100_fused_mm_cache must carry int8 activations; got {x_q.dtype}."
+            )
+            return self._mi100_dispatch_scaled_mm(
+                layer, x_q, w_q, x_s, w_s, x.dtype, bias
+            )
+
         # Fused-path opt-in: the upstream MLP forward
         # (Qwen2MLP / Qwen2MoeMLP via
         # ``try_stash_fused_silu_quant_int8``) may stash the result of
