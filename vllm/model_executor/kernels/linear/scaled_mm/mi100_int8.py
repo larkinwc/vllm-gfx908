@@ -16,6 +16,7 @@ from vllm.model_executor.kernels.configs.gfx908.config_loader import (
     load_config as _load_mi100_autotune_config,
 )
 from vllm.model_executor.kernels.quantization.fused_silu_quant_int8 import (
+    is_fused_silu_quant_int8_disabled,
     is_fused_silu_quant_int8_enabled,
 )
 from vllm.model_executor.layers.quantization.utils import replace_parameter
@@ -453,7 +454,9 @@ def mi100_int8_scaled_mm(
     # vllm/model_executor/kernels/configs/gfx908/mi100_int8_M*_N*_K*.json
     # falling back to the static heuristic below for shapes that have not
     # been autotuned yet.
-    cfg = _load_mi100_autotune_config("mi100_int8", M=M, N=N, K=K)
+    cfg = _load_mi100_autotune_config(
+        "mi100_int8", M=M, N=N, K=K, emit_int8_next=emit_int8_next
+    )
     extra_launch: dict = {}
 
     if cfg is not None:
@@ -542,7 +545,14 @@ def mi100_int8_scaled_mm(
         # BLOCK_K to 64. This keeps LDS comfortably within the 64 KiB
         # limit while still mapping to MFMA tile sizes (16×16, 32×32 on
         # gfx908).
-        if block_size_n > 256:
+        # When a pinned EMIT_INT8_NEXT=True config has been loaded for
+        # this shape (mi100_int8_M*_N*_K*_e1.json), the autotuned
+        # BLOCK_M / BLOCK_K already encode the LDS-budget-safe choice
+        # and the default halving heuristic below would only push the
+        # tile farther under the limit (or, worse, force a smaller-than-
+        # autotuned tile that the autotune sweep already disqualified).
+        # Skip the halving clamp in that case so the pinned config wins.
+        if cfg is None and block_size_n > 256:
             block_size_m = min(block_size_m, 32)
             block_size_k = min(block_size_k, 64)
         # Per-channel weight-scale broadcast tile must match the forced
@@ -736,6 +746,38 @@ class MI100Int8ScaledMMLinearKernel(Int8ScaledMMLinearKernel):
             )
             layer._mi100_emit_int8_next_logged = True
 
+        # M2 consumer wire-in (issue #26): the upstream W8A8 producer
+        # (e.g. ``qkv_proj`` for the attn block) may have stashed the
+        # EMIT_INT8_NEXT kernel's ``(int8 [M, N], fp32 [M, 1])`` output
+        # on this consuming layer via the ``_mi100_fused_mm_cache``
+        # attribute. The cache shape matches ``ops.scaled_int8_quant``
+        # semantics, so it flows straight into the dispatcher's W8A8
+        # GEMM call below — no intermediate fp16 HBM round-trip, no
+        # redundant per-token requantization. The producer is the
+        # single point that gates on
+        # ``VLLM_MI100_DISABLE_FUSED_ACT_QUANT``; the consumer
+        # additionally re-checks here as defense-in-depth in case the
+        # env flips between producer-stash and consumer-consume (e.g.
+        # an `os.environ` mutation between forwards). Per anti-pattern
+        # #14 the cache is single-shot: ``del`` it immediately so a
+        # stale stash from a prior forward (whose M dimension differs
+        # from the current batch) cannot leak into the next call. This
+        # branch runs BEFORE the M1 silu-fusion cache check so that —
+        # although the two caches correspond to different layer pairs
+        # (qkv→o_proj for attn vs gate_up→down_proj for MLP) and are
+        # mutually exclusive in practice — the M2 cache always takes
+        # priority if both happen to be present on the same layer.
+        mm_cache = getattr(layer, "_mi100_fused_mm_cache", None)
+        if mm_cache is not None and not is_fused_silu_quant_int8_disabled():
+            x_q, x_s = mm_cache
+            del layer._mi100_fused_mm_cache  # one-shot — anti-pattern #14
+            assert x_q.dtype == torch.int8, (
+                f"_mi100_fused_mm_cache must carry int8 activations; got {x_q.dtype}."
+            )
+            return self._mi100_dispatch_scaled_mm(
+                layer, x_q, w_q, x_s, w_s, x.dtype, bias
+            )
+
         # Fused-path opt-in: the upstream MLP forward
         # (Qwen2MLP / Qwen2MoeMLP via
         # ``try_stash_fused_silu_quant_int8``) may stash the result of
@@ -760,13 +802,8 @@ class MI100Int8ScaledMMLinearKernel(Int8ScaledMMLinearKernel):
                 "fused_silu_quant_int8 cache must carry int8 activations; "
                 f"got {x_q.dtype}."
             )
-            return mi100_int8_scaled_mm(
-                x_q,
-                w_q,
-                scale_a=x_s,
-                scale_b=w_s,
-                out_dtype=x.dtype,
-                bias=bias,
+            return self._mi100_dispatch_scaled_mm(
+                layer, x_q, w_q, x_s, w_s, x.dtype, bias
             )
 
         # Quantize activations to INT8 (dynamic per-token or static)
@@ -776,6 +813,124 @@ class MI100Int8ScaledMMLinearKernel(Int8ScaledMMLinearKernel):
 
         assert x_zp is None, "MI100 INT8 kernel only supports symmetric quantization"
 
+        return self._mi100_dispatch_scaled_mm(layer, x_q, w_q, x_s, w_s, x.dtype, bias)
+
+    def _mi100_dispatch_scaled_mm(
+        self,
+        layer: torch.nn.Module,
+        x_q: torch.Tensor,
+        w_q: torch.Tensor,
+        x_s: torch.Tensor,
+        w_s: torch.Tensor,
+        out_dtype: torch.dtype,
+        bias: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """Invoke ``mi100_int8_scaled_mm`` with optional M2 producer wire-in.
+
+        When ``choose_emit_int8_next(layer)`` returns True AND the env flag
+        is not disabled AND ``layer._mi100_next_w8a8_linear`` points at a
+        downstream consumer linear, this branch invokes the kernel with
+        ``emit_int8_next=True``, stashes the resulting ``(int8, scale)``
+        tuple on ``next._mi100_fused_mm_cache`` for the consumer to pick
+        up at its own ``apply_weights`` entry, and returns a fp16
+        reconstruction of the GEMM output (``int8 * scale``) so the
+        producer's caller — e.g. ``QKVParallelLinear`` whose output is
+        split and fed into RoPE — still observes the legacy fp16
+        contract.
+
+        Per ADDENDUM (mission feature description): if the EMIT_INT8_NEXT
+        kernel raises ``RuntimeError("out of resource: shared memory")``
+        for this shape (gfx908 LDS budget overflow at BLOCK_N ≥ 16384),
+        we set ``layer._mi100_emit_int8_next_lds_disabled = True`` so
+        every subsequent forward on the same layer bypasses the producer
+        branch without paying the exception cost.
+
+        On every negative branch (env-disabled, dispatcher said False,
+        no next-linear wired, LDS OOR sticky-disable already set, or any
+        other ``RuntimeError`` from the producer kernel) the call falls
+        through to the byte-identical legacy ``emit_int8_next=False``
+        path with NO cache stashed.
+        """
+        next_linear = getattr(layer, "_mi100_next_w8a8_linear", None)
+        producer_enabled = (
+            next_linear is not None
+            and not is_fused_silu_quant_int8_disabled()
+            and not getattr(layer, "_mi100_emit_int8_next_lds_disabled", False)
+        )
+
+        if producer_enabled:
+            M_dim = int(x_q.shape[0])
+            N_dim = int(w_q.shape[1])
+            K_dim = int(w_q.shape[0])
+            layer_name = getattr(layer, "prefix", None) or type(layer).__name__
+            if choose_emit_int8_next(M_dim, N_dim, K_dim, layer_name=layer_name):
+                try:
+                    int8_out, scale_out = mi100_int8_scaled_mm(
+                        x_q,
+                        w_q,
+                        scale_a=x_s,
+                        scale_b=w_s,
+                        out_dtype=out_dtype,
+                        bias=bias,
+                        emit_int8_next=True,
+                    )
+                except RuntimeError as e:
+                    # gfx908 LDS budget: the EMIT_INT8_NEXT kernel forces
+                    # BLOCK_SIZE_N = next_power_of_2(N); for N >= 8192 the
+                    # forced BLOCK_N >= 16384 + the int8 (BLOCK_M+BLOCK_N)
+                    # tile overflows the 64 KiB LDS budget at every legal
+                    # BLOCK_K. Per the mission addendum the dispatcher
+                    # decision logic is NOT modified; only this call site
+                    # catches the runtime exception and persists a
+                    # per-layer sticky-disable so subsequent forwards skip
+                    # the producer branch outright (no exception cost,
+                    # no cache stash).
+                    if "out of resource" in str(e) and "shared memory" in str(e):
+                        layer._mi100_emit_int8_next_lds_disabled = True
+                        logger.info(
+                            "[MI100_INT8] emit_int8_next=True disabled on "
+                            "layer=%s shape=(M=%d,N=%d,K=%d) — gfx908 LDS "
+                            "budget exceeded; falling back to fp16 store "
+                            "for this layer.",
+                            layer_name,
+                            M_dim,
+                            N_dim,
+                            K_dim,
+                        )
+                    else:
+                        raise
+                else:
+                    # Stash for the downstream consumer to pick up at its
+                    # own apply_weights entry. Per anti-pattern #14 the
+                    # cache is single-shot — the consumer MUST ``del`` it
+                    # on consume so a stale stash cannot leak across
+                    # forward steps (different batch's M dimension).
+                    # ``next_linear`` is guaranteed non-None here by the
+                    # ``producer_enabled`` guard above; the assert is a
+                    # narrowing hint for mypy.
+                    assert next_linear is not None
+                    next_linear._mi100_fused_mm_cache = (int8_out, scale_out)
+                    # Reconstruct fp16 output for the producer's caller.
+                    # ``int8_out * scale_out`` is the per-token dequant
+                    # inverse of the EMIT_INT8_NEXT epilogue
+                    # (``out_int8 = round(result / row_scale)``,
+                    # ``scale_out[m] = row_absmax[m] / 127.0``). The
+                    # producer's downstream consumer reads from the
+                    # cache, NOT from this fp16 reconstruction — this is
+                    # only needed for callers that further consume the
+                    # producer's own output as fp16 (e.g. QKV → RoPE).
+                    # The EMIT_INT8_NEXT kernel epilogue already folded
+                    # ``bias`` into ``result`` before quantizing, so the
+                    # reconstructed fp16 carries bias too — do NOT add
+                    # it again here.
+                    return (int8_out.to(torch.float32) * scale_out).to(out_dtype)
+
+        # Legacy fallback: byte-identical to pre-PR-#38 wire-in behavior.
         return mi100_int8_scaled_mm(
-            x_q, w_q, scale_a=x_s, scale_b=w_s, out_dtype=x.dtype, bias=bias
+            x_q,
+            w_q,
+            scale_a=x_s,
+            scale_b=w_s,
+            out_dtype=out_dtype,
+            bias=bias,
         )

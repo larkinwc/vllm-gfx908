@@ -59,8 +59,12 @@
 # =============================================================================
 set -uo pipefail
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
-OUT_ROOT=/root/bench-int8-w4a16-fused/m4-bench
+# REPO defaults to the prior mission's worktree but is overridable via env so
+# the M2 producer-side wire-in mission (worktree: thin-hands-smell-2bxf5) can
+# reuse this harness without forking it. OUT_ROOT is similarly overridable so
+# new milestones can route per-cell JSONs into sibling output trees.
+REPO=${REPO:-/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/thin-hands-smell-2bxf5}
+OUT_ROOT=${OUT_ROOT:-/root/bench-int8-w4a16-fused/m4-bench}
 mkdir -p "$OUT_ROOT"
 LOG_FILE="$OUT_ROOT/parallel_harness_test.log"
 
@@ -110,8 +114,9 @@ done
 if [[ "$MODE" == "--milestone" \
       && "$MILESTONE" != "m4-fused-act-quant" \
       && "$MILESTONE" != "m1-redundant-silu" \
-      && "$MILESTONE" != "m3-redundant-silu" ]]; then
-  echo "unsupported milestone: $MILESTONE (allowed: m4-fused-act-quant, m1-redundant-silu, m3-redundant-silu)" >&2
+      && "$MILESTONE" != "m3-redundant-silu" \
+      && "$MILESTONE" != "m3-m2-producer" ]]; then
+  echo "unsupported milestone: $MILESTONE (allowed: m4-fused-act-quant, m1-redundant-silu, m3-redundant-silu, m3-m2-producer)" >&2
   exit 2
 fi
 
@@ -130,6 +135,17 @@ if [[ "$MILESTONE" == "m3-redundant-silu" ]]; then
   OUT_ROOT=/root/bench-int8-w4a16-redundant-silu/m3-bench
   mkdir -p "$OUT_ROOT"
 fi
+# M2 producer-side wire-in mission M3 24-cell grid. Fused-on default-on
+# state — VLLM_MI100_DISABLE_FUSED_ACT_QUANT must be unset. Output root is
+# OUT_ROOT (env-override-honored above) so the caller pins the tree at
+# /root/bench-int8-w4a16-m2-producer/m3-bench.
+if [[ "$MILESTONE" == "m3-m2-producer" ]]; then
+  # Default OUT_ROOT for this milestone if the env didn't pin one.
+  if [[ "$OUT_ROOT" == "/root/bench-int8-w4a16-fused/m4-bench" ]]; then
+    OUT_ROOT=/root/bench-int8-w4a16-m2-producer/m3-bench
+  fi
+  mkdir -p "$OUT_ROOT"
+fi
 
 # Milestone-aware kernel_backend label for postprocess_bench_result.py.
 # Distinguishes the M1/M2/M3 redundant-silu A/B runs from the M4
@@ -137,6 +153,7 @@ fi
 case "$MILESTONE" in
   m1-redundant-silu|m3-redundant-silu) KERNEL_BACKEND_LABEL="fused-act-quant+redundant-silu" ;;
   m4-fused-act-quant) KERNEL_BACKEND_LABEL="fused-act-quant" ;;
+  m3-m2-producer) KERNEL_BACKEND_LABEL="fused-act-quant+m2-producer-wire-in" ;;
   *) KERNEL_BACKEND_LABEL="fused-act-quant" ;;
 esac
 
@@ -377,7 +394,9 @@ DATASET=/root/bench-int8-w4a16/datasets/coding_agent.jsonl
 # run if the disable env-var is set. The m1-redundant-silu W4A16 A/B grid
 # intentionally runs fused-off (VLLM_MI100_DISABLE_FUSED_ACT_QUANT=1) per
 # M2-F1 spec, so the check is inverted there.
-if [[ "$MILESTONE" == "m4-fused-act-quant" || "$MILESTONE" == "m3-redundant-silu" ]]; then
+if [[ "$MILESTONE" == "m4-fused-act-quant" \
+      || "$MILESTONE" == "m3-redundant-silu" \
+      || "$MILESTONE" == "m3-m2-producer" ]]; then
   if [[ "${VLLM_MI100_DISABLE_FUSED_ACT_QUANT:-0}" != "0" || \
         "${VLLM_DISABLE_FUSED_ACT_QUANT:-0}" != "0" ]]; then
     {

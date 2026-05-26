@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "kernel": "fused_silu_quant_int8",
+  "shape": {
+    "M": 256,
+    "N": 12288,
+    "K": 24576,
+    "H": 12288,
+    "group_size": null,
+    "emit_int8_next": false
+  },
+  "config": {
+    "BLOCK_M": 16,
+    "BLOCK_H": 512,
+    "num_warps": 4,
+    "num_stages": 2
+  },
+  "measured_ms_per_iter": 0.2931529888883233,
+  "measured_tok_s": 873264.1647993678,
+  "autotune_runs_evaluated": 9,
+  "autotune_runs_pruned": 0,
+  "autotune_cartesian_total": 9,
+  "autotune_legal_subset": 9,
+  "autotune_legal_coverage_pct": 100.0,
+  "autotune_hard_invariant_eliminated": 0,
+  "timestamp": "2026-05-26T00:27:24.569677+00:00",
+  "vllm_commit": "d251ff7f758c0d225f8712b2c8df3138f02a4365",
+  "rocm_version": "7.12",
+  "kernel_source_sha256": "d2ac0665c718721bc9d4522eaa056c13e8a6a6976b8ed477e20dc01e070ba3b2"
+}

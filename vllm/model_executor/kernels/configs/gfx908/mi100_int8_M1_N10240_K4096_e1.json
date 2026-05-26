@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "kernel": "mi100_int8",
+  "shape": {
+    "M": 1,
+    "N": 10240,
+    "K": 4096,
+    "H": null,
+    "group_size": null,
+    "emit_int8_next": true
+  },
+  "config": {
+    "BLOCK_M": 16,
+    "BLOCK_N": 16384,
+    "BLOCK_K": 32,
+    "GROUP_SIZE_M": 8,
+    "matrix_instr_nonkdim": 16,
+    "kpack": 2,
+    "waves_per_eu": 1,
+    "num_warps": 4,
+    "num_stages": 1
+  },
+  "measured_ms_per_iter": null,
+  "measured_tok_s": null,
+  "autotune_runs_evaluated": 0,
+  "autotune_runs_pruned": 14,
+  "autotune_cartesian_total": 14,
+  "autotune_legal_subset": 0,
+  "autotune_legal_coverage_pct": 0.0,
+  "autotune_hard_invariant_eliminated": 14,
+  "timestamp": "2026-05-26T00:30:00+00:00",
+  "vllm_commit": "d251ff7f758c0d225f8712b2c8df3138f02a4365",
+  "rocm_version": "7.12",
+  "kernel_source_sha256": "807f6ecb3c139114e047c12b33d20314b34a231e56f892058c1ad31ca655d25c",
+  "notes": "LDS budget unrunnable on gfx908: EMIT_INT8_NEXT=True forces BLOCK_N=next_power_of_2(N)=16384 (per the wrapper's correctness guard, since the kernel's row-absmax reduction only spans one BLOCK_N tile). Combined with any usable BLOCK_K, the A+B int8 tile (BLOCK_M*BLOCK_K + BLOCK_K*BLOCK_N) overflows the 64 KiB LDS budget per CU. The config above pins the smallest legal tile (BLOCK_M=16, BLOCK_K=32) so the runtime loader returns a deterministic answer; the M2 producer wire-in catches the runtime LDS exception in its try/except and falls through to the legacy fp16-emit path for this shape. See M1-F2 handoff and the M3 final report for the full disposition."
+}

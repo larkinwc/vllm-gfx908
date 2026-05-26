@@ -31,10 +31,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-REPO = Path(
-    "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/"
-    "emdash/cold-points-sit-rancb"
-)
+# Pin REPO to the env-var when set so workers in sibling worktrees can override
+# the original mission's hardcoded path. Fall back to the script's own
+# repository root (two parents above this file) which always exists.
+REPO = Path(os.environ.get("REPO") or Path(__file__).resolve().parent.parent)
 
 
 def _git_sha(path: Path) -> str:
@@ -42,7 +42,7 @@ def _git_sha(path: Path) -> str:
         return subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=str(path), text=True
         ).strip()
-    except subprocess.SubprocessError:
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
         return "unknown"
 
 
@@ -137,7 +137,7 @@ def main() -> int:
         "kernel_backend": args.kernel_backend,
         "launch_command": args.launch_command,
         "env": env,
-        "timestamp": datetime.datetime.now(datetime.timezone.utc)
+        "timestamp": datetime.datetime.now(datetime.UTC)
         .replace(tzinfo=None)
         .isoformat()
         + "Z",

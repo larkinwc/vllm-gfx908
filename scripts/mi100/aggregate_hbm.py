@@ -116,12 +116,18 @@ PROD_RAW_BASELINE_ROOT = Path("/root/bench-int8-w4a16/baseline")
 FIELD_BY_LABEL = {label: field for label, field, _ in METRICS}
 
 
+# Default bench root for the M2 producer-side wire-in mission's M3 grid.
+BENCH_ROOT_M2_PRODUCER = Path("/root/bench-int8-w4a16-m2-producer/m3-bench")
+
+
 def bench_root_for(milestone: str) -> Path:
     """Return the bench-root path that contains <milestone>'s cell JSONs."""
     if milestone == "m1-flash-tune":
         return BENCH_ROOT_FLASH_TUNE
     if milestone == "m4-fused-act-quant":
         return BENCH_ROOT_FUSED_M4
+    if milestone == "m3-m2-producer":
+        return BENCH_ROOT_M2_PRODUCER
     return BENCH_ROOT / milestone
 
 
@@ -169,13 +175,24 @@ def load_baseline_from_cells(
     return base
 
 
-def load_cell(milestone: str, quant: str, tp: int, conc: int, workload: str) -> dict:
-    if milestone == "m1-flash-tune":
+def load_cell(
+    milestone: str,
+    quant: str,
+    tp: int,
+    conc: int,
+    workload: str,
+    bench_root: Path | None = None,
+) -> dict:
+    if bench_root is not None:
+        p = bench_root / quant / f"{quant}_tp{tp}_c{conc}_{workload}.json"
+    elif milestone == "m1-flash-tune":
         # m1-flash-tune writes under /root/bench-int8-w4a16-hbm-fa/m1-tuning/
         # (no milestone subdir below the bench root).
         p = BENCH_ROOT_FLASH_TUNE / quant / f"{quant}_tp{tp}_c{conc}_{workload}.json"
     elif milestone == "m4-fused-act-quant":
         p = BENCH_ROOT_FUSED_M4 / quant / f"{quant}_tp{tp}_c{conc}_{workload}.json"
+    elif milestone == "m3-m2-producer":
+        p = BENCH_ROOT_M2_PRODUCER / quant / f"{quant}_tp{tp}_c{conc}_{workload}.json"
     else:
         p = BENCH_ROOT / milestone / quant / f"{quant}_tp{tp}_c{conc}_{workload}.json"
     if not p.exists():
@@ -234,6 +251,9 @@ PREFILL_DOMINATED_CELLS: set[tuple[str, str]] = {
 
 def fused_m4_vs_baseline_rows(
     raw_baseline: dict[tuple[str, str], dict],
+    milestone: str = "m4-fused-act-quant",
+    bench_root: Path | None = None,
+    baseline_overrides: dict[tuple[str, str], float] | None = None,
 ) -> list[dict[str, object]]:
     """Build the m4_vs_baseline_grid.csv rows for the Fused mission.
 
@@ -248,21 +268,45 @@ def fused_m4_vs_baseline_rows(
     where ``delta_tput_pct = (fused - baseline) / baseline * 100`` and
     ``delta_ttft_pct = (fused - baseline) / baseline * 100`` (negative
     delta_ttft_pct is an improvement).
+
+    Parameters
+    ----------
+    raw_baseline
+        Mapping ``(cell_id, workload) -> raw.json dict`` from the
+        production per-cell baseline.
+    milestone
+        Milestone tag for ``load_cell`` (used when ``bench_root`` is None).
+    bench_root
+        Optional override for the bench root that contains the per-cell
+        milestone JSONs.
+    baseline_overrides
+        Optional mapping ``(cell_id, workload) -> override_tput`` that
+        replaces the per-cell baseline throughput for the listed cells.
+        Used by the M2 producer-side wire-in mission to override the
+        w8a8_tp1_c1 M0-canary outlier with the matched-thermal-state
+        re-baseline (44.682 tok/s).
     """
     rows: list[dict[str, object]] = []
+    overrides = baseline_overrides or {}
     for quant in QUANTS:
         for tp in (1, 4):
             for conc in (1, 2, 4):
                 cell_id = f"{quant}_tp{tp}_c{conc}"
                 for wl in WORKLOADS:
                     try:
-                        cell = load_cell("m4-fused-act-quant", quant, tp, conc, wl)
+                        cell = load_cell(
+                            milestone, quant, tp, conc, wl, bench_root=bench_root
+                        )
                     except FileNotFoundError:
                         cell = {}
                     base = raw_baseline.get((cell_id, wl), {})
                     # Production raw.json uses 'output_throughput'; cell
                     # JSON uses 'output_throughput_toks_s'.
                     base_tput = float(base.get("output_throughput") or 0.0)
+                    # Apply per-cell baseline-tput overrides (e.g. M2
+                    # producer-side wire-in re-baseline for w8a8_tp1_c1).
+                    if (cell_id, wl) in overrides:
+                        base_tput = float(overrides[(cell_id, wl)])
                     fused_tput = float(cell.get("output_throughput_toks_s") or 0.0)
                     base_ttft = float(base.get("mean_ttft_ms") or 0.0)
                     fused_ttft = float(cell.get("mean_ttft_ms") or 0.0)
@@ -286,6 +330,7 @@ def fused_m4_vs_baseline_rows(
                             "delta_ttft_pct": d_ttft,
                             "prefill_dominated_bool": (cell_id, wl)
                             in PREFILL_DOMINATED_CELLS,
+                            "baseline_overridden": (cell_id, wl) in overrides,
                         }
                     )
     return rows
@@ -303,6 +348,7 @@ def write_fused_m4_csv(rows: list[dict[str, object]], out: Path) -> None:
         "fused_ttft",
         "delta_ttft_pct",
         "prefill_dominated_bool",
+        "baseline_overridden",
     ]
     with open(out, "w", newline="") as f:
         w = csv.writer(f)
@@ -318,7 +364,7 @@ def write_fused_m4_csv(rows: list[dict[str, object]], out: Path) -> None:
                     return "true" if v else "false"
                 return str(v)
 
-            w.writerow([fmt(r[c]) for c in cols])
+            w.writerow([fmt(r.get(c, "")) for c in cols])
 
 
 def fused_m4_win_bar(
@@ -704,6 +750,7 @@ def parse_args() -> argparse.Namespace:
             "m4-final",
             "m1-flash-tune",
             "m4-fused-act-quant",
+            "m3-m2-producer",
         ],
         help="Milestone identifier (used as both the bench subdir and the "
         "CSV/Markdown filename prefix).",
@@ -720,7 +767,18 @@ def parse_args() -> argparse.Namespace:
         help="When set, anchor the comparison against the per-cell JSONs "
         "under <baseline-root>/{w8a8,w4a16}/<cell>_<wl>.json instead "
         "of /root/bench-int8-w4a16/final/final_grid.csv. Required for "
-        "milestone=m1-flash-tune (compare to M4 baselines).",
+        "milestone=m1-flash-tune (compare to M4 baselines). For "
+        "milestone=m4-fused-act-quant / m3-m2-producer the baseline is "
+        "always /root/bench-int8-w4a16/baseline/raw_*/raw.json regardless.",
+    )
+    p.add_argument(
+        "--bench-root",
+        default=None,
+        help="When set, read the per-cell milestone JSONs from "
+        "<bench-root>/{w8a8,w4a16}/<cell>_<wl>.json instead of the "
+        "default location for the milestone. Required for "
+        "milestone=m3-m2-producer so the M2 producer-side wire-in "
+        "mission can pin /root/bench-int8-w4a16-m2-producer/m3-bench/.",
     )
     return p.parse_args()
 
@@ -730,21 +788,62 @@ def main() -> int:
     milestone = args.milestone
     milestone_key = milestone.replace("-", "_")
 
-    # m4-fused-act-quant has its own per-cell baseline (production raw.json
-    # files, NOT final_grid.csv) and its own CSV format (the spec defines
-    # a 9-column m4_vs_baseline_grid.csv). Handle it ahead of the
-    # general-milestone flow.
-    if milestone == "m4-fused-act-quant":
+    # m4-fused-act-quant and m3-m2-producer share the per-cell raw.json
+    # production baseline (anti-pattern #10) and the 9-column CSV format.
+    # Handle them ahead of the general-milestone flow.
+    if milestone in ("m4-fused-act-quant", "m3-m2-producer"):
         raw_baseline = load_production_raw_baseline()
-        rows = fused_m4_vs_baseline_rows(raw_baseline)
-        out_dir = bench_root_for(milestone)
-        csv_out = out_dir / "m4_vs_baseline_grid.csv"
+        # Allow caller to override the bench root (e.g. for m3-m2-producer
+        # the canonical root is /root/bench-int8-w4a16-m2-producer/m3-bench
+        # but workers may pin a sibling tree).
+        bench_root_override: Path | None = None
+        if args.bench_root is not None:
+            bench_root_override = Path(args.bench_root)
+            if not bench_root_override.exists():
+                raise FileNotFoundError(f"missing --bench-root: {bench_root_override}")
+        # M2 producer-side wire-in mission: the M0-F3 canary's
+        # w8a8_tp1_c1 measurement (39.340 tok/s) was demonstrated to be a
+        # cold-start outlier; the matched-thermal-state re-baseline is
+        # 44.682 tok/s. Override on synthetic (the prefill-dominated cell
+        # the canary measured) so the delta column reflects reality.
+        baseline_overrides: dict[tuple[str, str], float] | None = None
+        if milestone == "m3-m2-producer":
+            baseline_overrides = {("w8a8_tp1_c1", "synthetic"): 44.681574}
+        rows = fused_m4_vs_baseline_rows(
+            raw_baseline,
+            milestone=milestone,
+            bench_root=bench_root_override,
+            baseline_overrides=baseline_overrides,
+        )
+        out_dir = bench_root_override or bench_root_for(milestone)
+        if milestone == "m3-m2-producer":
+            csv_out = out_dir / "aggregate_delta.csv"
+            md_out = out_dir / "aggregate_delta.md"
+        else:
+            csv_out = out_dir / "m4_vs_baseline_grid.csv"
+            md_out = out_dir / "m4_vs_baseline_grid.md"
         write_fused_m4_csv(rows, csv_out)
         met, winning = fused_m4_win_bar(rows)
-        # Emit a human-readable summary alongside the CSV.
-        md_out = out_dir / "m4_vs_baseline_grid.md"
+        # Emit a human-readable summary alongside the CSV. (md_out already
+        # set above with the milestone-correct filename.)
+        if milestone == "m3-m2-producer":
+            heading = "## m3-m2-producer — 24-cell delta vs production baseline"
+            footnote = (
+                "Footnote: w8a8_tp1_c1/synthetic baseline overridden to "
+                "44.681574 tok/s (matched-thermal-state re-baseline from "
+                "`/root/bench-int8-w4a16-m2-producer/m3-disable-smoke/"
+                "w8a8_tp1_c1_rebaseline/raw.json`). The M0 canary's "
+                "39.340 tok/s reading was demonstrated to be a "
+                "cold-start / page-cache outlier (three subsequent matched-"
+                "thermal-state runs clustered at 44.682 / 45.627 / "
+                "45.644 tok/s). Per the m2-disable-path-smoke handoff this "
+                "row is flagged 'M0-canary-anomaly; using re-baseline'."
+            )
+        else:
+            heading = "## m4-fused-act-quant — 24-cell delta vs production baseline"
+            footnote = ""
         md_lines: list[str] = [
-            "## m4-fused-act-quant — 24-cell delta vs production baseline",
+            heading,
             "",
             (
                 "Baseline source: per-cell raw.json under "
@@ -776,6 +875,9 @@ def main() -> int:
                 f"{r['fused_ttft']:.2f} | {d_ttft_s} | "
                 f"{'yes' if r['prefill_dominated_bool'] else ''} |"
             )
+        if footnote:
+            md_lines.append("")
+            md_lines.append(footnote)
         md_lines.append("")
         md_lines.append("### Win-bar (research-mode, VAL-M4-003)")
         md_lines.append("")

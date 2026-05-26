@@ -40,7 +40,7 @@ cell_id=${1:?cell_id required (e.g. w8a8_tp1_c4_coding)}
 fused_state=${2:?fused_state required (on | off)}
 out_dir=${3:?out_dir required (absolute path)}
 
-REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/cold-points-sit-rancb
+REPO=${REPO:-/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/thin-hands-smell-2bxf5}
 PY=/opt/vllm-env/bin/python3
 PMC_FILE="$REPO/scripts/mi100/pmc_counters.txt"
 MODEL=/models/Qwen3.5-9B-w8a8
@@ -70,11 +70,20 @@ export TUNING_JSON_DIR=vllm/model_executor/kernels/configs/gfx908
 export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
 
 # Fused-state gate (default-on; explicit unset for fused-on capture).
-if [[ "$fused_state" == "off" ]]; then
-  export VLLM_MI100_DISABLE_FUSED_ACT_QUANT=1
-else
-  unset VLLM_MI100_DISABLE_FUSED_ACT_QUANT || true
-fi
+# Accept both bare "on"/"off" and the conventional "fused_on"/"fused_off"
+# forms used by the mission services.yaml and feature descriptions.
+case "$fused_state" in
+  off|fused_off)
+    export VLLM_MI100_DISABLE_FUSED_ACT_QUANT=1
+    ;;
+  on|fused_on)
+    unset VLLM_MI100_DISABLE_FUSED_ACT_QUANT || true
+    ;;
+  *)
+    echo "FATAL: unknown fused_state='$fused_state' (expected on|off|fused_on|fused_off)" >&2
+    exit 2
+    ;;
+esac
 # Per AGENTS.md anti-pattern #1, lock GPU to a single device.
 export CUDA_VISIBLE_DEVICES=0
 
@@ -189,15 +198,25 @@ pgrep -f 'VLLM::EngineCore' 2>/dev/null | xargs -r kill -KILL 2>/dev/null || tru
 pgrep -f 'multiprocessing.resource_tracker' 2>/dev/null | xargs -r kill -KILL 2>/dev/null || true
 sleep 5
 
-# Collect PMC counter_collection.csv from rocprofv3 outputs.
-PMC_RAW=$(ls -S "$out_dir"/pmc_*/pmc_*_counter_collection.csv 2>/dev/null | head -1)
-if [[ -z "$PMC_RAW" || ! -s "$PMC_RAW" ]]; then
+# Collect PMC counter_collection.csv files from rocprofv3 outputs.
+# rocprofv3 splits multi-pass PMC groups into per-group subdirs (pmc_1/,
+# pmc_2/, ...), each with its own counter_collection.csv. Merge them
+# inline into a single pmc.csv (dedup header) so downstream consumers
+# can read every requested counter without an external merge step.
+# Per-group source files are preserved under pmc_*/ for debug.
+PMC_PARTS=( "$out_dir"/pmc_*/pmc_*_counter_collection.csv )
+if [[ ! -s "${PMC_PARTS[0]:-}" ]]; then
   log "WARN: no PMC counter_collection.csv produced; writing stub note"
   echo "# rocprofv3 PMC capture failed — see pmc.log" > "$out_dir/pmc.csv"
 else
-  cp "$PMC_RAW" "$out_dir/pmc.csv"
-  PMC_RECORDS=$(($(wc -l < "$PMC_RAW") - 1))
-  log "  pmc records=$PMC_RECORDS  file=$PMC_RAW -> $out_dir/pmc.csv"
+  {
+    head -n1 "${PMC_PARTS[0]}"
+    for f in "${PMC_PARTS[@]}"; do
+      tail -n +2 "$f"
+    done
+  } > "$out_dir/pmc.csv"
+  PMC_RECORDS=$(($(wc -l < "$out_dir/pmc.csv") - 1))
+  log "  pmc records=$PMC_RECORDS  parts=${#PMC_PARTS[@]} -> $out_dir/pmc.csv"
 fi
 
 cat > "$out_dir/capture_summary.json" <<EOF
