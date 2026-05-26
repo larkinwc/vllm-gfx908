@@ -70,11 +70,20 @@ export TUNING_JSON_DIR=vllm/model_executor/kernels/configs/gfx908
 export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
 
 # Fused-state gate (default-on; explicit unset for fused-on capture).
-if [[ "$fused_state" == "off" ]]; then
-  export VLLM_MI100_DISABLE_FUSED_ACT_QUANT=1
-else
-  unset VLLM_MI100_DISABLE_FUSED_ACT_QUANT || true
-fi
+# Accept both bare "on"/"off" and the conventional "fused_on"/"fused_off"
+# forms used by the mission services.yaml and feature descriptions.
+case "$fused_state" in
+  off|fused_off)
+    export VLLM_MI100_DISABLE_FUSED_ACT_QUANT=1
+    ;;
+  on|fused_on)
+    unset VLLM_MI100_DISABLE_FUSED_ACT_QUANT || true
+    ;;
+  *)
+    echo "FATAL: unknown fused_state='$fused_state' (expected on|off|fused_on|fused_off)" >&2
+    exit 2
+    ;;
+esac
 # Per AGENTS.md anti-pattern #1, lock GPU to a single device.
 export CUDA_VISIBLE_DEVICES=0
 
