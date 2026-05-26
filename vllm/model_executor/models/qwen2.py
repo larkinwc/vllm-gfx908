@@ -189,6 +189,20 @@ class Qwen2Attention(nn.Module):
             prefix=f"{prefix}.o_proj",
         )
 
+        # M2 producer-side wire-in (issue #26 follow-up): tag the qkv_proj
+        # with a handle to its downstream W8A8 consumer (o_proj) so
+        # ``MI100Int8ScaledMMLinearKernel.apply_weights`` can stash a
+        # fused ``(int8, scale)`` cache on the consumer when its
+        # dispatcher returns True for the qkv_proj producer layer.
+        # The tag is a plain Python attribute, NOT a registered submodule
+        # — assigning it via ``setattr`` on the linear module keeps it
+        # out of the parameter registry and checkpoint serialization.
+        # On non-MI100 platforms / non-INT8 paths the attribute is read
+        # but never acted upon (the producer branch additionally gates on
+        # the env flag and the dispatcher decision), so this is a strict
+        # no-op outside the MI100 W8A8 wire-in.
+        self.qkv_proj._mi100_next_w8a8_linear = self.o_proj
+
         # QK Normalization support (used in BAGEL and some other models)
         if self.qk_norm:
             self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)
