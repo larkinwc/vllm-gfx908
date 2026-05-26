@@ -198,15 +198,25 @@ pgrep -f 'VLLM::EngineCore' 2>/dev/null | xargs -r kill -KILL 2>/dev/null || tru
 pgrep -f 'multiprocessing.resource_tracker' 2>/dev/null | xargs -r kill -KILL 2>/dev/null || true
 sleep 5
 
-# Collect PMC counter_collection.csv from rocprofv3 outputs.
-PMC_RAW=$(ls -S "$out_dir"/pmc_*/pmc_*_counter_collection.csv 2>/dev/null | head -1)
-if [[ -z "$PMC_RAW" || ! -s "$PMC_RAW" ]]; then
+# Collect PMC counter_collection.csv files from rocprofv3 outputs.
+# rocprofv3 splits multi-pass PMC groups into per-group subdirs (pmc_1/,
+# pmc_2/, ...), each with its own counter_collection.csv. Merge them
+# inline into a single pmc.csv (dedup header) so downstream consumers
+# can read every requested counter without an external merge step.
+# Per-group source files are preserved under pmc_*/ for debug.
+PMC_PARTS=( "$out_dir"/pmc_*/pmc_*_counter_collection.csv )
+if [[ ! -s "${PMC_PARTS[0]:-}" ]]; then
   log "WARN: no PMC counter_collection.csv produced; writing stub note"
   echo "# rocprofv3 PMC capture failed — see pmc.log" > "$out_dir/pmc.csv"
 else
-  cp "$PMC_RAW" "$out_dir/pmc.csv"
-  PMC_RECORDS=$(($(wc -l < "$PMC_RAW") - 1))
-  log "  pmc records=$PMC_RECORDS  file=$PMC_RAW -> $out_dir/pmc.csv"
+  {
+    head -n1 "${PMC_PARTS[0]}"
+    for f in "${PMC_PARTS[@]}"; do
+      tail -n +2 "$f"
+    done
+  } > "$out_dir/pmc.csv"
+  PMC_RECORDS=$(($(wc -l < "$out_dir/pmc.csv") - 1))
+  log "  pmc records=$PMC_RECORDS  parts=${#PMC_PARTS[@]} -> $out_dir/pmc.csv"
 fi
 
 cat > "$out_dir/capture_summary.json" <<EOF

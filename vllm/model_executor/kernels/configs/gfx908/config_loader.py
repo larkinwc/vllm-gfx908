@@ -9,7 +9,7 @@ this directory using the naming convention:
     mi100_int8_M<M>_N<N>_K<K>_e1.json            # EMIT_INT8_NEXT=True variant
     mi100_w4a16_M<M>_N<N>_K<K>_g<group_size>.json
     fused_silu_quant_int8_M<M>_H<H>.json         # M1 fused silu+quant
-    fused_int8_quant_M<M>_N<N>.json              # candidate per-token quant
+    fused_int8_quant_M<M>_H<H>.json              # candidate per-token quant
 
 Each JSON has the schema:
     {

@@ -137,7 +137,7 @@ def main() -> int:
         "kernel_backend": args.kernel_backend,
         "launch_command": args.launch_command,
         "env": env,
-        "timestamp": datetime.datetime.now(datetime.timezone.utc)
+        "timestamp": datetime.datetime.now(datetime.UTC)
         .replace(tzinfo=None)
         .isoformat()
         + "Z",
