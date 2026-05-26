@@ -19,11 +19,7 @@ from pathlib import Path
 
 import jsonschema
 
-REPO = Path(
-    "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/"
-    "emdash/cold-points-sit-rancb"
-)
-SCHEMA_PATH = REPO / "scripts" / "bench_schema.json"
+SCHEMA_PATH = Path(__file__).resolve().parent / "bench_schema.json"
 
 
 def main() -> int:
