@@ -176,6 +176,7 @@ fi
     --enable-prefix-caching \
     --language-model-only \
     --gpu-memory-utilization ${LAUNCH_GPU_MEM_UTIL:-0.93} \
+    --quantization awq \
     --port "$PORT"  "${KV_CACHE_DTYPE_FLAG[@]}" "${MAX_NUM_BATCHED_TOKENS_FLAG[@]}" "${ENABLE_CHUNKED_PREFILL_FLAG[@]}" "${CUDAGRAPH_MODE_FLAG[@]}" > "$LOG" 2>&1 &
 SERVER_PID=$!
 echo "[launch_hbm_$cell_id] server PID=$SERVER_PID; log=$LOG"

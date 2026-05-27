@@ -171,6 +171,7 @@ export VLLM_MI100_DISABLE_CUSTOM_AR=1
     --enable-prefix-caching \
     --language-model-only \
     --gpu-memory-utilization ${LAUNCH_GPU_MEM_UTIL:-0.93} \
+    --quantization awq \
     --port "$PORT"  \
     --disable-custom-all-reduce "${KV_CACHE_DTYPE_FLAG[@]}" "${MAX_NUM_BATCHED_TOKENS_FLAG[@]}" "${ENABLE_CHUNKED_PREFILL_FLAG[@]}" "${CUDAGRAPH_MODE_FLAG[@]}" > "$LOG" 2>&1 &
 SERVER_PID=$!
