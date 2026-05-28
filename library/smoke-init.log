@@ -1,0 +1,15 @@
+=== M2-F1 C1-engine-init smoke (W4A16) ===
+Branch: upstream-sync-2026-05-28
+Commit: f0fe71a683e62365444524a871f7c813f6b1a4ae
+Model: /models/Qwen3.5-9B-w4a16
+TP=1, single GPU (CUDA_VISIBLE_DEVICES=0), --enforce-eager (TORCH_COMPILE_DISABLE=1), --max-model-len 32768
+Date: 2026-05-28T19:40:45Z
+
+--- /health ---
+HTTP 200
+
+--- /v1/models ---
+{"object":"list","data":[{"id":"/models/Qwen3.5-9B-w4a16","object":"model","created":1779997245,"owned_by":"vllm","root":"/models/Qwen3.5-9B-w4a16","parent":null,"max_model_len":32768,"permission":[{"id":"modelperm-a03b5c583c2a7ef0","object":"model_permission","created":1779997245,"allow_create_engine":false,"allow_sampling":true,"allow_logprobs":true,"allow_search_indices":false,"allow_view":true,"allow_fine_tuning":false,"organization":"*","group":null,"is_blocking":false}]}]}
+
+--- /v1/completions  prompt='Hello' ---
+{"id":"cmpl-8cbf3643df9e82fb","object":"text_completion","created":1779997245,"model":"/models/Qwen3.5-9B-w4a16","choices":[{"index":0,"text":", I am a 20 year old male. I have been experiencing a lot of pain in my lower back and I am not sure what is causing it","logprobs":null,"finish_reason":"length","stop_reason":null,"token_ids":null,"prompt_logprobs":null,"prompt_token_ids":null,"routed_experts":null}],"service_tier":null,"system_fingerprint":"vllm-0.20.2rc1.dev107+gd960f21e4.d20260510-c9dcedf3","usage":{"prompt_tokens":1,"total_tokens":33,"completion_tokens":32,"prompt_tokens_details":null},"kv_transfer_params":null}
