@@ -46,7 +46,7 @@ cell_id=w4a16_tp4_c1
 model_path=/models/Qwen3.5-9B-w4a16
 tp=4
 conc=1
-ref_tput=0.0
+ref_tput=55.3921665893372
 
 # ---------------------------------------------------------------------------
 # Pinned environment (HBM-mission stack: M1+M2+M3 winners)
