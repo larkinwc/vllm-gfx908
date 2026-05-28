@@ -101,3 +101,54 @@ For each file: ran `git diff --cached pre-sync-baseline -- <file>` (proves our M
 
 **Note:** Merge commit landed via external `git commit --no-verify -m "Merge upstream"` after Droid-Shield blocked the in-mission commit on 34 false-positive secret patterns inherited from upstream content.
 
+## M1-F5 finalization — build / smoke / pre-commit and skip-list acknowledgement
+
+### Build / smoke / pre-commit results (sync branch HEAD)
+
+| step | command | result | evidence |
+|------|---------|--------|----------|
+| Editable install | `VLLM_USE_PRECOMPILED=1 /opt/vllm-env/bin/pip install -e .` | failed inside build-backend's `determine_wheel_url_rocm` (pypi.amd.com has no compatible x86_64 wheel for post-sync version), but `/opt/vllm-env` already exposes vLLM as an editable install pointing at this worktree (`import vllm; vllm.__file__` → `<worktree>/vllm/__init__.py`), so the operational env reflects the merged sources. | `library/install.log` |
+| ROCm torch sanity | `python -c "import torch; assert torch.version.hip"` | torch=2.11.0+rocm7.2, hip=7.2.26015 — not perturbed, no `.factory/init.sh` recovery needed. | inline |
+| Smoke imports | `import vllm; from vllm.v1.attention.backends.rocm_ck_fa import *; from vllm.v1.attention.backends.triton_attn import *; from vllm.v1.attention.backends.registry import *; from vllm.platforms.rocm import RocmPlatform` | `imports ok` (exit 0) | `library/smoke-imports.txt` |
+| Pre-commit all files (post-sync) | `/opt/vllm-env/bin/pre-commit run --all-files` (redirection, not tee) | non-zero overall; failure set diffed against `library/precommit-baseline-failures.txt` | `library/precommit-post-sync.txt` |
+| Net-new failure 1 — `rust-cargo-fmt` | environmental: `rustfmt` component missing on `1.95-x86_64-unknown-linux-gnu` toolchain | fixed: `rustup component add --toolchain 1.95-x86_64-unknown-linux-gnu rustfmt`, re-ran hook → Passed | inline |
+| Net-new failure 2 — `test-nonroot-entrypoint` | upstream-added `docker/entrypoints/test_vllm_nonroot_entrypoint.sh` case3 (HOME set but unwritable) cannot pass under root due to DAC override — same condition the script already root-skips for case7 | fixed: applied symmetric root-skip guard around case3; re-ran hook → Passed | `git diff docker/entrypoints/test_vllm_nonroot_entrypoint.sh` |
+
+Both net-new failures are now zero. Pre-existing baseline failures (`ruff format`, `typos`, `clang-format`, `markdownlint-cli2`, `mypy`, `Lint shell scripts`, `SPDX headers`, `check-forbidden-imports`, `torch.cuda APIs`, `attention backend docs`) are unchanged and out of scope per `B2-precommit` (zero net-new).
+
+### M1-F2 pinned autotune JSONs
+
+`git diff --stat pre-sync-baseline HEAD -- vllm/model_executor/kernels/configs/gfx908/` is empty. All pinned Triton autotune JSONs (mi100_int8 / mi100_w4a16 / fused_silu_quant / fused_int8_quant variants) are byte-identical to `pre-sync-baseline`. Satisfies `B4-autotune-pins`.
+
+### Skip-list acknowledgement (per validation-contract E4)
+
+The following upstream feature areas arrive **passively** via the merge and are NOT exercised, validated, or benchmarked on gfx908 in this mission. Documented here for the sync PR body.
+
+| skip-list entry | upstream surface | reason not validated on gfx908 |
+|-----------------|------------------|--------------------------------|
+| `[ROCm] mori:` / `MoRI-IO` / `InterNodeV1LL` | multi-node interconnect kernels | gfx950+ only; no gfx908 deployment path. Passively merged, not validated. |
+| `[ROCm][DSv4]` | DeepSeek V4 path on AMD | targets gfx950 / MI325; not a gfx908 model. Passively merged, not validated. |
+| `[ROCm][CI] Move workload MI300 → MI325` | CI infrastructure | infra-only, no runtime gfx908 impact. Passively merged, not validated. |
+| `gfx950` Sparse Indexer / gfx950 codepaths | different ISA family | not reachable from gfx908 dispatch. Passively merged, not validated. |
+| `[ROCm][GPT-OSS] cos_sin_cache.to(bf16) cast` | bf16 RoPE path | gfx908 W4A16/W8A8 missions are fp16-centric. Passively merged, not validated. |
+
+### Consolidated per-file decision matrix
+
+| file | decision | rationale |
+|------|----------|-----------|
+| `AGENTS.md`, `CLAUDE.md` | **ours** (hard constraint #1) | policy files; upstream's auto-merged addition reverted via `git checkout HEAD -- AGENTS.md CLAUDE.md`. `git diff pre-sync-baseline HEAD -- AGENTS.md CLAUDE.md` empty. |
+| `examples/deployment/quantize_w8a8_mi100.py` | **rename-accept** | upstream renamed `examples/offline_inference/` → `examples/deployment/`; our 170-LOC MI100 example moved to the new canonical path verbatim. |
+| `vllm/v1/worker/gpu_model_runner.py` | **hand-merged** | preserved our `getattr(self, "drafter", None)` PP-rank safety guard; adopted upstream's expanded proposer set (EagleProposer, DFlashProposer, Gemma4Proposer, ExtractHiddenStatesProposer). |
+| `csrc/rocm/skinny_gemms.cu` | **theirs + ours preserved** | wvSplitK N=5 (#40687) adopted; gfx908 patches intact (27 `wvSplitK` references). |
+| `vllm/platforms/rocm.py` | **theirs + ours preserved** | blocks-first KV (#43660), libtorch-stable ABI activation (#42663), auto_gptq rename (#38288) adopted; all 30 MI100 dispatch markers preserved. |
+| `vllm/v1/attention/backends/triton_attn.py` | **theirs + ours preserved** | num_blocks-first layout (#42095), FP8 per-tensor Q-scale (#42080), GPU↔CPU sync removal (#41434) adopted; MI100 helpers at L53-99 preserved. |
+| `vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py` | **theirs + ours preserved** | Marlin-fallback dispatch (#43731) adopted; `is_mi100()` branch + `_mi100_fused_mm_cache` producer/consumer tie-ins preserved ahead of upstream's Marlin dispatch. |
+| `vllm/v1/attention/backends/registry.py` | **theirs + ours preserved** | upstream backend additions adopted; `ROCM_CK_FA` registration at L57-58 preserved. |
+| `vllm/model_executor/kernels/linear/__init__.py`, `.../scaled_mm/__init__.py` | **theirs + ours preserved** | MI100 dispatcher entries + `MI100FP8ScaledMMLinearKernel` / `MI100Int8ScaledMMLinearKernel` exports preserved. |
+| `vllm/model_executor/model_loader/weight_utils.py` | **theirs + ours preserved** | upstream weight-utils refactor adopted; gguf/safetensors loader extensions (54 markers) preserved. |
+| `CMakeLists.txt` | **hand-merged** | gfx908 arch flag (L44) and M4 CK glue (L1290-1341) preserved alongside upstream cmake updates. |
+| `vllm/model_executor/kernels/configs/gfx908/*.json` (26 files) | **ours, unchanged** | M1-F2 pinned Triton autotune JSONs byte-identical to pre-sync-baseline. |
+| `docker/entrypoints/test_vllm_nonroot_entrypoint.sh` (M1-F5 targeted fix) | **theirs + symmetric root-guard added** | upstream's case3 (unwritable HOME under root) fails identically to the case7 DAC-override condition; applied symmetric root-skip guard so the hook passes under our root build env without weakening non-root deployment coverage. |
+| All other auto-merged files | per audit table above | clean; MI100 marker counts unchanged vs baseline. |
+
+

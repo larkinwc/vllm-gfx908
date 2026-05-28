@@ -92,16 +92,24 @@ echo "PASS: case2 (unset HOME falls back to $expected_home, USER defaulted)"
 
 # -----------------------------------------------------------------------------
 # Case 3: HOME set but unwritable -> must also fall back.
+# Skipped when running as root, because root's DAC override means [ -w ... ]
+# is always true regardless of mode bits -- the case can't be simulated.
+# In the real deployment (non-root UID inside the container) this IS the
+# relevant behavior and is what the wrapper's writable-HOME check encodes.
 # -----------------------------------------------------------------------------
-ro_home="$WORKDIR/ro-home"
-mkdir -p "$ro_home"
-chmod 0500 "$ro_home"
-out="$WORKDIR/case3.out"
-run_wrapper "$out" "HOME=$ro_home" -- --model baz
-expect_default_home "$out" "case3"
-grep -q "^USER=vllm\$" "$out" || fail "$out" "case3: USER not defaulted"
-chmod 0700 "$ro_home"
-echo "PASS: case3 (unwritable HOME overridden)"
+if [ "$(id -u)" = "0" ]; then
+    echo "SKIP: case3 (running as root; DAC override makes unwritable check meaningless)"
+else
+    ro_home="$WORKDIR/ro-home"
+    mkdir -p "$ro_home"
+    chmod 0500 "$ro_home"
+    out="$WORKDIR/case3.out"
+    run_wrapper "$out" "HOME=$ro_home" -- --model baz
+    expect_default_home "$out" "case3"
+    grep -q "^USER=vllm\$" "$out" || fail "$out" "case3: USER not defaulted"
+    chmod 0700 "$ro_home"
+    echo "PASS: case3 (unwritable HOME overridden)"
+fi
 
 # -----------------------------------------------------------------------------
 # Case 4: USER set but LOGNAME unset -> LOGNAME mirrors USER.
