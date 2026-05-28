@@ -23,7 +23,8 @@ We use 1228 GB/s as denominator for hbm_util_pct.
 
 MFMA utilization (mfma_util_pct):
   total_mfma_insts = sum(SQ_INSTS_MFMA) per kernel
-  active_cycles    = duration_s * peak_clock_hz * n_cu (gfx908: 1502 MHz, 120 CUs, 4 SIMDs/CU)
+  active_cycles    = duration_s * peak_clock_hz * n_cu
+                     (gfx908: 1502 MHz, 120 CUs, 4 SIMDs/CU)
   Each MFMA inst occupies 1 SIMD lane for some cycles. Per ROCm docs the
   SQ_INSTS_MFMA counter is incremented per wavefront-MFMA instruction issued.
   Approximation used here: mfma_util_pct =
@@ -195,7 +196,6 @@ def main(argv: list[str] | None = None) -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     all_rows: list[dict] = []
-    notes: list[str] = []
     tp4_present = []
     tp4_missing = []
     for path, cell in CELLS:
@@ -226,24 +226,36 @@ def main(argv: list[str] | None = None) -> int:
         "mfma_util_pct",
     ]
     header_lines = [
-        "# hot_kernel_summary.csv — top-5 hottest kernels per (path, cell) from rocprofv3",
-        "# Source: /root/bench-w4a16-ab/rocprof/{a,b,c}/<cell>/kernel_trace.csv + pmc.csv",
+        "# hot_kernel_summary.csv — top-5 hottest kernels per (path, cell)"
+        " from rocprofv3",
+        "# Source: /root/bench-w4a16-ab/rocprof/{a,b,c}/<cell>/"
+        "kernel_trace.csv + pmc.csv",
         "# Generator: scripts/awq_ab_hot_kernel_summary.py",
         f"# Peak HBM BW (denominator for hbm_util_pct): {PEAK_HBM_BW_GBPS} GB/s",
-        f"# MFMA peak issue slots: clock={PEAK_CLOCK_HZ:.3g}Hz x CU={N_CU} x SIMD={SIMDS_PER_CU}",
+        f"# MFMA peak issue slots: clock={PEAK_CLOCK_HZ:.3g}Hz"
+        f" x CU={N_CU} x SIMD={SIMDS_PER_CU}",
         "# FETCH_SIZE / WRITE_SIZE PMC counters are in KB (rocprofiler-sdk).",
-        "# Kernel-name mapping (Python class -> Triton-jit kernel name observed in kernel_trace.csv):",
-        "#   path A (W4A16 GPTQ, in-tree):       TritonW4A16LinearKernel -> mi100_w4a16_gemm_kernel",
-        "#   path B (W4A16 AWQ-INT4, in-tree):   TritonW4A16LinearKernel -> mi100_w4a16_gemm_kernel",
-        "#   path C (AWQ-gemm, Triton AWQ):      awq_dequantize_kernel + awq_gemm_kernel (a.k.a. triton_w4a16_gemm_kernel)",
-        "#   Validator note: paths A/B rows below name 'mi100_w4a16_gemm_kernel' which is the Triton-jit kernel of TritonW4A16LinearKernel;",
-        "#   path C rows below name 'awq_gemm_kernel' and 'awq_dequantize_kernel' (the Triton AWQ path enabled by VLLM_USE_TRITON_AWQ).",
+        "# Kernel-name mapping (Python class -> Triton-jit kernel name"
+        " observed in kernel_trace.csv):",
+        "#   path A (W4A16 GPTQ, in-tree):       TritonW4A16LinearKernel"
+        " -> mi100_w4a16_gemm_kernel",
+        "#   path B (W4A16 AWQ-INT4, in-tree):   TritonW4A16LinearKernel"
+        " -> mi100_w4a16_gemm_kernel",
+        "#   path C (AWQ-gemm, Triton AWQ):      awq_dequantize_kernel"
+        " + awq_gemm_kernel (a.k.a. triton_w4a16_gemm_kernel)",
+        "#   Validator note: paths A/B rows below name"
+        " 'mi100_w4a16_gemm_kernel' which is the Triton-jit kernel of"
+        " TritonW4A16LinearKernel;",
+        "#   path C rows below name 'awq_gemm_kernel' and"
+        " 'awq_dequantize_kernel' (the Triton AWQ path enabled by"
+        " VLLM_USE_TRITON_AWQ).",
     ]
     if tp4_present:
         header_lines.append("# TP=4 cells parsed: " + ", ".join(tp4_present))
     if tp4_missing:
         header_lines.append(
-            "# TP=4 cells ABSENT (per M3-F1 SIGTERM-flush race; see tp4_known_issue.md):"
+            "# TP=4 cells ABSENT (per M3-F1 SIGTERM-flush race;"
+            " see tp4_known_issue.md):"
         )
         for m in tp4_missing:
             header_lines.append("#   " + m)
