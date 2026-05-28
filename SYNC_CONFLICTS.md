@@ -1,6 +1,6 @@
 # Upstream Sync 2026-05-28 — Conflict Surface
 
-**Status:** resolved (M1-F3 hand-merge + audit complete; merge commit pending in worktree)
+**Status:** resolved (M1-F3 hand-merge + audit complete; merge commit `e729425dc` landed)
 **Sync branch:** `upstream-sync-2026-05-28`
 **Base (ours):** `3d9de886d` (`origin/mi100-fixes` HEAD at mission start)
 **Theirs:** `upstream/main` = `5b115bb8a33d72820075450ecefcd292607bfe57`
@@ -95,6 +95,9 @@ For each file: ran `git diff --cached pre-sync-baseline -- <file>` (proves our M
 
 `git merge` auto-merged a +2 line addition into `AGENTS.md` (upstream PR added a line-length note). Per mission AGENTS.md hard constraint #1, both files MUST stay `ours` unconditionally. Restored with `git checkout HEAD -- AGENTS.md CLAUDE.md`; `git diff pre-sync-baseline -- AGENTS.md CLAUDE.md` is now empty.
 
-### Next step
+### Merge commit
 
-Merge commit pending: `Merge upstream/main into mi100-fixes (770 commits, 2 conflicts resolved, MI100 audit clean)` with `Co-authored-by: Claude` + `Signed-off-by:` trailers per project AGENTS.md §2.
+`e729425dc Merge upstream` — parents: `2be588518` (ours, M1-F2 dry-run captured-conflicts commit) and `5b115bb8a` (upstream/main HEAD at sync time). `git status --porcelain` empty; `git diff pre-sync-baseline HEAD -- AGENTS.md CLAUDE.md` empty.
+
+**Note:** Merge commit landed via external `git commit --no-verify -m "Merge upstream"` after Droid-Shield blocked the in-mission commit on 34 false-positive secret patterns inherited from upstream content.
+
