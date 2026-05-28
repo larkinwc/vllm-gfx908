@@ -43,7 +43,7 @@
 | Bench harness | `vllm bench serve` (via `python3 -m vllm.entrypoints.cli.main bench serve`) — `benchmarks/benchmark_serving.py` is a deprecation stub |
 | Eval scripts | `scripts/m0_perplexity.py`, `scripts/eval_needle.py`, `scripts/eval_coding_prompts.py` |
 | Bench output tree | `/root/bench-w4a16-ab/{a,b,c,quality,rocprof,disable_path_smoke}/` (NOT committed) |
-| Bench params | `NUM_PROMPTS=200`, `--seed 42`, synthetic = random 1024/256 ignore-eos, coding = `tests/eval/coding_prompts.json` (`--custom-output-len 256 --skip-chat-template`) |
+| Bench params | `NUM_PROMPTS=200`, `--seed 42`, synthetic = random 1024/256 ignore-eos, coding = `/root/bench-int8-w4a16/datasets/coding_agent.jsonl` (200-prompt throughput dataset, `--custom-output-len 256 --skip-chat-template`) |
 | Cumulative HBM stack (M1+M2+M3) | KV-INT8 (`KV_CACHE_DTYPE=int8_per_token_head`), chunked-prefill (`ENABLE_CHUNKED_PREFILL=1`, `MAX_NUM_BATCHED_TOKENS=4096`), NCCL Ring on TP=4 |
 
 ## 3. Three-path quant config decomposition
@@ -318,10 +318,11 @@ Coding workload (6 cells, contextual):
 - B vs A: **−1.79 %**
 - C vs A: **−35.86 %**
 
-A leads B by ≥3 % on aggregate (synthetic+coding 12-cell mean ≈ −1.7 %
-for B vs A, with C far worse) — and crucially, **no non-A path beats A
-by ≥3 % on either workload**. The matrix's first row fires:
-`GPTQ-WINS`. Source: `/tmp/awq_ab_verdict.json` (synthesized by
+A leads C by 36.25 % on synthetic-decode geomean (35.86 % on coding
+geomean), well above the +3 % verdict threshold; B is within ±3 % of
+A on both workloads (−1.62 % synthetic, −1.79 % coding). The
+`GPTQ-WINS` verdict fires because no non-A path beats A by ≥3 % on
+either workload. Source: `/tmp/awq_ab_verdict.json` (synthesized by
 `scripts/awq_ab_synthesize_report.py` per M4-F1, commit `9a88b2477`).
 
 **Quality-gate caveat:** all three paths failed the +3 % perplexity
