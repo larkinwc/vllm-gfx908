@@ -225,7 +225,6 @@ def pick_verdict(
     th = VERDICT_THRESHOLD_PCT
     b_ok = bool(gates["paths"]["b"].get("path_gate_passed"))
     c_ok = bool(gates["paths"]["c"].get("path_gate_passed"))
-    a_ok = bool(gates["paths"]["a"].get("path_gate_passed"))
 
     # Headline workload = synthetic decode
     candidates: list[tuple[float, str, str]] = []
@@ -272,7 +271,8 @@ def pick_verdict(
                 return (
                     "QUALITY-WIN",
                     f"Path {cand.upper()} improves perplexity by "
-                    f"{(per_a - per) / per_a * 100.0:.2f}% while tput within ±{th:.0f}%",
+                    f"{(per_a - per) / per_a * 100.0:.2f}%"
+                    f" while tput within ±{th:.0f}%",
                 )
         return (
             "NULL",
@@ -333,7 +333,8 @@ def emit_tables(
     a("| :--- | :--- | ---: | :--- |")
     for p in PATHS:
         a(
-            f"| {PATH_LABEL[p]} | `{PATH_MODEL[p]}` | {PATH_GROUP_SIZE[p]} | {PATH_KERNEL[p]} |"
+            f"| {PATH_LABEL[p]} | `{PATH_MODEL[p]}`"
+            f" | {PATH_GROUP_SIZE[p]} | {PATH_KERNEL[p]} |"
         )
     a("")
 
@@ -341,7 +342,8 @@ def emit_tables(
     a("## 4. Setup + bench env identity proof\n")
     # Sample first cell env for each path
     a(
-        "Per-cell env captures live under `/root/bench-w4a16-ab/<path>/env_<cell>_<workload>.json`."
+        "Per-cell env captures live under "
+        "`/root/bench-w4a16-ab/<path>/env_<cell>_<workload>.json`."
     )
     a("Sample (path A, `w4a16_tp1_c1_synthetic`):\n")
     env_sample = load_json(BENCH_ROOT / "a" / "env_w4a16_tp1_c1_synthetic.json")
@@ -370,7 +372,8 @@ def emit_tables(
         f"(+{gates['thresholds']['perplexity_tolerance_pct']:.0f}%).\n"
     )
     a(
-        "| Path | perplexity | Δ vs FP16 | perplexity_ok | needle | needle_ok | coding | coding_ok | path_gate_passed |"
+        "| Path | perplexity | Δ vs FP16 | perplexity_ok"
+        " | needle | needle_ok | coding | coding_ok | path_gate_passed |"
     )
     a("| :--- | ---: | ---: | :---: | :---: | :---: | :---: | :---: | :---: |")
     for p in PATHS:
@@ -434,7 +437,8 @@ def emit_tables(
         "`/root/bench-w4a16-ab/rocprof/tp4_known_issue.md`)._\n"
     )
     a(
-        "| path | cell | kernel_name | invocations | hbm_bw_gbps | hbm_util_pct | mfma_util_pct |"
+        "| path | cell | kernel_name | invocations"
+        " | hbm_bw_gbps | hbm_util_pct | mfma_util_pct |"
     )
     a("| :--- | :--- | :--- | ---: | ---: | ---: | ---: |")
     for r in hot_rows:
