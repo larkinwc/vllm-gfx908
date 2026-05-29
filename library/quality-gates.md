@@ -106,3 +106,29 @@ Needle@32768: 5/5 (gate PASS)
 ## Notes / Pre-Existing Issues
 
 - `scripts/launch_w8a8_tp4_c1.sh --serve-only` at `--gpu-memory-utilization 0.93` OOMs as soon as `/v1/completions` is exercised with `echo=true, logprobs=0` (970 MiB allocation on each of 4 GPUs fails after a partial fill from the 93 % KV-cache reservation). This was first hit at the start of M3-F2 before falling back to a TP=1 single-GPU server at 0.90 util. Cause is the prompt-logprobs path materialising a `[B,T,V]` softmax tensor on top of the already-large KV cache. **Suggestion (non-blocking):** add a `LAUNCH_GPU_MEM_UTIL` override hook to the production launch script(s) so future ppl runs can dial back utilisation without editing the script. Tracked here for the mission-ops-worker who will assemble the final PR.
+
+---
+
+# M1 Quality Gates — W4A16 AWQ-vs-GPTQ A/B (3-path comparison)
+
+**Feature**: M1-F4 (gate_summary.json synthesis)
+**Run date**: 2026-05-27
+**Paths**: A=GPTQ (`/models/Qwen3.5-9B-w4a16`), B=AWQ-calibrated (`/models/Qwen3.5-9B-AWQ-INT4`), C=AWQ-gemm (`/models/Qwen3.5-9B-AWQ-gemm`)
+**Server**: TP=1, M4 env stack (KV_CACHE_DTYPE=int8_per_token_head, ENABLE_CHUNKED_PREFILL=1, MAX_NUM_BATCHED_TOKENS=4096)
+**FP16 reference perplexity**: 9.527 (from BENCH_INT8_W4A16_HBM.md baseline)
+**Threshold**: ≤ 9.527 × 1.03 = 9.81281
+
+<!-- markdownlint-disable MD060 -->
+| Path | Perplexity | Δ vs FP16 | Perplexity Gate | Needle (5/5) | Coding (≥8/10) | Path Gate |
+|---|---|---|---|---|---|---|
+| A (GPTQ) | 9.823 | +3.11% | **FAIL** | PASS | PASS (9/10) | FAIL |
+| B (AWQ-calibrated) | 9.916 | +4.08% | **FAIL** | PASS | PASS (9/10) | FAIL |
+| C (AWQ-gemm) | 9.956 | +4.51% | **FAIL** | PASS | PASS (10/10) | FAIL |
+<!-- markdownlint-enable MD060 -->
+
+## Key Observations
+
+- All three paths fail the +3% perplexity gate. **Mission explicitly non-blocking** (`mission_blocking=false` in gate_summary.json).
+- Path A (GPTQ) is the same model used to derive the FP16 baseline in BENCH_INT8_W4A16_HBM.md, yet fails the gate marginally (+3.11%). This suggests the +3% tolerance may be too tight for this eval config (50×512 chunks, seed=0, TP=1, KV-INT8), or that the FP16 reference was captured under slightly different conditions.
+- Needle and coding gates pass for all paths (5/5 needle; 9/10 and 10/10 coding).
+- Excluded paths are flagged in gate_summary.json under `excluded_from_headline: ["a","b","c"]` for M4 verdict matrix use.

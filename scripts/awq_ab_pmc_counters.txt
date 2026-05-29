@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# rocprofv3 PMC counter file for M3-F1 rocprof evidence.
+# Per BENCH_M2_PRODUCER_WIRE_IN.md §3: use derived FETCH_SIZE + WRITE_SIZE
+# (NOT legacy TCP_TCC_*_REQUESTS_sum on gfx908 + rocprofv3 1.2.0).
+# Multi-pass groups: each `pmc` line is one hardware pass.
+pmc: FETCH_SIZE WRITE_SIZE
+pmc: VALUUtilization SQ_INSTS_MFMA
