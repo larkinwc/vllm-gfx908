@@ -1,0 +1,30 @@
+{
+  "metrics": {
+    "avg_latency": {
+      "baseline_s": 1.7798441776404312,
+      "postsync_s": 1.7825926298935277,
+      "delta_pct": 0.1544209480596312,
+      "verdict": "PASS"
+    },
+    "p50": {
+      "baseline_s": 1.774526199005777,
+      "postsync_s": 1.7778403939737473,
+      "delta_pct": 0.18676506268699292,
+      "verdict": "PASS"
+    },
+    "p90": {
+      "baseline_s": 1.7758542359166314,
+      "postsync_s": 1.7791575608891435,
+      "delta_pct": 0.18601329465574132,
+      "verdict": "PASS"
+    },
+    "p99": {
+      "baseline_s": 1.8889360231161119,
+      "postsync_s": 1.8743593111721566,
+      "delta_pct": -0.7716890231098761,
+      "verdict": "PASS"
+    }
+  },
+  "threshold_pct": 2.0,
+  "verdict": "PASS"
+}

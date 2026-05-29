@@ -1,0 +1,17 @@
+{
+  "n_fetch_records": 190516,
+  "n_write_records": 190516,
+  "fetch_size_kib_sum": 1869740104.1875,
+  "write_size_kib_sum": 102612126.1875,
+  "fetch_size_bytes_sum": 1914613866688.0,
+  "write_size_bytes_sum": 105074817216.0,
+  "total_hbm_bytes": 2019688683904.0,
+  "n_output_tokens": 32,
+  "n_total_tokens_prefill_plus_decode": 1056,
+  "hbm_bytes_per_output_token": 63115271372.0,
+  "hbm_bytes_per_total_token": 1912583980.969697,
+  "source_pmc_csv": "/root/bench-int8-w4a16/m3-f1-baseline/rocprof_w8a8_tp1_c1_on/pmc.csv",
+  "cell_id": "w8a8_tp1_c1_synthetic_offline_throughput",
+  "fused_state": "on",
+  "harness": "vllm bench throughput --num-prompts 1 --input-len 1024 --output-len 32 --seed 42 (per scripts/mi100/rocprof_single_request.sh)"
+}

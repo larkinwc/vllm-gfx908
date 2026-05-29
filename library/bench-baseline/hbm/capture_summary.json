@@ -1,0 +1,18 @@
+{
+  "cell_id": "w8a8_tp1_c1",
+  "fused_state": "on",
+  "tracer": "rocprofv3 1.2.0",
+  "harness": "vllm bench throughput (offline) — single-prompt --num-prompts=1, --input-len=1024, --output-len=32",
+  "kernel_trace_csv": "/root/bench-int8-w4a16/m3-f1-baseline/rocprof_w8a8_tp1_c1_on/kernel_trace.csv",
+  "n_kernel_records": 190516,
+  "pmc_csv": "/root/bench-int8-w4a16/m3-f1-baseline/rocprof_w8a8_tp1_c1_on/pmc.csv",
+  "model": "/models/Qwen3.5-9B-w8a8",
+  "tp": 1,
+  "env": {
+    "VLLM_MI100_DISABLE_FUSED_ACT_QUANT": "unset",
+    "KV_CACHE_DTYPE": "int8_per_token_head",
+    "ENABLE_CHUNKED_PREFILL": "1",
+    "MAX_NUM_BATCHED_TOKENS": "2048"
+  },
+  "timestamp": "2026-05-29T06:25:45Z"
+}

@@ -1,0 +1,11 @@
+{
+  "label": "",
+  "model": "/models/Qwen3.5-9B-w8a8",
+  "chunks": 50,
+  "chunk_tokens": 512,
+  "seed": 0,
+  "n_tokens_scored": 25550,
+  "mean_nll": 2.2674912990335834,
+  "perplexity": 9.655148525485627,
+  "elapsed_s": 23.5
+}

@@ -1,0 +1,99 @@
+# M3-F1 baseline launch commands (verbatim) — pre-sync-baseline tag 3d9de886d
+# Worker session: fc950c08-be08-472a-bceb-09833721ed96
+# Worktree: /home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/loose-rats-clean-phm2k
+# Run host: same as M2/M3 priors. /opt/vllm-env rebuilt from this worktree at 3d9de886d.
+
+# === ENV REPOINT VERIFICATION (post-rebuild) ===
+# vllm version: 0.20.2rc1.dev187+g3d9de886d.rocm712
+# MAPPING['vllm'] -> loose-rats-clean-phm2k/vllm
+# .abi3.so artifacts under loose-rats-clean-phm2k/vllm/
+# git HEAD: 3d9de886d Merge pull request #44 from larkinwc/mi100/w4a16-ab-verdict (detached HEAD on tag pre-sync-baseline)
+
+# === REBUILD COMMAND ===
+cd /home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/loose-rats-clean-phm2k
+git checkout pre-sync-baseline
+PYTORCH_ROCM_ARCH=gfx908 MAX_JOBS=8 CMAKE_BUILD_PARALLEL_LEVEL=8 NVCC_THREADS=2 /opt/vllm-env/bin/pip install -e . --no-build-isolation 2>&1 | tee library/install-baseline.log
+
+
+# === (a) 24-cell W4A16 + W8A8 grid baseline (24 cells = {w8a8,w4a16}x{tp1,tp4}x{c1,c2,c4}x{synthetic,coding}) ===
+# Pre-sync-baseline tag (commit 3d9de886d), default attention backend = ROCM_ATTN (no --attention-backend flag),
+# Qwen3.5-9B-w4a16 head_dim=256.  Wrapper script: library/bench-baseline/run_baseline_m3f1.sh
+# It patches the locked /root/bench-int8-w4a16/baseline/run_baseline.sh in-place
+# (REPO -> this worktree, BASELINE_ROOT -> /root/bench-int8-w4a16/m3-f1-baseline)
+# Seed 42, --num-prompts 200, --request-rate inf, --max-concurrency = c.
+
+cd /home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/loose-rats-clean-phm2k
+nohup bash library/bench-baseline/run_baseline_m3f1.sh > /tmp/m3f1-grid.out 2>&1 &
+
+# Post-hoc copy of outputs:
+cp -a /root/bench-int8-w4a16/m3-f1-baseline/synthetic library/bench-baseline/grid/
+cp -a /root/bench-int8-w4a16/m3-f1-baseline/coding library/bench-baseline/grid/
+cp -a /root/bench-int8-w4a16/m3-f1-baseline/harness_manifest.json library/bench-baseline/grid/
+cp /root/bench-int8-w4a16/m3-f1-baseline/run_baseline_*.log library/bench-baseline/grid/
+
+
+# === (b) w8a8_tp1_c1/synthetic fused-act-quant baseline cell ===
+# The fused-act-quant cell is mechanically identical to the grid's
+# w8a8_tp1_c1/synthetic cell (default fused-on, /models/Qwen3.5-9B-w8a8,
+# tp=1, c=1, --num-prompts 200, --seed 42, --random-input-len 1024,
+# --random-output-len 256, --ignore-eos). For M3-F1 baseline we alias
+# the grid cell as fused-act-quant.json (see launch_command field):
+
+cp library/bench-baseline/grid/synthetic/w8a8_tp1_c1.json library/bench-baseline/fused-act-quant.json
+
+# Verbatim launch_command (from the JSON; same env as harness):
+#   /opt/vllm-env/bin/python3 -m vllm.entrypoints.cli.main bench serve \
+#     --model /models/Qwen3.5-9B-w8a8 --base-url http://127.0.0.1:8000 \
+#     --num-prompts 200 --request-rate inf --max-concurrency 1 --seed 42 \
+#     --save-result --result-dir <tmpdir> --result-filename raw.json \
+#     --trust-remote-code --percentile-metrics ttft,tpot,itl,e2el \
+#     --metric-percentiles 50,90,99 \
+#     --metadata cell_id=w8a8_tp1_c1 workload=synthetic tp=1 concurrency=1 num_prompts=200 \
+#     --dataset-name random --random-input-len 1024 --random-output-len 256 --ignore-eos
+
+# === (c) CK-FA decode latency micro-bench (Llama-2-7b-hf head_dim=128) ===
+# Default-on backend is ROCM_ATTN; --attention-backend ROCM_CK_FA forces CK FA.
+# Llama-2-7b max_model_len=4096 (forced; do NOT set 32768 — pydantic rejects).
+# CK FA splitkv does NOT support head_dim=256 -> use Llama-2-7b head_dim=128.
+
+cd /home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/loose-rats-clean-phm2k
+env TORCH_COMPILE_DISABLE=1 HF_HUB_OFFLINE=1 PYTORCH_ROCM_ARCH=gfx908 CUDA_VISIBLE_DEVICES=0 \
+  /opt/vllm-env/bin/python -m vllm.entrypoints.cli.main bench latency \
+    --model /models/Llama-2-7b-hf \
+    --attention-backend ROCM_CK_FA \
+    --dtype float16 \
+    --tensor-parallel-size 1 \
+    --enforce-eager \
+    --max-model-len 4096 \
+    --gpu-memory-utilization 0.90 \
+    --input-len 2048 \
+    --output-len 64 \
+    --batch-size 1 \
+    --num-iters 30 \
+    --num-iters-warmup 10 \
+    --seed 42 \
+    --trust-remote-code \
+    --output-json library/bench-baseline/ckfa-latency.json
+
+# === (d) rocprofv3 HBM bytes/token for w8a8_tp1_c1 fused-on cell ===
+# Uses the existing scripts/mi100/rocprof_single_request.sh wrapper with
+# REPO=this worktree override. Captures kernel_trace + PMC (FETCH_SIZE,
+# WRITE_SIZE, VALUUtilization, TCC_HIT) via offline `vllm bench throughput`
+# --num-prompts 1 --input-len 1024 --output-len 32 (rocprofv3 + bench serve
+# is a known anti-pattern on gfx908; offline path matches BENCH_FUSED_ACT_QUANT.md §i).
+
+env REPO=/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/loose-rats-clean-phm2k \
+  bash scripts/mi100/rocprof_single_request.sh w8a8_tp1_c1 on \
+    /root/bench-int8-w4a16/m3-f1-baseline/rocprof_w8a8_tp1_c1_on
+
+# Post-hoc copy:
+cp /root/bench-int8-w4a16/m3-f1-baseline/rocprof_w8a8_tp1_c1_on/pmc.csv library/bench-baseline/hbm-pmc.csv
+cp /root/bench-int8-w4a16/m3-f1-baseline/rocprof_w8a8_tp1_c1_on/capture_summary.json library/bench-baseline/hbm/
+
+# HBM bytes/token aggregation (FETCH_SIZE + WRITE_SIZE in KiB summed
+# across all 190,516 kernel dispatches; multiplied by 1024 to get bytes):
+# total_hbm_bytes = 2,019,688,683,904 B
+# n_output_tokens = 32, n_prefill = 1024  (single prompt)
+# hbm_bytes_per_output_token = 63,115,271,372 B/output_token
+# hbm_bytes_per_total_token  = 1,912,583,981 B/total_token
+# Saved to library/bench-baseline/hbm-summary.json

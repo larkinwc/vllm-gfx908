@@ -1,0 +1,204 @@
+{
+  "vllm_commit": "3d9de886d2caf91e9bfce2ef32a1d20d8f00fc2c",
+  "vllm_version": "0.20.2rc1.dev187+g3d9de886d",
+  "rocm_version": "7.12",
+  "torch_version": "2.11.0+rocm7.2",
+  "triton_version": "3.5.1",
+  "gpu_topo": "\n\n============================ ROCm System Management Interface ============================\n================================ Weight between two GPUs =================================\n       GPU0         GPU1         GPU2         GPU3         \nGPU0   0            15           15           15           \nGPU1   15           0            15           15           \nGPU2   15           15           0            15           \nGPU3   15           15           15           0            \n\n================================= Hops between two GPUs ==================================\n       GPU0         GPU1         GPU2         GPU3         \nGPU0   0            1            1            1            \nGPU1   1            0            1            1            \nGPU2   1            1            0            1            \nGPU3   1            1            1            0            \n\n=============================== Link Type between two GPUs ===============================\n       GPU0         GPU1         GPU2         GPU3         \nGPU0   0            XGMI         XGMI         XGMI         \nGPU1   XGMI         0            XGMI         XGMI         \nGPU2   XGMI         XGMI         0            XGMI         \nGPU3   XGMI         XGMI         XGMI         0            \n\n======================================= Numa Nodes =======================================\nGPU[0]\t\t: (Topology) Numa Node: 0\nGPU[0]\t\t: (Topology) Numa Affinity: -1\nGPU[1]\t\t: (Topology) Numa Node: 0\nGPU[1]\t\t: (Topology) Numa Affinity: -1\nGPU[2]\t\t: (Topology) Numa Node: 0\nGPU[2]\t\t: (Topology) Numa Affinity: -1\nGPU[3]\t\t: (Topology) Numa Node: 0\nGPU[3]\t\t: (Topology) Numa Affinity: -1\n================================== End of ROCm SMI Log ===================================\n",
+  "rocm_smi_product": "\n\n============================ ROCm System Management Interface ============================\n====================================== Product Info ======================================\nGPU[0]\t\t: Card Series: \t\tAMD Instinct MI100\nGPU[0]\t\t: Card Model: \t\t0x738c\nGPU[0]\t\t: Card Vendor: \t\tAdvanced Micro Devices, Inc. [AMD/ATI]\nGPU[0]\t\t: Card SKU: \t\tD3431401\nGPU[0]\t\t: Subsystem ID: \t0x0c34\nGPU[0]\t\t: Device Rev: \t\t0x01\nGPU[0]\t\t: Node ID: \t\t4\nGPU[0]\t\t: GUID: \t\t4106\nGPU[0]\t\t: GFX Version: \t\tgfx908\nGPU[1]\t\t: Card Series: \t\tAMD Instinct MI100\nGPU[1]\t\t: Card Model: \t\t0x738c\nGPU[1]\t\t: Card Vendor: \t\tAdvanced Micro Devices, Inc. [AMD/ATI]\nGPU[1]\t\t: Card SKU: \t\tD3431401\nGPU[1]\t\t: Subsystem ID: \t0x0c34\nGPU[1]\t\t: Device Rev: \t\t0x01\nGPU[1]\t\t: Node ID: \t\t3\nGPU[1]\t\t: GUID: \t\t57403\nGPU[1]\t\t: GFX Version: \t\tgfx908\nGPU[2]\t\t: Card Series: \t\tAMD Instinct MI100\nGPU[2]\t\t: Card Model: \t\t0x738c\nGPU[2]\t\t: Card Vendor: \t\tAdvanced Micro Devices, Inc. [AMD/ATI]\nGPU[2]\t\t: Card SKU: \t\tD3431401\nGPU[2]\t\t: Subsystem ID: \t0x0c34\nGPU[2]\t\t: Device Rev: \t\t0x01\nGPU[2]\t\t: Node ID: \t\t2\nGPU[2]\t\t: GUID: \t\t45163\nGPU[2]\t\t: GFX Version: \t\tgfx908\nGPU[3]\t\t: Card Series: \t\tAMD Instinct MI100\nGPU[3]\t\t: Card Model: \t\t0x738c\nGPU[3]\t\t: Card Vendor: \t\tAdvanced Micro Devices, Inc. [AMD/ATI]\nGPU[3]\t\t: Card SKU: \t\tD3431401\nGPU[3]\t\t: Subsystem ID: \t0x0c34\nGPU[3]\t\t: Device Rev: \t\t0x01\nGPU[3]\t\t: Node ID: \t\t1\nGPU[3]\t\t: GUID: \t\t5017\nGPU[3]\t\t: GFX Version: \t\tgfx908\n==========================================================================================\n================================== End of ROCm SMI Log ===================================\n",
+  "rocm_smi_temp": "\n\n============================ ROCm System Management Interface ============================\n====================================== Temperature =======================================\nGPU[0]\t\t: Temperature (Sensor edge) (C): 52.0\nGPU[0]\t\t: Temperature (Sensor junction) (C): 54.0\nGPU[0]\t\t: Temperature (Sensor memory) (C): 53.0\nGPU[1]\t\t: Temperature (Sensor edge) (C): 50.0\nGPU[1]\t\t: Temperature (Sensor junction) (C): 52.0\nGPU[1]\t\t: Temperature (Sensor memory) (C): 52.0\nGPU[2]\t\t: Temperature (Sensor edge) (C): 48.0\nGPU[2]\t\t: Temperature (Sensor junction) (C): 50.0\nGPU[2]\t\t: Temperature (Sensor memory) (C): 49.0\nGPU[3]\t\t: Temperature (Sensor edge) (C): 43.0\nGPU[3]\t\t: Temperature (Sensor junction) (C): 45.0\nGPU[3]\t\t: Temperature (Sensor memory) (C): 44.0\n==========================================================================================\n================================== End of ROCm SMI Log ===================================\n",
+  "env": {
+    "LD_LIBRARY_PATH": "/opt/rocm/core-7.12/lib",
+    "ROCM_PATH": "/opt/rocm/core-7.12",
+    "PATH": "/opt/rocm/core-7.12/bin:/root/.factory/bin:/root/.local/bin:/root/.cargo/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+    "PYTORCH_ROCM_ARCH": "gfx908",
+    "VLLM_ROCM_USE_AITER": "1",
+    "VLLM_ROCM_USE_SKINNY_GEMM": "0",
+    "VLLM_MI100_DISABLE_CUSTOM_AR": "1",
+    "TORCH_COMPILE_DISABLE": "1",
+    "HF_HUB_OFFLINE": "1"
+  },
+  "dataset_path": "/root/bench-int8-w4a16/datasets/coding_agent.jsonl",
+  "dataset_sha256": "db138a30917dc972fab0ca70ddf74601efa6e3c98d53a2069f94cf5fad901cf0",
+  "services_yaml": "/root/.factory/missions/f74e8645-0bfb-462a-963d-84d7196b0f6c/services.yaml",
+  "harness_version": "1.0",
+  "num_prompts_per_cell": 200,
+  "seed": 42,
+  "block_size": 32,
+  "max_model_len": 32768,
+  "cudagraph_mode": "FULL_DECODE_ONLY",
+  "language_model_only": true,
+  "enable_prefix_caching": true,
+  "cells": [
+    {
+      "id": "w8a8_tp1_c1_synthetic",
+      "model": "w8a8",
+      "tp": 1,
+      "concurrency": 1,
+      "workload": "synthetic"
+    },
+    {
+      "id": "w8a8_tp1_c1_coding",
+      "model": "w8a8",
+      "tp": 1,
+      "concurrency": 1,
+      "workload": "coding"
+    },
+    {
+      "id": "w8a8_tp1_c2_synthetic",
+      "model": "w8a8",
+      "tp": 1,
+      "concurrency": 2,
+      "workload": "synthetic"
+    },
+    {
+      "id": "w8a8_tp1_c2_coding",
+      "model": "w8a8",
+      "tp": 1,
+      "concurrency": 2,
+      "workload": "coding"
+    },
+    {
+      "id": "w8a8_tp1_c4_synthetic",
+      "model": "w8a8",
+      "tp": 1,
+      "concurrency": 4,
+      "workload": "synthetic"
+    },
+    {
+      "id": "w8a8_tp1_c4_coding",
+      "model": "w8a8",
+      "tp": 1,
+      "concurrency": 4,
+      "workload": "coding"
+    },
+    {
+      "id": "w8a8_tp4_c1_synthetic",
+      "model": "w8a8",
+      "tp": 4,
+      "concurrency": 1,
+      "workload": "synthetic"
+    },
+    {
+      "id": "w8a8_tp4_c1_coding",
+      "model": "w8a8",
+      "tp": 4,
+      "concurrency": 1,
+      "workload": "coding"
+    },
+    {
+      "id": "w8a8_tp4_c2_synthetic",
+      "model": "w8a8",
+      "tp": 4,
+      "concurrency": 2,
+      "workload": "synthetic"
+    },
+    {
+      "id": "w8a8_tp4_c2_coding",
+      "model": "w8a8",
+      "tp": 4,
+      "concurrency": 2,
+      "workload": "coding"
+    },
+    {
+      "id": "w8a8_tp4_c4_synthetic",
+      "model": "w8a8",
+      "tp": 4,
+      "concurrency": 4,
+      "workload": "synthetic"
+    },
+    {
+      "id": "w8a8_tp4_c4_coding",
+      "model": "w8a8",
+      "tp": 4,
+      "concurrency": 4,
+      "workload": "coding"
+    },
+    {
+      "id": "w4a16_tp1_c1_synthetic",
+      "model": "w4a16",
+      "tp": 1,
+      "concurrency": 1,
+      "workload": "synthetic"
+    },
+    {
+      "id": "w4a16_tp1_c1_coding",
+      "model": "w4a16",
+      "tp": 1,
+      "concurrency": 1,
+      "workload": "coding"
+    },
+    {
+      "id": "w4a16_tp1_c2_synthetic",
+      "model": "w4a16",
+      "tp": 1,
+      "concurrency": 2,
+      "workload": "synthetic"
+    },
+    {
+      "id": "w4a16_tp1_c2_coding",
+      "model": "w4a16",
+      "tp": 1,
+      "concurrency": 2,
+      "workload": "coding"
+    },
+    {
+      "id": "w4a16_tp1_c4_synthetic",
+      "model": "w4a16",
+      "tp": 1,
+      "concurrency": 4,
+      "workload": "synthetic"
+    },
+    {
+      "id": "w4a16_tp1_c4_coding",
+      "model": "w4a16",
+      "tp": 1,
+      "concurrency": 4,
+      "workload": "coding"
+    },
+    {
+      "id": "w4a16_tp4_c1_synthetic",
+      "model": "w4a16",
+      "tp": 4,
+      "concurrency": 1,
+      "workload": "synthetic"
+    },
+    {
+      "id": "w4a16_tp4_c1_coding",
+      "model": "w4a16",
+      "tp": 4,
+      "concurrency": 1,
+      "workload": "coding"
+    },
+    {
+      "id": "w4a16_tp4_c2_synthetic",
+      "model": "w4a16",
+      "tp": 4,
+      "concurrency": 2,
+      "workload": "synthetic"
+    },
+    {
+      "id": "w4a16_tp4_c2_coding",
+      "model": "w4a16",
+      "tp": 4,
+      "concurrency": 2,
+      "workload": "coding"
+    },
+    {
+      "id": "w4a16_tp4_c4_synthetic",
+      "model": "w4a16",
+      "tp": 4,
+      "concurrency": 4,
+      "workload": "synthetic"
+    },
+    {
+      "id": "w4a16_tp4_c4_coding",
+      "model": "w4a16",
+      "tp": 4,
+      "concurrency": 4,
+      "workload": "coding"
+    }
+  ],
+  "timestamp": "2026-05-29T06:04:50Z",
+  "host": "aimeme-MU72-SU0-00"
+}

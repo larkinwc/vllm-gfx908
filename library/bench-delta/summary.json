@@ -1,0 +1,16 @@
+{
+  "topline_verdict": "PASS",
+  "d1_grid_pass": true,
+  "d1_regressions": [],
+  "d2_verdict": "PASS",
+  "d2_delta_pct": 0.4617140732371723,
+  "d3_verdict": "PASS",
+  "d4_verdict": "PASS",
+  "thresholds": {
+    "throughput_min_pct": -3.0,
+    "latency_max_pct": 2.0,
+    "hbm_bytes_max_pct": 2.0
+  },
+  "baseline_dir": "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/loose-rats-clean-phm2k/library/bench-baseline",
+  "postsync_dir": "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/loose-rats-clean-phm2k/library/bench-post-sync"
+}
