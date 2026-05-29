@@ -3,6 +3,18 @@
 
 # M2-F1 — Correctness Gates (upstream-sync-2026-05-28)
 
+> **⚠ SUPERSEDED by `library/correctness-gates-resync.md` (M2-F3, 2026-05-28).**
+> M3-F1 found that `/opt/vllm-env`'s editable install mapping pointed at the
+> sibling `fuzzy-hornets-see-szfl4` worktree at the time these M2-F1
+> measurements were taken (see `library/env-repoint.md`). Python sources
+> resolved to THIS worktree but the compiled `.abi3.so` extensions came from
+> the fuzzy-hornets branch. M1-F6 rebuilt `/opt/vllm-env` from source against
+> this worktree; M2-F3 re-ran C2/C3/C4 with the corrected install.
+>
+> **Use `library/correctness-gates-resync.md` as the canonical post-rebuild
+> correctness-gate record for the sync PR body and the validation contract.**
+> The numbers below are kept for forensic comparison only.
+
 > Surface C of the upstream-sync mission validation contract on the post-sync tip.
 > Single-GPU MI100 (gfx908), CUDA_VISIBLE_DEVICES=0. Engine and harness commands
 > captured verbatim below for reproducibility (per AGENTS.md §"Bench reproducibility").
