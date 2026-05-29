@@ -1,0 +1,25 @@
+{
+  "metrics": {
+    "hbm_bytes_per_output_token": {
+      "baseline": 63115271372.0,
+      "postsync": 63113296869.0,
+      "delta_pct": -0.003128407684983755,
+      "verdict": "PASS"
+    },
+    "hbm_bytes_per_total_token": {
+      "baseline": 1912583980.969697,
+      "postsync": 1912524147.5454545,
+      "delta_pct": -0.0031284076849875326,
+      "verdict": "PASS"
+    },
+    "total_hbm_bytes": {
+      "baseline": 2019688683904.0,
+      "postsync": 2019625499808.0,
+      "delta_pct": -0.003128407684983755,
+      "verdict": "PASS"
+    }
+  },
+  "threshold_pct": 2.0,
+  "verdict": "PASS",
+  "primary_metric": "hbm_bytes_per_output_token"
+}

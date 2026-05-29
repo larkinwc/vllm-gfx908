@@ -1,0 +1,8 @@
+{
+  "cell": "w8a8_tp1_c1/synthetic (fused-act-quant alias)",
+  "baseline_tput": 41.48171739294257,
+  "postsync_tput": 41.67324431996626,
+  "delta_tput_pct": 0.4617140732371723,
+  "threshold_pct": -3.0,
+  "verdict": "PASS"
+}
