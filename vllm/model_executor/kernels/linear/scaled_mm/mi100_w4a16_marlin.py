@@ -52,7 +52,11 @@ from dataclasses import dataclass
 
 import torch
 
+from vllm.model_executor.kernels.configs.gfx908.config_loader import (
+    load_config as _load_mi100_autotune_config,
+)
 from vllm.platforms import current_platform
+from vllm.triton_utils import tl, triton
 
 _SUPPORTED_GROUP_SIZES = (32, 64, 128)
 
@@ -203,6 +207,219 @@ def marlin_repack_w4a16(
         N=N,
         has_zp=has_zp,
     )
+
+
+# ============================================================================
+#  Marlin-style W4A16 GEMM (consumes the repacked layout above).
+# ============================================================================
+#
+# Layout consumed (see MarlinRepackedW4A16 / module docstring):
+#   qweight : [K//8, N] int32  — K-packed, N-lane-adjacent. The eight K-rows
+#             ``kb*8 + i`` (i in 0..7) of column ``n`` live at bit offset
+#             ``4*i`` of ``qweight[kb, n]``:
+#                 q(K = kb*8 + i, N = n) == (qweight[kb, n] >> (4*i)) & 0xF
+#   scale   : [K//G, N] (act dtype) — one scalar per output column per group.
+#   zero    : [K//G, N] (act dtype) — PRE-FUSED (zero_raw * scale).
+#   dequant : w_fp[k, n] = q[k, n] * scale[g, n] - zero[g, n],  g = k // G.
+#
+# The inner K-loop is SHIFT-ONLY: a BLOCK_K tile loads ``BLOCK_K//8`` packed
+# int32 rows per N column (each int32 column-load reused across its 8 K-rows
+# via a right-shift). No nibble-replication intrinsic is used anywhere, and
+# the only weight-extraction op is a right-shift + mask. The sole output
+# write is the ``c_ptr`` store. ``BLOCK_K`` is a multiple of 8 that divides
+# ``group_size`` (clamped to ``group_size``), so a whole BLOCK_K tile maps to
+# exactly one quant group.
+
+
+@triton.jit
+def _mi100_w4a16_marlin_gemm_kernel(
+    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr,
+    M, N, K,
+    stride_am, stride_ak,
+    stride_bk, stride_bn,
+    stride_cm, stride_cn,
+    stride_scales_g, stride_scales_n,
+    stride_zeros_g, stride_zeros_n,
+    group_size,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+    GROUP_M: tl.constexpr,
+):
+    pid = tl.program_id(0)
+    num_pid_m = tl.cdiv(M, BLOCK_M)
+    num_pid_n = tl.cdiv(N, BLOCK_N)
+    num_pid_in_group = GROUP_M * num_pid_n
+    group_id = pid // num_pid_in_group
+    first_pid_m = group_id * GROUP_M
+    group_size_m = min(num_pid_m - first_pid_m, GROUP_M)
+    pid_m = first_pid_m + ((pid % num_pid_in_group) % group_size_m)
+    pid_n = (pid % num_pid_in_group) // group_size_m
+
+    offs_am = (pid_m * BLOCK_M + tl.arange(0, BLOCK_M)) % M
+    offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
+    offs_k = tl.arange(0, BLOCK_K)
+
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am +
+                      offs_k[None, :] * stride_ak)
+
+    # qweight is [K//8, N] int32, K-packed. Within a BLOCK_K tile the int32 row
+    # for local k is ``k // 8`` and the int4 lives at bit offset ``(k % 8)*4``.
+    # SHIFT-ONLY extraction: load the packed int32 (reused for its 8 K-rows),
+    # then right-shift + mask. No nibble-replication intrinsic; no weight
+    # store (only the output is stored).
+    k_pack = offs_k // 8                       # [BLOCK_K] packed-row offset
+    k_shift = (offs_k % 8) * 4                 # [BLOCK_K] nibble bit shift
+    b_ptrs = b_ptr + (k_pack[:, None] * stride_bk +
+                      offs_bn[None, :] * stride_bn)
+
+    accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+
+    for k in range(0, tl.cdiv(K, BLOCK_K)):
+        k_remaining = K - k * BLOCK_K
+        a_mask = (offs_am[:, None] < M) & (offs_k[None, :] < k_remaining)
+        a = tl.load(a_ptrs, mask=a_mask, other=0.0)
+
+        b_mask = (offs_k[:, None] < k_remaining) & (offs_bn[None, :] < N)
+        b_packed = tl.load(b_ptrs, mask=b_mask, other=0)
+        b_nibble = (b_packed >> k_shift[:, None]) & 0xF
+
+        # One group per BLOCK_K tile (BLOCK_K divides group_size).
+        g = (k * BLOCK_K) // group_size
+        scales = tl.load(scales_ptr + g * stride_scales_g +
+                         offs_bn * stride_scales_n)
+        zeros = tl.load(zeros_ptr + g * stride_zeros_g +
+                        offs_bn * stride_zeros_n)
+
+        # Pre-fused dequant: w_fp = q * scale - zero  (zero == zero_raw*scale).
+        b_fp = b_nibble.to(tl.float32) * scales[None, :].to(tl.float32) - \
+            zeros[None, :].to(tl.float32)
+
+        accumulator += tl.dot(a.to(tl.float32), b_fp)
+
+        a_ptrs += BLOCK_K * stride_ak
+        b_ptrs += (BLOCK_K // 8) * stride_bk
+
+    c = accumulator.to(c_ptr.dtype.element_ty)
+    offs_cm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    offs_cn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
+    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
+    tl.store(c_ptrs, c, mask=c_mask)
+
+
+def _default_marlin_config(M: int) -> dict:
+    """Heuristic fallback when no autotune JSON exists yet for the shape.
+
+    Mirrors the legacy ``mi100_w4a16._default_block_sizes`` branches.
+    ``num_stages`` is kept <= 2 (gfx908 has no async-LDS pipelining).
+    """
+    if M <= 16:
+        return {"BLOCK_M": 16, "BLOCK_N": 64, "BLOCK_K": 32,
+                "GROUP_M": 8, "num_warps": 4, "num_stages": 2}
+    if M <= 64:
+        return {"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 32,
+                "GROUP_M": 8, "num_warps": 4, "num_stages": 2}
+    return {"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 32,
+            "GROUP_M": 8, "num_warps": 4, "num_stages": 2}
+
+
+def _select_marlin_config(M: int, N: int, K: int, group_size: int) -> dict:
+    """Per-shape autotune lookup (key ``mi100_w4a16_marlin``), else heuristic.
+
+    Reads ``configs/gfx908/mi100_w4a16_marlin_M*_N*_K*_g*.json`` via the
+    shared gfx908 ``config_loader``; falls back to :func:`_default_marlin_config`
+    when no JSON is pinned for the shape.
+    """
+    cfg = _load_mi100_autotune_config(
+        "mi100_w4a16_marlin", M=M, N=N, K=K, group_size=group_size)
+    if cfg is None:
+        return _default_marlin_config(M)
+    out = _default_marlin_config(M)
+    out.update(cfg)
+    # The loader schema uses GROUP_SIZE_M; map it onto our GROUP_M knob.
+    if "GROUP_SIZE_M" in cfg:
+        out["GROUP_M"] = int(cfg["GROUP_SIZE_M"])
+    return out
+
+
+def _resolve_block_k(cfg_block_k: int, group_size: int) -> int:
+    """A valid BLOCK_K: multiple of 8, divides group_size, <= group_size."""
+    block_k = min(int(cfg_block_k), group_size)
+    block_k = max(8, (block_k // 8) * 8)
+    while group_size % block_k != 0:
+        block_k -= 8
+    return block_k
+
+
+def mi100_w4a16_marlin_gemm(
+    a: torch.Tensor,
+    qweight: torch.Tensor,
+    scale: torch.Tensor,
+    zero: torch.Tensor,
+    group_size: int,
+    out_dtype: torch.dtype | None = None,
+) -> torch.Tensor:
+    """Marlin-style W4A16 GEMM: ``C[M,N] = A[M,K] @ dequant(W)[K,N]``.
+
+    Consumes the offline-repacked layout produced by
+    :func:`marlin_repack_w4a16` (pass the fields of the returned
+    :class:`MarlinRepackedW4A16` directly).
+
+    Args:
+        a:          [M, K] activations (fp16/bf16).
+        qweight:    [K//8, N] int32, K-packed N-lane-adjacent
+                    (``MarlinRepackedW4A16.qweight``).
+        scale:      [K//G, N] per-group scales
+                    (``MarlinRepackedW4A16.scale``).
+        zero:       [K//G, N] PRE-FUSED zero (``zero_raw * scale``)
+                    (``MarlinRepackedW4A16.zero``).
+        group_size: quant group size (must be in ``_SUPPORTED_GROUP_SIZES``).
+        out_dtype:  output dtype (defaults to ``a.dtype``).
+    Returns:
+        [M, N] output tensor.
+    """
+    assert a.dim() == 2, f"a must be 2D [M, K], got {a.shape}"
+    assert qweight.dim() == 2, f"qweight must be 2D, got {qweight.shape}"
+    assert qweight.dtype == torch.int32, "qweight must be int32"
+
+    if group_size not in _SUPPORTED_GROUP_SIZES:
+        raise ValueError(
+            f"mi100_w4a16_marlin_gemm: unsupported group_size={group_size}; "
+            f"supported: {_SUPPORTED_GROUP_SIZES}"
+        )
+
+    M, K = a.shape
+    N = scale.shape[1]
+    assert qweight.shape == (K // 8, N), (
+        f"qweight shape {tuple(qweight.shape)} != ({K // 8}, {N})"
+    )
+    assert K % group_size == 0, (
+        f"K={K} not divisible by group_size={group_size}"
+    )
+
+    out_dtype = out_dtype or a.dtype
+    c = torch.empty((M, N), device=a.device, dtype=out_dtype)
+
+    cfg = _select_marlin_config(M, N, K, group_size)
+    block_k = _resolve_block_k(cfg["BLOCK_K"], group_size)
+    num_stages = min(int(cfg.get("num_stages", 2)), 2)
+
+    grid = lambda META: (  # noqa: E731
+        triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]),
+    )
+    _mi100_w4a16_marlin_gemm_kernel[grid](
+        a, qweight, c, scale, zero,
+        M, N, K,
+        a.stride(0), a.stride(1),
+        qweight.stride(0), qweight.stride(1),
+        c.stride(0), c.stride(1),
+        scale.stride(0), scale.stride(1),
+        zero.stride(0), zero.stride(1),
+        group_size,
+        BLOCK_M=cfg["BLOCK_M"], BLOCK_N=cfg["BLOCK_N"], BLOCK_K=block_k,
+        GROUP_M=cfg["GROUP_M"],
+        num_warps=cfg["num_warps"], num_stages=num_stages,
+    )
+    return c
 
 
 def is_supported() -> bool:

@@ -21,8 +21,12 @@ from vllm.platforms import current_platform
 if not current_platform.is_rocm():
     pytest.skip("ROCm only", allow_module_level=True)
 
+from vllm.model_executor.kernels.linear.scaled_mm import (  # noqa: E501
+    mi100_w4a16_marlin as marlin_mod,
+)
 from vllm.model_executor.kernels.linear.scaled_mm.mi100_w4a16_marlin import (  # noqa: E501
     marlin_repack_w4a16,
+    mi100_w4a16_marlin_gemm,
     unpack_repacked_to_kn,
 )
 
@@ -146,3 +150,180 @@ def test_prefuse(K, N, has_zp, group_size, seed):
     ref = (q - zero_raw_full) * scales.to(torch.float32)[g_idx]
 
     torch.testing.assert_close(got, ref, atol=1e-2, rtol=5e-2)
+
+
+# ===========================================================================
+#  GEMM tests (F-M1-gemm-kernel): repack -> mi100_w4a16_marlin_gemm vs a
+#  pure-FP32 dequant -> matmul reference.
+# ===========================================================================
+
+# Hot-shape catalog (M, K, N). K divisible by 8 and by both group sizes.
+GEMM_SHAPES = [
+    (16, 256, 256),
+    (64, 512, 256),
+    (32, 256, 512),
+]
+
+
+def _make_w4a16_case(M, K, N, group_size, has_zp, seed, scales_override=None,
+                     zeros_override=None):
+    """Build a random W4A16 case + its pure-FP32 dequant->matmul reference.
+
+    Returns ``(a, b_q, scales, qzeros, ref_c)`` where ``ref_c`` is computed
+    entirely in FP32 from the *unpacked* int4 grid (no kernel involvement).
+    """
+    torch.manual_seed(seed)
+    num_groups = K // group_size
+    zp_bias = 8
+
+    w_int4_kn = torch.randint(0, 16, (K, N), device=device, dtype=torch.int32)
+    b_q = _pack_int4_along_n(w_int4_kn)
+
+    if scales_override is not None:
+        scales = scales_override
+    else:
+        scales = (0.05 * torch.rand(
+            (num_groups, N), device=device, dtype=torch.float32)
+        ).to(torch.float16)
+
+    qzeros = None
+    if has_zp:
+        if zeros_override is not None:
+            zeros_int4 = zeros_override
+        else:
+            zeros_int4 = torch.randint(
+                0, 16, (num_groups, N), device=device, dtype=torch.int32)
+        qzeros = _pack_int4_along_n(zeros_int4)
+        zero_raw = zeros_int4.to(torch.float32)
+    else:
+        zero_raw = torch.full(
+            (num_groups, N), float(zp_bias),
+            device=device, dtype=torch.float32)
+
+    a = (0.1 * torch.randn((M, K), device=device, dtype=torch.float32)).to(
+        torch.float16)
+
+    # Pure-FP32 reference: dequant then matmul.
+    g_idx = torch.arange(K, device=device) // group_size  # [K]
+    scale_full = scales.to(torch.float32)[g_idx]          # [K, N]
+    zero_raw_full = zero_raw[g_idx]                        # [K, N]
+    w_fp = (w_int4_kn.to(torch.float32) - zero_raw_full) * scale_full
+    ref_c = a.to(torch.float32) @ w_fp                    # [M, N]
+
+    return a, b_q, scales, qzeros, ref_c
+
+
+def _run_gemm(a, b_q, scales, qzeros, group_size):
+    packed = marlin_repack_w4a16(
+        b_q, scales, qzeros, group_size=group_size, zp_bias=8)
+    return mi100_w4a16_marlin_gemm(
+        a, packed.qweight, packed.scale, packed.zero, group_size)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="ROCm GPU required"
+)
+@pytest.mark.parametrize("seed", [0, 1, 2])
+@pytest.mark.parametrize("group_size", [32, 128])
+@pytest.mark.parametrize("M,K,N", GEMM_SHAPES)
+def test_symmetric(M, K, N, group_size, seed):
+    a, b_q, scales, qzeros, ref_c = _make_w4a16_case(
+        M, K, N, group_size, has_zp=False, seed=seed)
+    c = _run_gemm(a, b_q, scales, qzeros, group_size)
+    torch.testing.assert_close(
+        c.to(torch.float32), ref_c, atol=1e-2, rtol=5e-2)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="ROCm GPU required"
+)
+@pytest.mark.parametrize("seed", [0, 1, 2])
+@pytest.mark.parametrize("group_size", [32, 128])
+@pytest.mark.parametrize("M,K,N", GEMM_SHAPES)
+def test_asymmetric(M, K, N, group_size, seed):
+    # PRODUCTION-CRITICAL: qzeros present, full asymmetric dequant.
+    a, b_q, scales, qzeros, ref_c = _make_w4a16_case(
+        M, K, N, group_size, has_zp=True, seed=seed)
+    c = _run_gemm(a, b_q, scales, qzeros, group_size)
+    torch.testing.assert_close(
+        c.to(torch.float32), ref_c, atol=1e-2, rtol=5e-2)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="ROCm GPU required"
+)
+@pytest.mark.parametrize("group_size", [32, 128])
+def test_group(group_size):
+    # Both supported group sizes produce correct results.
+    a, b_q, scales, qzeros, ref_c = _make_w4a16_case(
+        32, 256, 256, group_size, has_zp=True, seed=0)
+    c = _run_gemm(a, b_q, scales, qzeros, group_size)
+    torch.testing.assert_close(
+        c.to(torch.float32), ref_c, atol=1e-2, rtol=5e-2)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="ROCm GPU required"
+)
+def test_group_unsupported_rejected():
+    # Unsupported group_size must raise in both repack and GEMM.
+    num_groups = 256 // 48 if 256 % 48 == 0 else 4
+    with pytest.raises(ValueError):
+        # repack rejects unsupported group_size
+        b_q = torch.zeros((256, 256 // 8), device=device, dtype=torch.int32)
+        scales = torch.ones((num_groups, 256), device=device,
+                            dtype=torch.float16)
+        marlin_repack_w4a16(b_q, scales, None, group_size=48)
+
+    with pytest.raises(ValueError):
+        # GEMM also rejects unsupported group_size
+        a = torch.zeros((16, 256), device=device, dtype=torch.float16)
+        qweight = torch.zeros((256 // 8, 256), device=device,
+                              dtype=torch.int32)
+        scale = torch.ones((4, 256), device=device, dtype=torch.float16)
+        zero = torch.zeros((4, 256), device=device, dtype=torch.float16)
+        mi100_w4a16_marlin_gemm(a, qweight, scale, zero, group_size=48)
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="ROCm GPU required"
+)
+def test_boundary():
+    # g=32 with sharply DISTINCT per-group scales+zeros: a cross-group scale
+    # leak would corrupt the result at group boundaries. K spans 8 groups.
+    M, K, N, group_size = 32, 256, 128, 32
+    num_groups = K // group_size  # 8
+
+    # Distinct, well-separated scale per group (one row per group).
+    scales = (torch.arange(1, num_groups + 1, device=device,
+                           dtype=torch.float32).reshape(num_groups, 1)
+              * 0.01).expand(num_groups, N).contiguous().to(torch.float16)
+    # Distinct zero per group: 0,2,4,... (mod 16).
+    zeros_int4 = ((torch.arange(num_groups, device=device, dtype=torch.int32)
+                   * 2) % 16).reshape(num_groups, 1).expand(
+                       num_groups, N).contiguous()
+
+    a, b_q, scales, qzeros, ref_c = _make_w4a16_case(
+        M, K, N, group_size, has_zp=True, seed=7,
+        scales_override=scales, zeros_override=zeros_int4)
+    c = _run_gemm(a, b_q, scales, qzeros, group_size)
+    torch.testing.assert_close(
+        c.to(torch.float32), ref_c, atol=1e-2, rtol=5e-2)
+
+
+# --- Source-pattern tests: enforce shift-only / no-interleave discipline. ---
+
+def test_source_no_interleave():
+    import inspect
+    src = inspect.getsource(marlin_mod)
+    assert "tl.interleave" not in src, (
+        "kernel must be shift-only: tl.interleave is forbidden")
+
+
+def test_source_only_output_store():
+    import inspect
+    import re
+    src = inspect.getsource(marlin_mod)
+    targets = re.findall(r"tl\.store\(\s*([A-Za-z_][A-Za-z0-9_]*)", src)
+    assert targets == ["c_ptrs"], (
+        f"the only tl.store target must be the output (c_ptrs); got {targets}")
