@@ -6,8 +6,9 @@
 > GPU kernel time; HBM utilization **15.30%** of MI100 1228 GB/s peak
 > (FETCH_SIZE + WRITE_SIZE derived, low-confidence absolute per gfx908 TCC
 > caveat). §4 quality LOCKED — WikiText-2-raw ppl **10.9139**, needle **1/5**
-> (only depth 0.0 passes — see investigation note); coding-agent score deferred
-> to feature F-M0b (dataset has no scorable fixtures).
+> (only depth 0.0 passes — see investigation note); coding-agent **9/10**
+> (fixtured `coding_agent_eval.py`; sole failure is the intentional max_subarray
+> artifact — ceiling is 9/10 by design).
 >
 > **VERIFY-ONLY provenance.** Every number in this file was re-read by the
 > orchestrator from the raw artifact on this host (4× MI100/gfx908) against the
@@ -148,7 +149,7 @@ Captured 2026-05-30 against the legacy W4A16 server (marlin OFF, TP1,
 | ----------------------- | -------------: | ------ |
 | WikiText-2-raw ppl      |    **10.9139** | echo+logprobs, 3814 scored tokens, 8 windows, 0 failed (mean NLL 2.3900) |
 | Needle-in-haystack      |      **1 / 5** | depths 0.0/0.25/0.5/0.75/1.0; only depth 0.0 `ok` (passcode recall, max-ctx 4096) |
-| Coding-agent (pass@1)   |    **F-M0b**   | `coding_agent.jsonl` has ONLY `prompt`+`output_tokens` (no tests/solutions) — not scorable; a fixtured harness is feature F-M0b |
+| Coding-agent (pass@1)   |     **9 / 10** | `scripts/mi100/coding_agent_eval.py` (10 embedded fixtured tasks, executable pass/fail). 9/10 pass; the ONLY failure is `max_subarray`, whose fixture is an INTENTIONAL artifact asserting 7 (true max is 6) — a correct Kadane impl correctly fails it. Ceiling is 9/10 by design. Raw: `/root/bench-results/m0-baseline/coding_agent.json` |
 
 **Needle investigation note (do NOT fabricate a 5/5).** The legacy W4A16
 baseline scores 1/5 — only the depth-0.0 placement (needle at the very start of
@@ -168,7 +169,9 @@ FIRST, then (b) perplexity as ONE batched `max_tokens=0` echo request LAST.
 > **M3 marlin-ON quality gates against THESE values** (NOT FP16, per #48 drift):
 > ppl must not regress beyond a small tolerance (≤ ~+1 %, i.e. ≤ 11.024). Needle
 > gate is re-evaluated once the 1/5 baseline is understood (F-M0b). Coding gate
-> is added once F-M0b lands.
+> (VAL-QUAL-002): marlin-ON must score **≥ 9/10** on the same fixtured eval
+> (`coding_agent_eval.py`), i.e. no regression below the 9/10 baseline; the
+> max_subarray fixture stays as-is (never "fixed").
 
 ---
 
