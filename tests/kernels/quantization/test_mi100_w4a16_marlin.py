@@ -12,6 +12,8 @@ that consumes the layout is a separate feature. Two checks:
 """
 from __future__ import annotations
 
+import itertools
+
 import pytest
 import torch
 
@@ -21,6 +23,9 @@ from vllm.platforms import current_platform
 if not current_platform.is_rocm():
     pytest.skip("ROCm only", allow_module_level=True)
 
+from vllm.model_executor.kernels.configs.gfx908 import (  # noqa: E501
+    config_loader,
+)
 from vllm.model_executor.kernels.linear.scaled_mm import (  # noqa: E501
     mi100_w4a16_marlin as marlin_mod,
 )
@@ -327,3 +332,78 @@ def test_source_only_output_store():
     targets = re.findall(r"tl\.store\(\s*([A-Za-z_][A-Za-z0-9_]*)", src)
     assert targets == ["c_ptrs"], (
         f"the only tl.store target must be the output (c_ptrs); got {targets}")
+
+
+# ===========================================================================
+#  F-M2 (autotune config seeding): the 48 seeded
+#  ``mi100_w4a16_marlin_M*_N*_K*_g*.json`` configs must resolve via the real
+#  ``config_loader`` and every selected tile must fit the gfx908 LDS budget.
+# ===========================================================================
+
+# Hot-shape catalog mirrored from the seeded JSONs (M x N x K x g = 48).
+F_M2_MS = [1, 32, 128, 512]
+F_M2_NS = [4096, 10240, 24576]
+F_M2_KS = [4096, 12288]
+F_M2_GS = [32, 128]
+F_M2_SHAPES = list(
+    itertools.product(F_M2_MS, F_M2_NS, F_M2_KS, F_M2_GS))
+
+MARLIN_KERNEL_KEY = "mi100_w4a16_marlin"
+_LDS_A_BYTES = 2  # fp16/bf16 activation tile element size
+_LDS_BUDGET = 64 * 1024  # gfx908 LDS budget
+
+
+def _marlin_lds_bytes(bm: int, bn: int, bk: int, ns: int) -> int:
+    """Conservative gfx908 LDS estimate; matches autotune-marlin.md.
+
+        bytes = ns * BLOCK_K * (BLOCK_M + BLOCK_N) * 2      # fp16 act term
+              + ns * (BLOCK_K // 8) * BLOCK_N * 4           # packed int4 B
+    """
+    return ns * bk * (bm + bn) * _LDS_A_BYTES + ns * (bk // 8) * bn * 4
+
+
+def test_seeded_configs_load_for_all_hot_shapes():
+    """All 48 (M, N, K, g) resolve to a seeded JSON via the real loader and
+    every selected tile is within the 64 KiB LDS budget (CPU-only)."""
+    assert len(F_M2_SHAPES) == 48, (
+        f"expected 48 hot shapes, got {len(F_M2_SHAPES)}")
+    config_loader.reset_cache()
+    for m, n, k, g in F_M2_SHAPES:
+        cfg = config_loader.load_config(
+            MARLIN_KERNEL_KEY, M=m, N=n, K=k, group_size=g)
+        assert cfg is not None, (
+            f"no seeded config for (M={m}, N={n}, K={k}, g={g})")
+        bm = int(cfg["BLOCK_M"])
+        bn = int(cfg["BLOCK_N"])
+        bk = int(cfg["BLOCK_K"])
+        ns = int(cfg["num_stages"])
+        assert bk % 8 == 0, f"BLOCK_K={bk} not a multiple of 8"
+        assert g % bk == 0, f"BLOCK_K={bk} does not divide group_size={g}"
+        assert ns <= 2, f"num_stages={ns} > 2 on gfx908"
+        est = _marlin_lds_bytes(bm, bn, bk, ns)
+        assert est <= _LDS_BUDGET, (
+            f"over-budget tile for (M={m}, N={n}, K={k}, g={g}): "
+            f"{est} > {_LDS_BUDGET}")
+
+
+@pytest.mark.skipif(
+    not torch.cuda.is_available(), reason="ROCm GPU required"
+)
+@pytest.mark.parametrize("M,N,K,group_size", [
+    (1, 4096, 4096, 128),   # decode
+    (32, 4096, 4096, 32),   # prefill-ish small
+])
+def test_marlin_gemm_correct_with_seeded_config_active(M, N, K, group_size):
+    """End-to-end correctness with the seeded config ACTIVE: repack -> GEMM
+    matches the pure-FP32 dequant->matmul reference (symmetric path)."""
+    # Confirm the seeded config is the one that will be selected.
+    config_loader.reset_cache()
+    cfg = config_loader.load_config(
+        MARLIN_KERNEL_KEY, M=M, N=N, K=K, group_size=group_size)
+    assert cfg is not None, "seeded config must be active for this shape"
+
+    a, b_q, scales, qzeros, ref_c = _make_w4a16_case(
+        M, K, N, group_size, has_zp=False, seed=0)
+    c = _run_gemm(a, b_q, scales, qzeros, group_size)
+    torch.testing.assert_close(
+        c.to(torch.float32), ref_c, atol=1e-2, rtol=5e-2)
