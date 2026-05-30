@@ -106,6 +106,10 @@ case "$marlin_state" in
     exit 2
     ;;
 esac
+# Back-compat: the log() helper and rocprofv3 output filenames reference
+# $fused_state, but only $marlin_state is parsed above. Alias them so the
+# script runs under `set -u` (F-M0-baseline-lock minimal adaptation).
+fused_state="$marlin_state"
 # Per AGENTS.md anti-pattern #1, lock GPU to a single device.
 export CUDA_VISIBLE_DEVICES=0
 
