@@ -191,13 +191,19 @@ def rocm_unquantized_gemm_impl(
 
         return tgemm.mm(x, weight, bias)
 
+    # hipBLAS requires matching input/weight dtypes. With torch.compile on
+    # hybrid models (e.g. Qwen3-Next), GemmaRMSNorm keeps the residual in
+    # float32, which can leak a float32 input into this fallback against a
+    # float16 weight. cuBLAS tolerates this silently; hipBLAS crashes.
+    if x.dtype != weight.dtype:
+        x = x.to(weight.dtype)
     return torch.nn.functional.linear(x, weight, bias)
 
 
 def rocm_unquantized_gemm_fake(
     x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor | None = None
 ) -> torch.Tensor:
-    return x.new_empty((*x.shape[:-1], weight.shape[0]))
+    return weight.new_empty((*x.shape[:-1], weight.shape[0]))
 
 
 def rocm_unquantized_gemm(
