@@ -42,27 +42,45 @@ all MFMA/XGMI kernels to portable Triton + rocBLAS + PCIe paths.
 | PyTorch | works | `torch==2.12.0+rocm7.2` (ABI-matched to system ROCm 7.2.x) |
 | amdsmi | needed | copy `/opt/rocm/share/amd_smi/amdsmi` into site-packages (vLLM platform detection) |
 | vLLM csrc | builds | this branch (`PYTORCH_ROCM_ARCH=gfx900`) |
-| **Triton** | **BLOCKED** | prebuilt Triton MLIR backend rejects gfx900 (`unsupported target: gfx900` in `ConvertWarpPipeline`). Needs Triton built from source with gfx900 re-enabled. See refs. |
+| **Triton** | **WORKS** | custom `triton-gfx900` fork (Triton v3.7.0 + gfx900 ISA family). See below. |
 
-## Triton gfx900 -- the remaining blocker
+## STATUS: vLLM RUNS ON gfx900
 
-vLLM requires Triton for attention and sampling. The prebuilt Triton 3.7.0
-(bundled with torch rocm wheels) fails on gfx900 even for trivial kernels:
+Validated end-to-end on a Radeon Pro V340 (gfx900:xnack-):
 
 ```
-error: unsupported target: gfx900
-note: Pipeline failed while executing [ConvertWarpPipeline]
-RuntimeError: PassManager::run failed
+[rocm.py] Using TRITON_ATTN backend out of potential backends: ['TRITON_ATTN'].
+'The capital of France is' => ' the capital of the French Republic...'
 ```
 
-The underlying LLVM (22.0.0) DOES support gfx900 codegen -- the rejection is in
-Triton's own AMD MLIR passes. Prior art for first-gen GCN/Vega Triton:
+## Triton gfx900 -- SOLVED (custom fork)
 
-- https://github.com/Said-Akbar/triton-gcn5  (explicitly MI25 = gfx900, Triton 3.1.0)
-- https://github.com/nlzy/triton-gfx906  (newer; "mark gfx906 as CDNA, fix permlanex16 intrinsic")
+vLLM requires Triton for attention and sampling. Stock Triton 3.7.0 rejects
+gfx900 even for trivial kernels (`unsupported target: 'gfx900'` because
+`deduceISAFamily()` returns `Unknown`). The underlying LLVM DOES support gfx900
+codegen -- the rejection was purely in Triton's AMD MLIR backend.
 
-Plan: fork one of these as `triton-gfx900`, version-aligned to vLLM's Triton API,
-add gfx900 to the AMD backend passes + LLVM intrinsic selection.
+Fix: a `triton-gfx900` fork based on **triton v3.7.0** (matches our stack),
+adding a dedicated **GFX900 ISA family** (8 + 6 lines):
+
+- `TargetUtils.h`: add `GFX900` to `ISAFamily` enum.
+- `TargetUtils.cpp` `deduceISAFamily`: map gfx900/gfx902 -> `ISAFamily::GFX900`.
+  A *dedicated* family (NOT gfx906's VEGA20) is essential: gfx906 enables V_DOT
+  and DirectToLds that Vega10 lacks -- reusing it crashes with ILLEGAL_INSTRUCTION
+  (the same reason `HSA_OVERRIDE_GFX_VERSION=9.0.6` spoofing failed).
+- `TargetInfo.cpp` `getWarpSize()`: GFX900 is wave64.
+- `TargetInfo.cpp` `warpReduce()`: bail out for GFX900 so it uses the generic
+  `shuffleXor` (ds_swizzle/ds_bpermute) reduction instead of the DPP-broadcast +
+  `permlanex16` path. `permlanex16` is RDNA-only and is illegal on Vega10 -- this
+  was the second blocker after the "unsupported target" gate.
+
+gfx900 thus routes entirely through portable wave64 `ds_swizzle`/`ds_bpermute`
+paths: no MFMA, no V_DOT, no DPP-broadcast, no permlane. Validated kernels:
+trivial add (PASS), softmax cross-lane reduction (PASS), matmul `tl.dot` FMA (PASS).
+
+Build: `TRITON_BUILD_WITH_CCACHE=true pip wheel --no-build-isolation --no-deps .`
+(LLVM is downloaded prebuilt and already supports gfx900 -- only Triton's C++ is
+recompiled). Prior art: Said-Akbar/triton-gcn5 (MI25=gfx900), nlzy/triton-gfx906.
 
 ## Bandwidth / topology notes (this box)
 
