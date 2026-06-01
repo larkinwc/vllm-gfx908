@@ -44,9 +44,32 @@ all MFMA/XGMI kernels to portable Triton + rocBLAS + PCIe paths.
 | vLLM csrc | builds | this branch (`PYTORCH_ROCM_ARCH=gfx900`) |
 | **Triton** | **WORKS** | custom `triton-gfx900` fork (Triton v3.7.0 + gfx900 ISA family). See below. |
 
-## STATUS: vLLM RUNS ON gfx900
+## STATUS: Qwen3.5-9B RUNS ON gfx900 (TP=8)
+
+The original goal is achieved. **Qwen3.5-9B** -- a multimodal hybrid model
+(Gated DeltaNet linear-attention + full attention, 32 layers) -- runs across
+**8x gfx900 GPUs** with tensor parallelism, text-only mode:
+
+```
+GPU KV cache size: 368,208 tokens
+'The capital of France is' => ' Paris.\nThe capital of France is Paris...'
+```
+
+Notably the FLA Gated-DeltaNet Triton kernels (`chunk_gated_delta_rule`,
+`causal_conv1d`, `l2norm_fwd`) -- the most advanced kernels in the stack --
+compiled and ran on Vega10 with **zero additional gfx900 fixes** beyond the
+GFX900 ISA family. First run is slow due to Triton autotuning (~130 kernels
+JIT-compiled + disk-cached); subsequent runs reuse the cache.
+
+Run config: `tensor_parallel_size=8, dtype=float16` (gfx900 has no native BF16,
+so cast BF16->FP16), `enforce_eager=True`, `language_model_only=True`,
+`max_model_len=4096`, GPUs 0-7 (single socket -- keeps TP within one NUMA node).
+
+## STATUS: vLLM RUNS ON gfx900 (smaller models)
 
 Validated end-to-end on a Radeon Pro V340 (gfx900:xnack-):
+opt-125m at TP=1/2/4. Multi-GPU all-reduce uses PYNCCL over our custom gfx900
+RCCL (XGMI custom all-reduce is correctly disabled -- Vega10 has no XGMI).
 
 ```
 [rocm.py] Using TRITON_ATTN backend out of potential backends: ['TRITON_ATTN'].
