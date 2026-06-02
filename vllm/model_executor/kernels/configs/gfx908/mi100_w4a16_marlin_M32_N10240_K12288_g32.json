@@ -1,0 +1,28 @@
+{
+  "kernel": "mi100_w4a16_marlin",
+  "shape": {
+    "M": 32,
+    "N": 10240,
+    "K": 12288,
+    "group_size": 32,
+    "emit_int8_next": null,
+    "H": null
+  },
+  "config": {
+    "BLOCK_M": 32,
+    "BLOCK_N": 128,
+    "BLOCK_K": 32,
+    "GROUP_SIZE_M": 8,
+    "matrix_instr_nonkdim": 16,
+    "kpack": 2,
+    "waves_per_eu": 0,
+    "num_warps": 4,
+    "num_stages": 2
+  },
+  "measured_tok_s": null,
+  "autotune_runs_evaluated": 0,
+  "autotune_runs_pruned": 0,
+  "timestamp": "1970-01-01T00:00:00Z",
+  "vllm_commit": null,
+  "rocm_version": null
+}

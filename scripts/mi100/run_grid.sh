@@ -33,14 +33,46 @@ if command -v git >/dev/null 2>&1; then
     REPO=$GIT_TOPLEVEL
   fi
 fi
+milestone=${1:-m2}
+filter=${2:-.*}
+
+# -----------------------------------------------------------------------------
+# W4A16 milestones (current mission). These bypass the prior-mission
+# /root sed-copy machinery entirely and dispatch to the self-contained
+# W4A16 harness, which resolves REPO via git rev-parse, targets
+# MODEL=/models/Qwen3.5-9B-w4a16, drives the 12 W4A16 cells, and honors
+# VLLM_MI100_W4A16_USE_MARLIN_REPACK from the env.
+#
+#   m0-w4a16            -> baseline lock root (/root/bench-w4a16/m0)
+#   m3-w4a16-baseline   -> M3 baseline re-run (marlin off)
+#   m3-w4a16-marlin     -> M3 marlin-on run
+# The marlin flag is taken purely from the environment (off/unset=baseline),
+# so the caller decides baseline vs marlin by exporting the flag.
+# -----------------------------------------------------------------------------
+W4A16_HARNESS=$SCRIPT_DIR/run_w4a16_baseline.sh
+case "$milestone" in
+  m0-w4a16)          W4A16_ROOT=/root/bench-w4a16/m0 ;;
+  m3-w4a16-baseline) W4A16_ROOT=/root/bench-w4a16/m3/baseline ;;
+  m3-w4a16-marlin)   W4A16_ROOT=/root/bench-w4a16/m3/marlin ;;
+  *)                 W4A16_ROOT="" ;;
+esac
+if [[ -n "$W4A16_ROOT" ]]; then
+  if [[ ! -x "$W4A16_HARNESS" ]]; then
+    echo "FATAL: W4A16 harness missing/not executable at $W4A16_HARNESS" >&2
+    exit 2
+  fi
+  echo "[run_grid] W4A16 milestone=$milestone root=$W4A16_ROOT"
+  echo "[run_grid] VLLM_MI100_W4A16_USE_MARLIN_REPACK=${VLLM_MI100_W4A16_USE_MARLIN_REPACK:-0}"
+  echo "[run_grid] CELLS_FILTER=$filter"
+  W4A16_BENCH_ROOT="$W4A16_ROOT" \
+    exec bash "$W4A16_HARNESS" "$filter"
+fi
+
 M1_HARNESS=/root/bench-int8-w4a16/baseline/run_baseline.sh
 M2_ROOT=/root/bench-int8-w4a16/m2
 M1_REBASELINE_ROOT=/root/bench-int8-w4a16/m1-rebaseline
 MERGED_LIB_DIR=/root/bench-int8-w4a16/tensilelite/merged_library/library
 BUILD_LIB_DIR=/root/hipblaslt-src/build/release/library
-
-milestone=${1:-m2}
-filter=${2:-.*}
 
 case "$milestone" in
   m2) ROOT=$M2_ROOT ;;

@@ -3,10 +3,20 @@
 #
 # scripts/mi100/rocprof_single_request.sh
 # ----------------------------------------
-# rocprofv3 capture of a SINGLE-prompt vLLM run for VAL-M4-005 (HBM bytes
-# per-token evidence). Wraps offline `vllm bench throughput`, NOT `bench
-# serve`, because rocprofv3 + bench serve hangs on gfx908 (AGENTS.md
+# rocprofv3 capture of a SINGLE-prompt W4A16 vLLM run for HBM bytes-per-token
+# evidence (the hot W4A16 GEMM). Wraps offline `vllm bench throughput`, NOT
+# `bench serve`, because rocprofv3 + bench serve hangs on gfx908 (AGENTS.md
 # anti-pattern #1; library/rocprofv3-tp4-limitation.md).
+#
+# W4A16 mission adaptation (F-M0-script-adapt):
+#   * REPO resolves to the CURRENT worktree via git rev-parse --show-toplevel
+#     (overridable via $REPO).
+#   * MODEL=/models/Qwen3.5-9B-w4a16 (overridable via $MODEL).
+#   * arg2 is the MARLIN state (on|off): on => VLLM_MI100_W4A16_USE_MARLIN_REPACK=1,
+#     off => =0. (Legacy fused_on/fused_off forms also accepted as aliases.)
+#   * HBM% is derived downstream by scripts/mi100/aggregate_hbm.py from
+#     FETCH_SIZE + WRITE_SIZE (pmc_counters.txt). NEVER TCP_TCC_* on
+#     gfx908 + rocprofv3 1.2.0.
 #
 # The offline path is functionally equivalent for kernel-trace evidence:
 # the same compiled engine graphs (FULL_DECODE_ONLY cudagraphs) and the
@@ -22,8 +32,8 @@
 # by the recorded n_decode_steps.
 #
 # Args:
-#   $1  cell_id        e.g. w8a8_tp1_c4_coding
-#   $2  fused_state    on | off
+#   $1  cell_id        e.g. w4a16_tp1_c4_coding
+#   $2  marlin_state   on | off   (VLLM_MI100_W4A16_USE_MARLIN_REPACK 1 | 0)
 #   $3  out_dir        absolute path; will hold kernel_trace.csv + pmc.csv
 # Optional env:
 #   NUM_PROMPTS        default 1
@@ -36,14 +46,31 @@
 #   3  trace CSV missing or < 1000 records
 set -uo pipefail
 
-cell_id=${1:?cell_id required (e.g. w8a8_tp1_c4_coding)}
-fused_state=${2:?fused_state required (on | off)}
+cell_id=${1:?cell_id required (e.g. w4a16_tp1_c4_coding)}
+marlin_state=${2:?marlin_state required (on | off)}
 out_dir=${3:?out_dir required (absolute path)}
 
-REPO=${REPO:-/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/thin-hands-smell-2bxf5}
-PY=/opt/vllm-env/bin/python3
+# Resolve REPO to the CURRENT worktree (git toplevel) unless caller overrides.
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+if [[ -z "${REPO:-}" ]]; then
+  REPO=$(cd "$SCRIPT_DIR/../.." && pwd)
+  if command -v git >/dev/null 2>&1; then
+    GIT_TOPLEVEL=$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null || true)
+    [[ -n "$GIT_TOPLEVEL" ]] && REPO=$GIT_TOPLEVEL
+  fi
+fi
+
+# Resolve python interpreter.
+if [[ -n "${PY:-}" && -x "${PY:-}" ]]; then
+  :
+elif [[ -x /opt/vllm-env/bin/python3 ]]; then
+  PY=/opt/vllm-env/bin/python3
+else
+  PY=$(command -v python3 || true)
+fi
+
 PMC_FILE="$REPO/scripts/mi100/pmc_counters.txt"
-MODEL=/models/Qwen3.5-9B-w8a8
+MODEL=${MODEL:-/models/Qwen3.5-9B-w4a16}
 NUM_PROMPTS=${NUM_PROMPTS:-1}
 RANDOM_INPUT_LEN=${RANDOM_INPUT_LEN:-1024}
 RANDOM_OUTPUT_LEN=${RANDOM_OUTPUT_LEN:-32}
@@ -51,39 +78,38 @@ RANDOM_OUTPUT_LEN=${RANDOM_OUTPUT_LEN:-32}
 mkdir -p "$out_dir"
 log() { echo "[$(date -u +%H:%M:%S) rocprof:${cell_id}:${fused_state}] $*"; }
 
-# Pinned env (subset of scripts/launch_hbm_w8a8_tp1_c4.sh — chunked
-# prefill, KV-INT8, AITER) — must mirror production cell so we capture
-# the same kernels.
+# Pinned env — mirrors the services.yaml vllm-w4a16-tp1 server block so we
+# capture the same W4A16 GEMM kernels the production cell executes.
 export ROCM_PATH=/opt/rocm/core-7.12
-export LD_LIBRARY_PATH=/root/hipblaslt-src/build/release/library:/opt/rocm/core-7.12/lib
+export LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib
 export PATH=/opt/rocm/core-7.12/bin:$PATH
 export PYTORCH_ROCM_ARCH=gfx908
 export VLLM_ROCM_USE_AITER=1
 export VLLM_ROCM_USE_SKINNY_GEMM=0
 export TORCH_COMPILE_DISABLE=1
 export HF_HUB_OFFLINE=1
-export KV_CACHE_DTYPE=int8_per_token_head
-export ENABLE_CHUNKED_PREFILL=1
-export MAX_NUM_BATCHED_TOKENS=2048
-export HIPBLASLT_TENSILE_LIBPATH=/root/bench-int8-w4a16/tensilelite/merged_library/library
-export TUNING_JSON_DIR=vllm/model_executor/kernels/configs/gfx908
 export PYTHONPATH="$REPO${PYTHONPATH:+:$PYTHONPATH}"
 
-# Fused-state gate (default-on; explicit unset for fused-on capture).
-# Accept both bare "on"/"off" and the conventional "fused_on"/"fused_off"
-# forms used by the mission services.yaml and feature descriptions.
-case "$fused_state" in
+# Marlin-state gate. arg2 selects the W4A16 GEMM path:
+#   off => baseline GEMM (VLLM_MI100_W4A16_USE_MARLIN_REPACK=0)
+#   on  => marlin repack  (VLLM_MI100_W4A16_USE_MARLIN_REPACK=1)
+# Legacy fused_on/fused_off forms are accepted as aliases for on/off.
+case "$marlin_state" in
   off|fused_off)
-    export VLLM_MI100_DISABLE_FUSED_ACT_QUANT=1
+    export VLLM_MI100_W4A16_USE_MARLIN_REPACK=0
     ;;
   on|fused_on)
-    unset VLLM_MI100_DISABLE_FUSED_ACT_QUANT || true
+    export VLLM_MI100_W4A16_USE_MARLIN_REPACK=1
     ;;
   *)
-    echo "FATAL: unknown fused_state='$fused_state' (expected on|off|fused_on|fused_off)" >&2
+    echo "FATAL: unknown marlin_state='$marlin_state' (expected on|off)" >&2
     exit 2
     ;;
 esac
+# Back-compat: the log() helper and rocprofv3 output filenames reference
+# $fused_state, but only $marlin_state is parsed above. Alias them so the
+# script runs under `set -u` (F-M0-baseline-lock minimal adaptation).
+fused_state="$marlin_state"
 # Per AGENTS.md anti-pattern #1, lock GPU to a single device.
 export CUDA_VISIBLE_DEVICES=0
 
@@ -106,9 +132,6 @@ BENCH_ARGS=(
   --gpu-memory-utilization 0.93
   --trust-remote-code
   --seed 42
-  --kv-cache-dtype int8_per_token_head
-  --enable-chunked-prefill
-  --max-num-batched-tokens 2048
   --backend vllm
   --dataset-name random
   --input-len "$RANDOM_INPUT_LEN"
@@ -222,7 +245,7 @@ fi
 cat > "$out_dir/capture_summary.json" <<EOF
 {
   "cell_id": "${cell_id}",
-  "fused_state": "${fused_state}",
+  "marlin_state": "${marlin_state}",
   "tracer": "rocprofv3 1.2.0",
   "harness": "vllm bench throughput (offline) — single-prompt --num-prompts=${NUM_PROMPTS}, --input-len=${RANDOM_INPUT_LEN}, --output-len=${RANDOM_OUTPUT_LEN}",
   "kernel_trace_csv": "$out_dir/kernel_trace.csv",
@@ -230,11 +253,11 @@ cat > "$out_dir/capture_summary.json" <<EOF
   "pmc_csv": "$out_dir/pmc.csv",
   "model": "${MODEL}",
   "tp": 1,
+  "hbm_derivation": "FETCH_SIZE+WRITE_SIZE via scripts/mi100/aggregate_hbm.py (NEVER TCP_TCC_*)",
   "env": {
-    "VLLM_MI100_DISABLE_FUSED_ACT_QUANT": "${VLLM_MI100_DISABLE_FUSED_ACT_QUANT:-unset}",
-    "KV_CACHE_DTYPE": "${KV_CACHE_DTYPE}",
-    "ENABLE_CHUNKED_PREFILL": "${ENABLE_CHUNKED_PREFILL}",
-    "MAX_NUM_BATCHED_TOKENS": "${MAX_NUM_BATCHED_TOKENS}"
+    "VLLM_MI100_W4A16_USE_MARLIN_REPACK": "${VLLM_MI100_W4A16_USE_MARLIN_REPACK:-unset}",
+    "VLLM_ROCM_USE_AITER": "${VLLM_ROCM_USE_AITER:-unset}",
+    "VLLM_ROCM_USE_SKINNY_GEMM": "${VLLM_ROCM_USE_SKINNY_GEMM:-unset}"
   },
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }

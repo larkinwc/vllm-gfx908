@@ -49,6 +49,39 @@ def _mi100_w4a16_disabled() -> bool:
     return os.environ.get("VLLM_DISABLE_MI100_W4A16", "0") == "1"
 
 
+def _mi100_w4a16_use_marlin_repack() -> bool:
+    """``VLLM_MI100_W4A16_USE_MARLIN_REPACK=1`` enables the Marlin-style path.
+
+    Default-off. When enabled (and running on MI100/gfx908 with a supported
+    group size), ``process_weights_after_loading`` performs the offline
+    Marlin-style repack and ``apply_weights`` dispatches to
+    ``mi100_w4a16_marlin_gemm`` using the repacked tensors. When unset, the
+    legacy path is byte-identical to before this mission.
+
+    ``VLLM_DISABLE_MI100_W4A16=1`` overrides this flag and forces the generic
+    Triton path (see :func:`_mi100_w4a16_disabled`).
+
+    .. warning::
+       **Known regression on gfx908 — do NOT enable for decode.** A verified
+       matched A/B on MI100 (TP1 synthetic) measured the Marlin path at
+       **~28% LOWER** decode throughput than the legacy ``mi100_w4a16_gemm``
+       (geomean 39.54 vs 54.95 tok/s), with rocprof showing the Marlin GEMM
+       fetches *more* HBM per dispatch (+2.3%) and emits extra helper kernels.
+       gfx908 (CDNA1) lacks ``cp.async``, so the global->LDS/MFMA overlap that
+       Marlin relies on cannot exist (``num_stages`` <= 2). The repack is
+       numerically lossless but a net performance loss here; this flag is
+       retained only as a research/benchmark toggle. See
+       ``BENCH_W4A16_MARLIN_REPACK.md`` for the full negative-result writeup.
+    """
+    return os.environ.get("VLLM_MI100_W4A16_USE_MARLIN_REPACK", "0") == "1"
+
+
+# Layer attribute names used to stash the offline Marlin-repacked tensors.
+_MARLIN_QWEIGHT_ATTR = "mi100_w4a16_marlin_qweight"
+_MARLIN_SCALE_ATTR = "mi100_w4a16_marlin_scale"
+_MARLIN_ZERO_ATTR = "mi100_w4a16_marlin_zero"
+
+
 @triton.jit
 def triton_w4a16_gemm_kernel(
     # Pointers
@@ -457,6 +490,45 @@ class TritonW4A16LinearKernel(MPLinearKernel):
                     torch.nn.Parameter(zp.data.t().contiguous(), requires_grad=False),
                 )
 
+        # ---- Optional Marlin-style offline repack (default-off) ----
+        # When VLLM_MI100_W4A16_USE_MARLIN_REPACK=1 AND we're on MI100/gfx908
+        # with a supported group size, build the Marlin layout ONCE from the
+        # legacy tensors above and stash it on the layer for apply_weights.
+        # When the flag is off this is a no-op: the legacy params are
+        # byte-identical to before this mission.
+        self._maybe_marlin_repack(layer)
+
+    def _maybe_marlin_repack(self, layer: torch.nn.Module) -> None:
+        """Build + stash the Marlin-repacked tensors when the flag qualifies."""
+        if not _mi100_w4a16_use_marlin_repack():
+            return
+        if not current_platform.is_rocm():
+            return
+        from vllm.platforms.rocm import on_mi100
+        if not on_mi100():
+            return
+
+        c = self.config
+        K = c.partition_weight_shape[0]
+        group_size = c.group_size if c.group_size != -1 else K
+        if group_size not in (32, 128):
+            return
+
+        w_q, w_s, w_zp, _ = self._get_weight_params(layer)
+        zp_bias = c.weight_type.bias if c.weight_type.has_bias() else 8
+
+        from vllm.model_executor.kernels.linear.scaled_mm.mi100_w4a16_marlin import (
+            marlin_repack_w4a16,
+        )
+
+        packed = marlin_repack_w4a16(
+            b_q=w_q, scales=w_s, qzeros=w_zp,
+            group_size=group_size, zp_bias=zp_bias,
+        )
+        setattr(layer, _MARLIN_QWEIGHT_ATTR, packed.qweight)
+        setattr(layer, _MARLIN_SCALE_ATTR, packed.scale)
+        setattr(layer, _MARLIN_ZERO_ATTR, packed.zero)
+
     def apply_weights(
         self, layer: torch.nn.Module, x: torch.Tensor, bias: torch.Tensor | None = None
     ) -> torch.Tensor:
@@ -472,14 +544,44 @@ class TritonW4A16LinearKernel(MPLinearKernel):
         # For symmetric types (uint4b8), use the scalar bias; no zeros tensor
         zp_bias = c.weight_type.bias if c.weight_type.has_bias() else 0
 
-        output = triton_w4a16_gemm(
-            a=x_2d,
-            b_q=w_q,
-            scales=w_s,
-            qzeros=w_zp,
-            group_size=group_size,
-            zp_bias=zp_bias,
+        # ---- Selection order ----
+        # 1) VLLM_DISABLE_MI100_W4A16=1 -> generic Triton path (wins over all).
+        # 2) Marlin flag on AND on MI100 AND g in {32,128} AND repacked tensors
+        #    present -> mi100_w4a16_marlin_gemm(repacked...).
+        # 3) Otherwise -> triton_w4a16_gemm, which itself forwards to the
+        #    legacy mi100_w4a16_gemm on MI100 (default).
+        marlin_qweight = getattr(layer, _MARLIN_QWEIGHT_ATTR, None)
+        use_marlin = (
+            not _mi100_w4a16_disabled()
+            and _mi100_w4a16_use_marlin_repack()
+            and marlin_qweight is not None
+            and group_size in (32, 128)
+            and current_platform.is_rocm()
         )
+        if use_marlin:
+            from vllm.platforms.rocm import on_mi100
+            use_marlin = on_mi100()
+
+        if use_marlin:
+            from vllm.model_executor.kernels.linear.scaled_mm.mi100_w4a16_marlin import (  # noqa: E501
+                mi100_w4a16_marlin_gemm,
+            )
+            output = mi100_w4a16_marlin_gemm(
+                x_2d,
+                marlin_qweight,
+                getattr(layer, _MARLIN_SCALE_ATTR),
+                getattr(layer, _MARLIN_ZERO_ATTR),
+                group_size,
+            )
+        else:
+            output = triton_w4a16_gemm(
+                a=x_2d,
+                b_q=w_q,
+                scales=w_s,
+                qzeros=w_zp,
+                group_size=group_size,
+                zp_bias=zp_bias,
+            )
 
         if bias is not None:
             output.add_(bias)
