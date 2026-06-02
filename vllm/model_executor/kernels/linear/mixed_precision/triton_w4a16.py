@@ -60,6 +60,18 @@ def _mi100_w4a16_use_marlin_repack() -> bool:
 
     ``VLLM_DISABLE_MI100_W4A16=1`` overrides this flag and forces the generic
     Triton path (see :func:`_mi100_w4a16_disabled`).
+
+    .. warning::
+       **Known regression on gfx908 — do NOT enable for decode.** A verified
+       matched A/B on MI100 (TP1 synthetic) measured the Marlin path at
+       **~28% LOWER** decode throughput than the legacy ``mi100_w4a16_gemm``
+       (geomean 39.54 vs 54.95 tok/s), with rocprof showing the Marlin GEMM
+       fetches *more* HBM per dispatch (+2.3%) and emits extra helper kernels.
+       gfx908 (CDNA1) lacks ``cp.async``, so the global->LDS/MFMA overlap that
+       Marlin relies on cannot exist (``num_stages`` <= 2). The repack is
+       numerically lossless but a net performance loss here; this flag is
+       retained only as a research/benchmark toggle. See
+       ``BENCH_W4A16_MARLIN_REPACK.md`` for the full negative-result writeup.
     """
     return os.environ.get("VLLM_MI100_W4A16_USE_MARLIN_REPACK", "0") == "1"
 
