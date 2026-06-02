@@ -553,3 +553,27 @@ TurboQuant centroid init. `enforce_eager=True` as always on gfx900.
 
 Repro: `bench_scripts/tq_measure.py {auto|turboquant_k8v4}` (TP4, 16k ctx; prints
 GPU KV cache size + decode tok/s at B=1/8).
+
+### Composing with the int4 weight GEMV (#57)
+
+TurboQuant (KV-cache quant) and the gfx900 int4 weight GEMV (#57) are orthogonal —
+they live in different parts of the stack (attention-backend KV path vs the
+`triton_w4a16_gemm` weight-matmul path) and share no code. They stack cleanly.
+
+Verified on `QuantTrio/Qwen3.5-9B-AWQ` (int4 MLP weights, exercises the gfx900 GEMV)
+loaded with `--kv-cache-dtype turboquant_k8v4`, TP2, gfx900:
+- Both paths active simultaneously: log shows `quantization=awq_marlin` +
+  `_w4a16_gemv_splitk_kernel` JIT (our GEMV) **and** `Overriding with TURBOQUANT`.
+- Coherent output ("...is Paris").
+- Short-ctx decode B=1: **9.97 tok/s (100.3 ms/tok)** — statistically identical to
+  standalone AWQ int4 (10.46 tok/s / 95.6 ms; ~5% delta is JIT-warmup noise). So
+  **TurboQuant adds its ~2.34x KV-capacity benefit at near-zero decode cost on top
+  of the int4 weight win.**
+
+Caveat — VRAM ceiling: these V340 dies are ~8 GiB each. AWQ(TP2) + 16k-token KV
+exhausts memory at batch>1 (`torch.OutOfMemoryError`, 16 MiB free). For long context
++ batching with the AWQ model, use TP4 (more aggregate VRAM) or a shorter
+max_model_len. The compression itself is what lets you push context further per GiB;
+it doesn't remove the hard per-die cap.
+
+Repro: `bench_scripts/combo_dec.py turboquant_k8v4` (AWQ TP2, short-ctx decode).
