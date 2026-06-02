@@ -233,86 +233,96 @@ python3 bench_scripts/realistic.py   # back-of-envelope from BENCH_GFX900 number
 
 ---
 
-# HIP CUDA-graph investigation (the `enforce_eager` question)
 
-`BENCH_GFX900.md` shows decode is **latency-bound**, not bandwidth-bound: it
-realizes only ~5–9% of the HBM roofline, with a ~120 ms/token floor. The leading
-suspect was per-token **kernel-launch overhead** under `enforce_eager` (no
-graphs), so we tried to enable HIP/CUDA graphs to collapse the hundreds of
-per-layer kernel launches into a single graph replay. **Result: graphs are not
-usable on this gfx900 stack.** Details below so nobody burns time (or a GPU)
-re-treading this.
+---
 
-### Layer 1 — `enforce_eager=False` defaults to torch.compile, which crashes
+# HIP CUDA-graph investigation (the `enforce_eager` question) — RESOLVED
 
-With graphs left on (default), vLLM picks `mode=VLLM_COMPILE` (Inductor) +
-`cudagraph_mode=FULL_AND_PIECEWISE`. Inductor immediately fails on ROCm:
+**Question:** decode on gfx900 has a ~150 ms/token floor and realizes only
+~5–9% of the HBM roofline (see `BENCH_GFX900.md`). Is that floor just
+per-token **kernel-launch overhead** from running eager (no CUDA graphs)? If so,
+capturing HIP/CUDA graphs should collapse the hundreds of per-layer launches
+into one replay and remove the floor.
+
+**Answer: No. Graphs work on gfx900, but they give ZERO decode speedup.** The
+floor is real per-token compute/comm cost, not launch overhead. Measured A/B
+below. `enforce_eager=True` remains the right default — not because graphs are
+broken, but because they don't help and cost a long one-time autotune.
+
+## The A/B result (TP4, Qwen3.5-9B, FP16, bs=1 single-stream decode, 128 tok)
+
+| Mode | Config | tok/s | ms/token |
+|------|--------|-------|----------|
+| Eager | `enforce_eager=True` | 6.69 | 149.4 |
+| Graph | `mode=NONE` + `FULL_DECODE_ONLY`, capture_sizes=[1] | 6.55–6.64 | 150.7–152.6 |
+
+Three independent graph runs all landed at 150–153 ms/tok — within noise of
+eager (often *slightly* slower). Graph capture was confirmed active in the logs:
+`Capturing CUDA graphs (decode, FULL): 100%|████| 1/1` →
+`Graph capturing finished in 1 secs`. So the captured graph genuinely replaced
+the eager decode launches and produced identical, correct output — and the
+per-token time did not move.
+
+**Conclusion:** the ~150 ms/token decode cost is intrinsic to this hardware:
+no MFMA (matmuls run at FP32 rate), no packed-FP16 from rocBLAS, per-layer PCIe
+all-reduce under TP, plus the GDN linear-attention Triton kernels themselves.
+Removing launch overhead changes nothing because launch overhead was never the
+bottleneck. The real levers stay **PP-over-TP** (removes per-layer all-reduce)
+and **batching/concurrency** (amortizes the fixed per-step cost) — both
+validated in `BENCH_GFX900.md`.
+
+## What it took to get graphs working (three real blockers)
+
+### Blocker A — torch.compile/Inductor is the wrong target (don't bother)
+With graphs left fully on, vLLM defaults to `mode=VLLM_COMPILE` (Inductor) +
+`FULL_AND_PIECEWISE`. Inductor crashes on ROCm:
+`torch.* op returned non-Tensor bool, target: is_current_stream_capturing`. This
+is also why the gfx908/MI100 path force-sets `mode=NONE`. **Fixing Inductor is
+pointless here** — the MI100 path proves disabling it is correct, and our A/B
+shows pure HIP graphs (no Inductor) already give no speedup. The correct config
+is `mode=NONE` (compile off) + `cudagraph_mode=FULL_DECODE_ONLY` (HIP graphs on).
+
+### Blocker B — graph-capture hang + the REAL fix (`reset_method`, not firmware)
+An early TP8 capture hung **two** GPUs at once (PCI 22:00.0 and 25:00.0, both
+socket0). The driver's auto reset chose **BACO** (`reset_method=-1` → BACO),
+which "succeeded" but **lost VRAM** and left one GPU's SMU wedged
+(`No response from smu`, the bogus `firmware 0x1 vs 0xe` line is a *symptom* of
+the half-dead GPU, **not** stale firmware — a clean boot shows the SMU loading
+fine with no mismatch). `rocm-smi` then saw only 15/16 GPUs; **only a reboot
+recovered it.**
+
+The fix is **not** flashing firmware. It is forcing a reliable reset method:
 
 ```
-RuntimeError: torch.* op returned non-Tensor bool
-  target: torch.cuda.is_current_stream_capturing
+# /etc/modprobe.d/amdgpu-reset.conf   (reversible: delete file + reboot)
+options amdgpu reset_method=2          # 2 = mode1 (PSP-assisted whole-chip)
 ```
 
-This is the same reason the gfx908/MI100 path force-sets `mode=NONE`: Inductor
-fusions aren't available/working on ROCm here. **torch.compile is a dead end on
-gfx900.**
+`sudo update-initramfs -u && reboot`, then verify
+`cat /sys/module/amdgpu/parameters/reset_method` → `2`. **mode1 (value 2)** is
+the robust path for Vega10. Do **not** use mode2 (value 3) — that's an
+SMU/Arcturus(gfx908)-only reset and is not implemented for Vega10. With mode1 in
+place, subsequent capture experiments never lost a GPU again (driver can
+actually recover instead of corrupting VRAM via BACO).
 
-### Layer 2 — pure HIP graphs (no Inductor) hard-hang the GPU
+### Blocker C — one-time Triton autotune during capture warmup is very slow
+`mode=NONE + FULL_DECODE_ONLY` triggers `_warmup_prefill_kernels`
+(`qwen_gdn_linear_attn.py:1152`) → `recompute_w_u_fwd` (`wy_fast.py:156`) →
+`chunk_gated_delta_rule_fwd`, which `@triton.autotune`s the GDN/FLA kernels.
+Each config is a full `make_amdgcn`/`make_hsaco` compile, and gfx900 compiles
+slowly, so the GDN warmup grinds for ~10 min on a **cold** Triton cache
+(`INIT_DONE in 647s`). It is slow, not infinite. The autotune result **persists
+across runs**, so a **warm** start is `INIT_DONE in 63s` and graph capture
+itself is only **1 second**. (The FLA configs are gfx900-valid — num_warps 2/4/8;
+the one `num_warps=32` config in `l2norm.py:23` is invalid on wave64 but isn't
+on this hot path.)
 
-The correct config to isolate graphs from compile is
-`mode=NONE` + `cudagraph_mode=FULL_DECODE_ONLY`. The model loads, but during the
-graph-capture warmup at **TP=8** the hardware hung and the driver's recovery
-**failed**:
-
-```
-amdgpu 0000:25:00.0: KCQ enable failed
-resume of IP block <gfx_v9_0> failed -110
-GPU reset end with ret = -22          ← reset FAILED, not recovered
-VRAM is lost due to GPU reset!
-[powerplay] No response from smu / fw load failed
-[powerplay] firmware(0x1) doesn't match SMU9_DRIVER_IF_VERSION(0xe)
-```
-
-`rocm-smi` then enumerated only **15/16 GPUs** — the hung GPU's SMU (power
-microcontroller) was wedged and **only a full host reboot brought it back**.
-The stale SMU firmware (`0x1` vs expected `0xe`) means the in-driver GPU-reset
-path cannot recover a Vega10 hang on this box, so a graph-capture hang escalates
-to a dead GPU until reboot.
-
-### Layer 3 — even the safest settings never finish (infinite autotune)
-
-After rebooting (all 16 GPUs healthy again), we retried with the most
-conservative settings possible: **TP=4, single socket, `cudagraph_capture_sizes=[1]`,
-`max_num_batched_tokens=2048`, 600 s hard timeout.** This time **no GPU hang**
-(dmesg clean), but init **never completed** — the worker sat in
-`triton/backends/amd/compiler.py make_amdgcn` → `autotuner do_bench`,
-re-JIT-compiling kernels for the capture shapes without ever converging
-(`~/.triton/cache` `.hsaco` count frozen at 426 for >8 min). It hit the 600 s
-timeout still in warmup. The graph-capture code path re-triggers Triton
-autotuning for the GDN/FLA kernels in a way that does not terminate in
-reasonable time on gfx900.
-
-### Conclusion
-
-**`enforce_eager=True` is correct and required on gfx900 for this stack.** HIP
-CUDA graphs are not viable here:
-
-1. torch.compile (Inductor) is broken on ROCm → `mode=NONE` mandatory;
-2. full graph capture can hard-hang the GPU, and the SMU-firmware mismatch makes
-   the driver reset path fail → **a hang = a dead GPU until reboot** (risky);
-3. even the minimal-footprint capture never escapes Triton autotune.
-
-So the ~120 ms/token decode floor is **not** simply removable launch overhead —
-on this hardware the eager path is the only stable one, and the per-token cost
-is intrinsic (no MFMA, no packed-FP16, per-layer PCIe all-reduce). The
-realistic levers remain the ones already validated in `BENCH_GFX900.md`:
-**pipeline parallelism over wide TP** (removes per-layer all-reduce) and
-**batching/concurrency** (amortizes fixed per-step latency). A future ROCm with
-working ROCm-Inductor and updated Vega10 SMU firmware would be the prerequisite
-to revisit graphs.
-
-### Repro / guardrails
-
-If anyone retries graphs on gfx900: use a **hard `timeout`**, watch
-`dmesg | grep amdgpu` for `KCQ enable failed` / `GPU reset`, and be ready to
-**reboot** — do not run it unattended across all 16 GPUs.
+## Bottom line / guidance
+- Keep **`enforce_eager=True`** for serving on gfx900 — graphs add a long cold
+  autotune and buy nothing.
+- If you must experiment with graphs: set `amdgpu.reset_method=2` first (mode1),
+  use `mode=NONE` + `FULL_DECODE_ONLY` + small `cudagraph_capture_sizes`, run
+  with a hard `timeout`, watch `dmesg | grep -E "GPU reset|amdgpu.*fail"`, and
+  pre-warm the Triton cache so init is ~1 min instead of ~11 min.
+- The decode floor is a **hardware** property (no MFMA/packed-FP16 + PCIe TP
+  all-reduce), not a software/launch artifact. Optimize via PP + batching.
