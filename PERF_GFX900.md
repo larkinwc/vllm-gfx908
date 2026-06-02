@@ -564,3 +564,9 @@ max_model_len. The compression itself is what lets you push context further per 
 it doesn't remove the hard per-die cap.
 
 Repro: `bench_scripts/combo_dec.py turboquant_k8v4` (AWQ TP2, short-ctx decode).
+
+### Quality: WikiText-2 reference perplexity
+Measured PPL (12,264 tokens, 24x512 windows, prefill logprobs), Qwen3.5-9B TP4:
+FP16 KV = 9.8885; turboquant_k8v4 = 9.8879 (delta -0.006%, lossless within noise).
+Confirms the FP8-key choice avoids the quirky-K catastrophe at zero quality cost.
+Repro: bench_scripts/ppl.py {auto|turboquant_k8v4}.

@@ -53,6 +53,8 @@ Qwen3 family is **"quirky-K"**: key-side quantization is catastrophic
 (effectively unquantized) and only compresses values. **Do not** use
 `turboquant_3bit_nc` / other aggressive-K presets on Qwen3.5.
 
+**Quality is measured, not assumed.** WikiText-2 reference perplexity (12,264 tokens, 24x512 windows, prefill logprobs), Qwen3.5-9B TP4: FP16 = 9.8885, turboquant_k8v4 = 9.8879 (**-0.006%, lossless within noise**). Safe production default: 2.34x KV capacity at zero measurable quality cost. (PPL measures quantizer reconstruction quality, not long-decode drift.)
+
 ### 4. int4 weights via AWQ (`QuantTrio/Qwen3.5-9B-AWQ`)
 Stock INT4 on gfx900 is *slower* than FP16 because the Triton path dequants then
 runs `tl.dot` through a padded FP32 GEMM (no MFMA). Our hand-written M≤8 GEMV
