@@ -131,3 +131,102 @@ after a minute idle).
 /tmp/run_peak.sh fp16          # single / socket0 / all-16 aggregate
 /tmp/power_scan.sh 1 2         # power-cap efficiency scan on GPU1 (card2)
 ```
+
+---
+
+# Realistic scaling under LLM inference (TP / PP) — not the linear ceiling
+
+The 76 TFLOPS / 5.8 TB/s aggregate above is the **embarrassingly-parallel**
+ceiling: 16 independent jobs, each in its own VRAM, zero communication. Real
+single-model LLM serving never reaches it. Below we back out the **effective**
+realized compute and bandwidth from the actual serving runs in
+`BENCH_GFX900.md` (Qwen3.5-9B, 9.65 B params, 19.3 GB FP16).
+
+LLM inference has two regimes that scale very differently:
+
+- **Prefill** (processing the prompt) is **compute-bound** — a big GEMM over all
+  prompt tokens. From TTFT we recover effective **TFLOPS**.
+- **Decode** (generating tokens) is **bandwidth-bound** — every step must stream
+  all weights from HBM to emit (batch) tokens. From output tok/s we recover
+  effective **GB/s**.
+
+Formulas: prefill FLOPs ≈ `2 · P · prompt_tokens · batch` over the TTFT window;
+decode bytes ≈ `2 · P` (FP16 weights) streamed per forward step, `steps/s =
+out_tok_s / batch`.
+
+## Prefill: effective TFLOPS vs the parallel ceiling
+
+| Layout | GPUs | c | TTFT p50 | Eff TFLOPS | % of agg ceiling |
+|--------|-----:|--:|---------:|-----------:|-----------------:|
+| TP8 | 8 | 1 | 0.82 s | 24.0 | **67%** |
+| TP8 | 8 | 4 | 3.39 s | 23.3 | 65% |
+| TP4 | 4 | 4 | 5.76 s | 13.7 | 76% |
+| TP4 | 4 | 1 | 1.95 s | 10.1 | 56% |
+| TP2×PP2 | 4 | 4 | 6.53 s | 12.1 | 67% |
+| TP2×PP4 | 8 | 4 | 4.64 s | 17.1 | 47% |
+| TP2×PP4 | 8 | 1 | 2.18 s | 9.1 | 25% |
+
+**Prefill realizes 50–76% of the parallel-compute ceiling.** It is the regime
+that actually uses the GPUs' arithmetic, so wide **TP wins here** (TP8 hits the
+best single-stream 24 TFLOPS effective). PP is weaker for single-stream prefill
+because the prompt must walk all pipeline stages before the first token (the
+25% outlier), but it recovers with concurrency as the pipeline fills.
+
+## Decode: effective GB/s vs the bandwidth ceiling
+
+| Layout | GPUs | c | out tok/s | Eff GB/s | % of agg HBM | % of bw-roofline |
+|--------|-----:|--:|----------:|---------:|-------------:|-----------------:|
+| TP2×PP2 | 4 | 1 | 6.81 | 131 | 9.0% | **9.0%** |
+| TP4 | 4 | 1 | 4.58 | 88 | 6.1% | 6.1% |
+| TP8 | 8 | 1 | 7.94 | 153 | 5.2% | 5.2% |
+| TP2×PP4 | 8 | 1 | 6.95 | 134 | 4.6% | 4.6% |
+| TP8 | 8 | 4 | 19.54 | 94/step | 3.2% | 3.2% |
+
+A 19.3 GB model over ~2.9 TB/s of aggregate HBM gives a **bandwidth roofline of
+~151 tok/s** (8 GPU, batch 1) if decode were purely memory-bound. We measure
+**~5–9% of that.** Decode on this box is **NOT actually bandwidth-bound** — it
+is **latency/overhead-bound**:
+
+- No matrix cores + no packed-FP16, so each tiny per-token GEMM is slow on the
+  VALU and **enforce_eager** (no HIP graphs — required for stability here) adds
+  full kernel-launch overhead on every one of the ~hundreds of ops per layer.
+- TP adds an all-reduce *per layer* over PCIe (no XGMI); at batch 1 this is pure
+  serial latency the HBM never gets to hide.
+- The hybrid Gated-DeltaNet recurrence is partly sequential.
+
+So the HBM is **>90% idle during decode** — the bottleneck is per-token kernel
+launch + collective latency, not memory bandwidth.
+
+## Bottom line: what you realistically get
+
+| Quantity | Parallel ceiling | **Realistic (this model, serving)** |
+|----------|-----------------:|------------------------------------:|
+| Prefill compute (8 GPU) | 36 TFLOPS | **~24 TFLOPS (≈67%)** |
+| Prefill compute (4 GPU) | 18 TFLOPS | **~13 TFLOPS (≈70%)** |
+| Decode bandwidth (8 GPU) | 2.9 TB/s | **~0.15 TB/s used (≈5%)** |
+| Decode speed, best single-stream | — | **~8 tok/s (TP8)** |
+| Decode speed, best aggregate | — | **~26 tok/s (TP2×PP4, c4 coding)** |
+
+**Takeaways**
+
+1. **Prefill scales well (~70% efficiency)** and is TP-friendly — that is the
+   part of the box that behaves like the aggregate spec.
+2. **Decode is the bottleneck and does *not* scale with bandwidth** — it is
+   gated by per-token kernel-launch + all-reduce latency, so it sits at ~5–9% of
+   the HBM roofline. Throwing more GPUs at one stream barely helps (TP8 only
+   ~1.7× TP4); **batching/concurrency is the only real decode lever** (c1→c4
+   gives 2.5–3.4×).
+3. **PP > TP for decode at equal GPUs** because it removes the per-layer
+   all-reduce that dominates decode latency — exactly the TP2×PP wins in
+   `BENCH_GFX900.md`.
+4. **Realistic planning number:** count on **~24 TFLOPS/socket of usable prefill
+   compute** and **decode throughput in the tens of tok/s aggregate**, *not* the
+   76 TFLOPS / 5.8 TB/s parallel figure. The two regimes want opposite layouts
+   (TP for prefill, PP/low-TP for decode), so the best serving config is a
+   compromise — here TP2×PP4 within one socket.
+
+## Reproduce
+
+```
+python3 bench_scripts/realistic.py   # back-of-envelope from BENCH_GFX900 numbers
+```
