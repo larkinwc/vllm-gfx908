@@ -433,3 +433,64 @@ directions are:
 
 Both target the real bottleneck (fixed per-step overhead), unlike quantization
 which targets bandwidth we aren't actually limited by.
+
+---
+
+# Redeeming INT4 on gfx900: a hand-written decode GEMV — issue #57
+
+`#54` found stock AWQ INT4 is *slower* than FP16 on gfx900 because the W4A16
+path uses `tl.dot` even at M=1, and gfx900 has no MFMA → `tl.dot` becomes a
+padded FP32 GEMM (one real token padded to BLOCK_M=16/32). The fix is not better
+dequant (that was already register-level) — it's the **wrong primitive**. Decode
+is M=1, so the right primitive is a **GEMV**: purely HBM-bandwidth-bound, no
+matrix units needed, and int4 weights move 4× fewer bytes than FP16.
+
+## The kernel (`vllm/.../mixed_precision/gfx900_w4a16_gemv.py`)
+
+M=1..8 int4 GEMV: register-level unpack (GPTQ-sequential packing, shift =
+`(j%8)*4`, matching the generic `triton_w4a16` kernel), group scales/zeros loaded
+**once per group** (not per K-row), and **split-K** to parallelize long-K /
+small-N shapes across gfx900's 56 CUs. Per-shape tuned configs
+(`_GFX900_GEMV_CONFIGS`). `tl.sum` reduction over K instead of `tl.dot`.
+
+Dispatch: `triton_w4a16_gemm` routes `on_gfx900() and group_size in {32,64,128}
+and M<=8` to this GEMV; prefill (M>8) still uses the generic `tl.dot` path.
+
+## Microbench (real Qwen3.5-9B MLP shapes, M=1, correctness rel err ≤ 0.001)
+
+| shape | FP16 GEMV | int4 GEMV | vs FP16 | vs stock tl.dot (the path it replaces) |
+|-------|-----------|-----------|---------|------------------------------------------|
+| gate/up K=4096 N=24576 | 0.726 ms | 0.257 ms | **2.82×** | 2.86 ms → 0.282 ms = **10.1×** |
+| down K=12288 N=4096    | 0.576 ms | 0.143 ms | **4.02×** | 2.21 ms → 0.141 ms = **15.6×** |
+
+The 10–15× vs stock is because the gfx900 `tl.dot` int4 path is pathologically
+bad (~2–3 ms for one token). ~54% of the 365 GB/s HBM roofline; correct across
+M=1/4/8 vs the existing kernel.
+
+## End-to-end (Qwen3.5-9B-AWQ, TP2, enforce_eager, bs=1 decode)
+
+| Config | GPUs | bs=1 ms/tok | bs=1 tok/s |
+|--------|------|-------------|------------|
+| FP16 (baseline) | TP4 | 147 | 6.80 |
+| AWQ INT4, stock `tl.dot` | TP2 | 200 | 4.98 |
+| **AWQ INT4, gfx900 GEMV** | **TP2** | **95.6** | **10.46** |
+
+Output verified correct. The kernel flips INT4 from the *worst* decode option to
+the **best**: **2.1× faster than stock AWQ**, **1.54× faster than FP16 at bs=1**,
+and on **half the GPUs** (TP2 vs TP4) — freeing 2 GPUs per replica.
+
+**When to use it:** latency-sensitive / low-to-moderate concurrency decode, or
+when VRAM/GPU count is the constraint. At very high batch, FP16 still wins on
+aggregate throughput (decode there is step-overhead-bound, not weight-bandwidth-
+bound, so fewer weight bytes stops helping — consistent with the batch-sweep
+finding). The GEMV gate is M<=8, so high-batch prefill/decode automatically falls
+back to the generic path.
+
+## Why this matters (the general lesson)
+
+Quantization only helps where you're **bandwidth-bound**. gfx900 bs=1 decode
+*is* weight-bandwidth-bound (each token re-reads all weights), so int4's 4×-fewer
+bytes is a real win — but only once you stop forcing the work through MFMA-less
+`tl.dot`. A GEMV that reads int4 and accumulates in vector ALU is the right shape
+for this hardware. Same principle would apply to any matmul-light, M=1 path on a
+no-MFMA GPU.
