@@ -506,19 +506,6 @@ via `--kv-cache-dtype turboquant_*`.
 ### Why it works on gfx900 (where the llama.cpp HIP port does not)
 The reference llama.cpp-turboquant-hip port **explicitly blocks wave64 hardware
 (Vega/GCN/CDNA)**: its codebook lookup uses `__shfl_sync(width=32)`, which returns
-garbage on 64-wide wavefronts. vLLMs TurboQuant kernels are **pure Triton** — no
-
-## TurboQuant KV-cache quantization on gfx900 (issue #62)
-
-TurboQuant (arXiv 2504.19874; rotation + Lloyd-Max scalar codebook) compresses the
-KV cache to roughly double usable context / concurrency per VRAM. vLLM ships a full
-in-tree implementation (`vllm/model_executor/layers/quantization/turboquant/`,
-`vllm/v1/attention/{backends/turboquant_attn,ops/triton_turboquant_*}`), selected
-via `--kv-cache-dtype turboquant_*`.
-
-### Why it works on gfx900 (where the llama.cpp HIP port does not)
-The reference llama.cpp-turboquant-hip port **explicitly blocks wave64 hardware
-(Vega/GCN/CDNA)**: its codebook lookup uses `__shfl_sync(width=32)`, which returns
 garbage on 64-wide wavefronts. vLLM's TurboQuant kernels are **pure Triton** — no
 `__shfl_sync`, no hand-rolled warp shuffle, no `tl.dot`. Triton handles the
 wavefront width internally, so the wave64 blocker simply does not apply. We only had
