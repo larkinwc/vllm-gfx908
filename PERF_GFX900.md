@@ -326,3 +326,110 @@ on this hot path.)
   pre-warm the Triton cache so init is ~1 min instead of ~11 min.
 - The decode floor is a **hardware** property (no MFMA/packed-FP16 + PCIe TP
   all-reduce), not a software/launch artifact. Optimize via PP + batching.
+
+---
+
+# Decode performance: where the gains are (and aren't) on gfx900
+
+Starting point: single-stream (bs=1) decode of Qwen3.5-9B TP4 FP16 is ~150
+ms/token (6.8 tok/s). HIP graphs gave 0 speedup (see above), proving the floor
+is **fixed per-STEP overhead** (RCCL all-reduce + GDN linear-attn Triton
+kernels), not kernel-launch overhead and not HBM bandwidth.
+
+Roofline check (per GPU, TP4): each GPU reads 1/4 of weights = 4.83 GB at the
+measured ~365 GB/s HBM = **~13 ms/step floor**. We measure ~150 ms/step → we are
+**~10x above the bandwidth roofline**. So at bs=1 we use only ~9% of HBM
+bandwidth. The headroom is real; the question is how to convert idle bandwidth
+into throughput.
+
+## Lever 1 — batching/concurrency (the big, free win) — issue #53
+
+A decode *step* costs ~150 ms regardless of how many sequences are in the batch
+(it reads the weights once, then does B sequences' worth of cheap per-token
+work). So running B concurrent sequences yields ~B tokens per step → throughput
+scales nearly linearly until something saturates.
+
+`bench_scripts/batch_sweep.py`, TP4 FP16, gen=96:
+
+| Batch | agg tok/s | scaling | ms/step |
+|-------|-----------|---------|---------|
+| 1 | 6.80 | 1.0x | 147 |
+| 2 | 12.82 | 1.9x | 156 |
+| 4 | 25.36 | 3.7x | 158 |
+| 8 | 49.37 | 7.3x | 162 |
+| 16 | 83.91 | 12.3x | 191 |
+| 32 | 225–231 | 33x | 138–142 |
+| 48 | 289 | 42x | 166 |
+| 64 | 293 | 43x | 219 |
+| 96 | ~498 | ~70x | 193 |
+| 128 | 321 (regress) | — | 398 |
+
+**Decode goes from 6.8 tok/s (bs=1) to ~300–500 tok/s aggregate (50–70x) purely
+via concurrency.** Peak sits around B=64–96; B=128 regresses (KV-cache pressure /
+scheduler recompute). The curve is approximate (wall time includes prefill of B
+prompts, which grows with batch), but the regime is unambiguous: **decode is
+latency/overhead-bound, and concurrency is the primary throughput lever.** Even
+at B=96 per-step time (~190 ms) is still ~10x above the bandwidth roofline, so we
+never actually become bandwidth-bound — the per-step overhead (RCCL + GDN
+kernels) is the true ceiling.
+
+**Takeaway:** serve with high concurrency. For latency-sensitive bs=1 use, the
+floor is hardware-intrinsic; for throughput, batch hard.
+
+## Lever 2 — INT4 weight quantization — issue #54 — TESTED, DOES NOT HELP
+
+Hypothesis: shrink weights with INT4 so the model fits on fewer GPUs (cutting the
+all-reduce floor) and reduce bytes/step. Tested `QuantTrio/Qwen3.5-9B-AWQ` (AWQ
+4-bit, group_size 128; only MLP weights quantized — attn/linear_attn stay FP16;
+12.4 GB → fits TP2).
+
+**It loads and runs correctly on gfx900.** vLLM auto-selects
+`TritonW4A16LinearKernel` for `AWQMarlinLinearMethod` (Marlin MoE is disabled on
+ROCm; the dense Triton W4A16 dequant path is used — the right path for gfx900,
+which has no MFMA/Marlin). Correct output, TP2.
+
+`bench_scripts/awq_sweep.py`, AWQ INT4 TP2, gen=96:
+
+| Batch | agg tok/s | ms/step |
+|-------|-----------|---------|
+| 1 | 4.98 | 200.6 |
+| 8 | 27.28 | 293 |
+| 32 | 54.88 | 583 |
+| 64 | 56.12 | 1140 |
+| 96 | 52.50 | 1829 |
+
+**AWQ INT4 is SLOWER than FP16 on both latency and throughput:**
+- bs=1: 200 ms/tok (AWQ TP2) vs 147 ms/tok (FP16 TP4) — **36% slower**.
+- peak throughput: ~56 tok/s (plateaus at B=32) vs ~300–500 tok/s (FP16) — **~6–9x worse**.
+
+**Why (the key lesson):**
+1. gfx900 has **no native INT4/dequant hardware**, so `TritonW4A16` must
+   dequantize INT4→FP16 in software every forward, then do the FP16 matmul. That
+   dequant is **pure added compute**, not hidden behind anything.
+2. Quantization only helps when you are **bandwidth-bound** (trade compute for
+   fewer bytes). gfx900 decode is **overhead/latency-bound**, not bandwidth-bound
+   (Lever 1 proved we never hit the HBM roofline). So fewer bytes buys nothing
+   while the dequant adds cost.
+3. At scale the Triton dequant kernel becomes the bottleneck: per-step time
+   explodes (583→1829 ms) and throughput plateaus at B=32, where FP16 kept
+   scaling to B=96.
+
+**Takeaway:** INT4 quantization is the **wrong** lever for gfx900 decode, *because*
+decode is not bandwidth-bound here. Quant would only pay off on a bandwidth-bound
+GPU with native INT4/INT8 units (MI300, etc.). On Vega10 it adds software-dequant
+overhead with no benefit. (Quant may still be worth it purely to *fit a larger
+model* in limited VRAM — but not for speed.)
+
+## Where the remaining decode gains actually are
+
+Since both batching headroom and the all-reduce floor dominate, the productive
+directions are:
+- **#55 PP-over-TP under concurrency** — pipeline parallel swaps per-layer
+  all-reduce for point-to-point sends; should cut the per-step overhead that
+  caps the batch-sweep ceiling.
+- **#56 profile the 150 ms step** — split RCCL all-reduce vs GDN/FLA Triton
+  kernel time; tells us whether to attack comms (PP, fewer ranks) or kernels
+  (tune the GDN linear-attention Triton ops for wave64/gfx900).
+
+Both target the real bottleneck (fixed per-step overhead), unlike quantization
+which targets bandwidth we aren't actually limited by.
