@@ -228,7 +228,7 @@ def _post_json(base_url, path, payload, timeout=DEFAULT_TIMEOUT):
 def load_tasks(path, limit):
     """Load an override task set from JSONL (one JSON object per line)."""
     tasks = []
-    with open(path, "r", encoding="utf-8") as fh:
+    with open(path, encoding="utf-8") as fh:
         for line in fh:
             line = line.strip()
             if not line:

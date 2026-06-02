@@ -20,6 +20,7 @@ Writes:
   library/bench-delta/summary.json (top-line verdict, per-cell verdicts)
 """
 from __future__ import annotations
+
 import json
 from pathlib import Path
 
