@@ -87,3 +87,89 @@ Harness: `~/gpubench/bench_gfx900/` on `tyangpu1`. Per-cell raw JSON +
 ```
 /tmp/gfx900_bench.sh   # starts a TP=8 then TP=4 server, runs the 4 cells each
 ```
+
+---
+
+# Pipeline-parallel grid (TP2 × PP{2,4})
+
+Motivation: tensor parallelism issues an all-reduce on *every* layer, so it is
+very sensitive to interconnect bandwidth. **Pipeline parallelism** instead only
+passes the layer activations point-to-point between adjacent stages, so it
+tolerates a slow link far better. On this box the cross-socket QPI link is only
+~0.26 GB/s (a hard Xeon E5 v3 limit), so all cells here are kept **within
+socket0 (GPUs 0-7)** to make a clean apples-to-apples comparison against the TP
+grid above. The two layouts use the same GPU counts as the TP cells:
+
+- **TP2×PP2 = 4 GPUs** (GPUs 0-3) — compare to **TP4**
+- **TP2×PP4 = 8 GPUs** (GPUs 0-7) — compare to **TP8**
+
+Same run config as the TP grid (FP16, enforce_eager, language_model_only,
+max_model_len=4096, gpu_util=0.90, num_prompts=8×c, synthetic=random 1024/256
+`--ignore-eos`, coding=ShareGPT).
+
+> **Required fix for PP on gfx900:** the V1 *async-scheduling* path has the last
+> PP rank broadcast its sampled token IDs back to rank 0 via a raw
+> `torch.distributed.broadcast` (`gpu_model_runner.py:_pp_broadcast_prev_sampled_token_ids`).
+> On our custom gfx900 RCCL this broadcast throws `unhandled cuda error`, killing
+> the engine (`EngineDeadError`) — *only* on the server's async path; the offline
+> `LLM.generate` path worked fine. Running the server with **`--no-async-scheduling`**
+> skips that broadcast and PP runs cleanly. (Offline `LLM(...)` does not need the
+> flag.)
+
+## Results (8 cells)
+
+| Layout | GPUs | c | Workload | Out tok/s | Total tok/s | Req/s | TTFT p50 (ms) | TTFT p99 (ms) | TPOT p50 (ms) | TPOT p99 (ms) |
+|--------|-----:|--:|----------|----------:|------------:|------:|--------------:|--------------:|--------------:|--------------:|
+| TP2xPP4 | 8 | 1 | synthetic | 6.95 | 34.73 | 0.027 | 2180.9 | 4943.8 | 133.70 | 141.11 |
+| TP2xPP4 | 8 | 1 | coding | 7.42 | 10.52 | 0.022 | 267.9 | 1568.5 | 133.74 | 134.12 |
+| TP2xPP4 | 8 | 4 | synthetic | 22.87 | 114.37 | 0.089 | 4638.6 | 7971.0 | 157.96 | 167.02 |
+| TP2xPP4 | 8 | 4 | coding | 25.69 | 54.94 | 0.111 | 1170.0 | 2141.8 | 140.61 | 154.73 |
+| TP2xPP2 | 4 | 1 | synthetic | 6.81 | 34.04 | 0.027 | 2289.1 | 2981.2 | 137.93 | 141.67 |
+| TP2xPP2 | 4 | 1 | coding | 6.99 | 9.91 | 0.021 | 281.2 | 1622.8 | 142.72 | 143.46 |
+| TP2xPP2 | 4 | 4 | synthetic | 18.14 | 90.68 | 0.071 | 6533.2 | 9623.7 | 186.10 | 273.54 |
+| TP2xPP2 | 4 | 4 | coding | 23.69 | 51.72 | 0.106 | 1238.5 | 2566.0 | 156.15 | 198.46 |
+
+## TP vs PP head-to-head (same GPU count, same socket)
+
+Output tok/s:
+
+| GPUs | c | Workload | TP (pure) | TP2×PP | Winner |
+|-----:|--:|----------|----------:|-------:|--------|
+| 4 | 1 | synthetic | 4.58 | 6.81 | **PP +49%** |
+| 4 | 1 | coding | 3.68 | 6.99 | **PP +90%** |
+| 4 | 4 | synthetic | 12.23 | 18.14 | **PP +48%** |
+| 4 | 4 | coding | 13.58 | 23.69 | **PP +74%** |
+| 8 | 1 | synthetic | 7.94 | 6.95 | TP +14% |
+| 8 | 1 | coding | 6.00 | 7.42 | **PP +24%** |
+| 8 | 4 | synthetic | 19.54 | 22.87 | **PP +17%** |
+| 8 | 4 | coding | 20.50 | 25.69 | **PP +25%** |
+
+## Observations
+
+- **At 4 GPUs, TP2×PP2 beats pure TP4 across the board (+48% to +90%).** Pure
+  TP4 splits each GEMM 4 ways, so each gfx900 does a small, inefficient slice of
+  a matrix-core-less FP16 GEMM and then pays a 4-way all-reduce per layer over
+  PCIe. TP2×PP2 keeps GEMMs at a 2-way split (better VALU utilization) and
+  replaces the wide all-reduce with cheap stage-to-stage activation hand-offs.
+- **At 8 GPUs, TP2×PP4 wins on 3 of 4 cells**, losing only single-stream
+  synthetic (where PP's pipeline can't fill at c=1, so its 4 serial stages add
+  latency without a throughput payoff). With any concurrency (c=4) the pipeline
+  fills and PP pulls ahead (+17–25%).
+- **TPOT is markedly steadier under PP**: TP2×PP4 holds ~134–158 ms across all
+  cells, whereas pure TP8 ranged 120–194 ms and pure TP4 198–309 ms. Less
+  per-layer collective traffic means less variance.
+- **TTFT is higher for PP at c≥1 synthetic** (long 1024-token prefill must walk
+  all pipeline stages before the first token), the expected PP latency tax. For
+  the shorter-prompt coding workload TTFT stays low.
+- **Takeaway for this box**: with no XGMI and weak PCIe/QPI, the lowest-TP /
+  higher-PP layout that still fits the model is the throughput sweet spot.
+  TP2×PP4 (8 GPUs, one socket) is the best concurrent-serving config measured,
+  and notably **PP is the layout that makes spanning both sockets viable** since
+  it only needs point-to-point sends across the slow QPI link rather than a
+  bandwidth-hungry all-reduce.
+
+## Reproduce (PP grid)
+
+```
+/tmp/gfx900_bench_pp.sh   # TP2xPP4 then TP2xPP2 server (note --no-async-scheduling), 4 cells each
+```
