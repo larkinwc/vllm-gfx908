@@ -230,3 +230,89 @@ launch + collective latency, not memory bandwidth.
 ```
 python3 bench_scripts/realistic.py   # back-of-envelope from BENCH_GFX900 numbers
 ```
+
+---
+
+# HIP CUDA-graph investigation (the `enforce_eager` question)
+
+`BENCH_GFX900.md` shows decode is **latency-bound**, not bandwidth-bound: it
+realizes only ~5–9% of the HBM roofline, with a ~120 ms/token floor. The leading
+suspect was per-token **kernel-launch overhead** under `enforce_eager` (no
+graphs), so we tried to enable HIP/CUDA graphs to collapse the hundreds of
+per-layer kernel launches into a single graph replay. **Result: graphs are not
+usable on this gfx900 stack.** Details below so nobody burns time (or a GPU)
+re-treading this.
+
+### Layer 1 — `enforce_eager=False` defaults to torch.compile, which crashes
+
+With graphs left on (default), vLLM picks `mode=VLLM_COMPILE` (Inductor) +
+`cudagraph_mode=FULL_AND_PIECEWISE`. Inductor immediately fails on ROCm:
+
+```
+RuntimeError: torch.* op returned non-Tensor bool
+  target: torch.cuda.is_current_stream_capturing
+```
+
+This is the same reason the gfx908/MI100 path force-sets `mode=NONE`: Inductor
+fusions aren't available/working on ROCm here. **torch.compile is a dead end on
+gfx900.**
+
+### Layer 2 — pure HIP graphs (no Inductor) hard-hang the GPU
+
+The correct config to isolate graphs from compile is
+`mode=NONE` + `cudagraph_mode=FULL_DECODE_ONLY`. The model loads, but during the
+graph-capture warmup at **TP=8** the hardware hung and the driver's recovery
+**failed**:
+
+```
+amdgpu 0000:25:00.0: KCQ enable failed
+resume of IP block <gfx_v9_0> failed -110
+GPU reset end with ret = -22          ← reset FAILED, not recovered
+VRAM is lost due to GPU reset!
+[powerplay] No response from smu / fw load failed
+[powerplay] firmware(0x1) doesn't match SMU9_DRIVER_IF_VERSION(0xe)
+```
+
+`rocm-smi` then enumerated only **15/16 GPUs** — the hung GPU's SMU (power
+microcontroller) was wedged and **only a full host reboot brought it back**.
+The stale SMU firmware (`0x1` vs expected `0xe`) means the in-driver GPU-reset
+path cannot recover a Vega10 hang on this box, so a graph-capture hang escalates
+to a dead GPU until reboot.
+
+### Layer 3 — even the safest settings never finish (infinite autotune)
+
+After rebooting (all 16 GPUs healthy again), we retried with the most
+conservative settings possible: **TP=4, single socket, `cudagraph_capture_sizes=[1]`,
+`max_num_batched_tokens=2048`, 600 s hard timeout.** This time **no GPU hang**
+(dmesg clean), but init **never completed** — the worker sat in
+`triton/backends/amd/compiler.py make_amdgcn` → `autotuner do_bench`,
+re-JIT-compiling kernels for the capture shapes without ever converging
+(`~/.triton/cache` `.hsaco` count frozen at 426 for >8 min). It hit the 600 s
+timeout still in warmup. The graph-capture code path re-triggers Triton
+autotuning for the GDN/FLA kernels in a way that does not terminate in
+reasonable time on gfx900.
+
+### Conclusion
+
+**`enforce_eager=True` is correct and required on gfx900 for this stack.** HIP
+CUDA graphs are not viable here:
+
+1. torch.compile (Inductor) is broken on ROCm → `mode=NONE` mandatory;
+2. full graph capture can hard-hang the GPU, and the SMU-firmware mismatch makes
+   the driver reset path fail → **a hang = a dead GPU until reboot** (risky);
+3. even the minimal-footprint capture never escapes Triton autotune.
+
+So the ~120 ms/token decode floor is **not** simply removable launch overhead —
+on this hardware the eager path is the only stable one, and the per-token cost
+is intrinsic (no MFMA, no packed-FP16, per-layer PCIe all-reduce). The
+realistic levers remain the ones already validated in `BENCH_GFX900.md`:
+**pipeline parallelism over wide TP** (removes per-layer all-reduce) and
+**batching/concurrency** (amortizes fixed per-step latency). A future ROCm with
+working ROCm-Inductor and updated Vega10 SMU firmware would be the prerequisite
+to revisit graphs.
+
+### Repro / guardrails
+
+If anyone retries graphs on gfx900: use a **hard `timeout`**, watch
+`dmesg | grep amdgpu` for `KCQ enable failed` / `GPU reset`, and be ready to
+**reboot** — do not run it unattended across all 16 GPUs.
