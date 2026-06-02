@@ -115,7 +115,7 @@ def awq_gemv_splitk_kernel(
     tl.atomic_add(c_ptr + offs_n, acc, mask=mask_n)
 
 
-def awq_gemv_splitk(a, qw, scales, qz, G, BLOCK_N=64, num_warps=4, split_k=4):
+def awq_gemv_splitk(a, qw, scales, qz, G, BLOCK_N=64, num_warps=4, split_k=4, num_stages=2):
     K = a.shape[-1]; N = scales.shape[1]
     c = torch.zeros((N,), dtype=torch.float32, device=a.device)
     n_groups = K // G
@@ -123,7 +123,7 @@ def awq_gemv_splitk(a, qw, scales, qz, G, BLOCK_N=64, num_warps=4, split_k=4):
     grid = (triton.cdiv(N, BLOCK_N), triton.cdiv(n_groups, gpp))
     awq_gemv_splitk_kernel[grid](a, qw, scales, qz, c, K, N,
                                  G=G, BLOCK_N=BLOCK_N, GROUPS_PER_PID=gpp,
-                                 num_warps=num_warps)
+                                 num_warps=num_warps, num_stages=num_stages)
     return c.to(a.dtype)
 
 
@@ -199,21 +199,23 @@ def main():
                     pass
         t, BN, nw = best
         print(f"   int4 GEMV*: {t:.3f} ms  ({gb_i4/(t/1e3):.0f} GB/s)  [BLOCK_N={BN} warps={nw}]  speedup {t_fp16/t:.2f}x")
-        # split-K variant
+        # split-K variant (wider sweep)
         bestk = None
-        for BN in [32, 64, 128]:
+        n_groups = K // G
+        for BN in [32, 64, 128, 256]:
             for nw in [1, 2, 4]:
-                for sk in [2, 4, 8, 16]:
-                    try:
-                        c2 = awq_gemv_splitk(a, qw, scales, qz, G, BLOCK_N=BN, num_warps=nw, split_k=sk)
-                        if (c_ref.float() - c2.float()).abs().max().item() > 0.5: continue
-                        tt = bench(lambda: awq_gemv_splitk(a, qw, scales, qz, G, BLOCK_N=BN, num_warps=nw, split_k=sk))
-                        if bestk is None or tt < bestk[0]: bestk = (tt, BN, nw, sk)
-                    except Exception:
-                        pass
+                for sk in [4, 8, 16, 32, 48, n_groups]:
+                    for ns in [1, 2, 3]:
+                        try:
+                            c2 = awq_gemv_splitk(a, qw, scales, qz, G, BLOCK_N=BN, num_warps=nw, split_k=sk, num_stages=ns)
+                            if (c_ref.float() - c2.float()).abs().max().item() > 0.5: continue
+                            tt = bench(lambda: awq_gemv_splitk(a, qw, scales, qz, G, BLOCK_N=BN, num_warps=nw, split_k=sk, num_stages=ns))
+                            if bestk is None or tt < bestk[0]: bestk = (tt, BN, nw, sk, ns)
+                        except Exception:
+                            pass
         if bestk:
-            tt, BN, nw, sk = bestk
-            print(f"   int4 splitK: {tt:.3f} ms  ({gb_i4/(tt/1e3):.0f} GB/s)  [BLOCK_N={BN} warps={nw} splitK={sk}]  speedup {t_fp16/tt:.2f}x")
+            tt, BN, nw, sk, ns = bestk
+            print(f"   int4 splitK: {tt:.3f} ms  ({gb_i4/(tt/1e3):.0f} GB/s)  [BLOCK_N={BN} warps={nw} splitK={sk} stages={ns}]  speedup {t_fp16/tt:.2f}x")
 
 
 if __name__ == "__main__":
