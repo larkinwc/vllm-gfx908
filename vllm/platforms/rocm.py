@@ -405,6 +405,10 @@ def _get_backend_priorities(
     # kernel cannot run. Prefer the portable Triton attention backend.
     if _ON_GFX900:
         backends.append(AttentionBackendEnum.TRITON_ATTN)
+        # TurboQuant KV-cache quant: kernels are pure Triton (no wave32 shuffle),
+        # so they run on wave64 gfx900. Only selected when the user opts in via
+        # --kv-cache-dtype turboquant_*; otherwise TRITON_ATTN above is used.
+        backends.append(AttentionBackendEnum.TURBOQUANT)
         return backends
     # ROCM_ATTN uses (2, num_blocks, ...) KV cache layout which is
     # incompatible with KV connectors that require blocks-first layout.

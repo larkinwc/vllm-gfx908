@@ -494,3 +494,62 @@ bytes is a real win — but only once you stop forcing the work through MFMA-les
 `tl.dot`. A GEMV that reads int4 and accumulates in vector ALU is the right shape
 for this hardware. Same principle would apply to any matmul-light, M=1 path on a
 no-MFMA GPU.
+
+## TurboQuant KV-cache quantization on gfx900 (issue #62)
+
+TurboQuant (arXiv 2504.19874; rotation + Lloyd-Max scalar codebook) compresses the
+KV cache to roughly double usable context / concurrency per VRAM. vLLM ships a full
+in-tree implementation (`vllm/model_executor/layers/quantization/turboquant/`,
+`vllm/v1/attention/{backends/turboquant_attn,ops/triton_turboquant_*}`), selected
+via `--kv-cache-dtype turboquant_*`.
+
+### Why it works on gfx900 (where the llama.cpp HIP port does not)
+The reference llama.cpp-turboquant-hip port **explicitly blocks wave64 hardware
+(Vega/GCN/CDNA)**: its codebook lookup uses `__shfl_sync(width=32)`, which returns
+garbage on 64-wide wavefronts. vLLMs TurboQuant kernels are **pure Triton** — no
+
+## TurboQuant KV-cache quantization on gfx900 (issue #62)
+
+TurboQuant (arXiv 2504.19874; rotation + Lloyd-Max scalar codebook) compresses the
+KV cache to roughly double usable context / concurrency per VRAM. vLLM ships a full
+in-tree implementation (`vllm/model_executor/layers/quantization/turboquant/`,
+`vllm/v1/attention/{backends/turboquant_attn,ops/triton_turboquant_*}`), selected
+via `--kv-cache-dtype turboquant_*`.
+
+### Why it works on gfx900 (where the llama.cpp HIP port does not)
+The reference llama.cpp-turboquant-hip port **explicitly blocks wave64 hardware
+(Vega/GCN/CDNA)**: its codebook lookup uses `__shfl_sync(width=32)`, which returns
+garbage on 64-wide wavefronts. vLLM's TurboQuant kernels are **pure Triton** — no
+`__shfl_sync`, no hand-rolled warp shuffle, no `tl.dot`. Triton handles the
+wavefront width internally, so the wave64 blocker simply does not apply. We only had
+to add `TURBOQUANT` to the gfx900 attention-backend list in `rocm.py` (opt-in; the
+default stays TRITON_ATTN unless `--kv-cache-dtype turboquant_*` is passed). No
+kernel changes were needed. Prefill uses the `F.scaled_dot_product_attention`
+fallback since gfx900 has no flash-attn.
+
+### Preset choice: Qwen3.5 is "quirky-K"
+Per the ollama#15051 sweep, the Qwen3 family is extremely sensitive to *key*-side
+quantization (tq2k = +150% PPL on qwen3:8b — output destroyed), while tolerant of
+value quantization. So on Qwen3.5-9B use **`turboquant_k8v4`** (FP8 keys + 4-bit
+values) — it leaves keys effectively unquantized and only compresses values. V-heavy
+presets are mandatory here; aggressive K presets (`turboquant_3bit_nc`) are unsafe.
+
+### Measured — Qwen3.5-9B, TP=4 gfx900, fp16 weights, max_model_len=16384
+| Metric | FP16 KV (`auto`) | `turboquant_k8v4` | Δ |
+|---|---|---|---|
+| GPU KV cache size | 194,267 tokens | **454,382 tokens** | **2.34×** |
+| Max concurrency @16k ctx | 11.86× | **27.73×** | **2.34×** |
+| Decode tok/s, B=1 (~8k prefill) | 4.75 | 5.10 | +7% |
+| Decode tok/s, B=8 | 12.20 | 13.78 | +13% |
+
+Output stays coherent ("The capital of France is Paris"; correct photosynthesis
+explanation). **2.34× more context/concurrency per VRAM, plus a small decode speedup**
+(fewer KV bytes read per step). Note Qwen3.5 is hybrid — only 8/32 layers are full
+attention with a KV cache (rest are GDN linear-attn), so the cache footprint is
+already small; the 2.34× multiplier applies to that KV-cached portion.
+
+Cold start pays the usual GDN/FLA Triton autotune (~647s cold, ~60s warm) plus the
+TurboQuant centroid init. `enforce_eager=True` as always on gfx900.
+
+Repro: `bench_scripts/tq_measure.py {auto|turboquant_k8v4}` (TP4, 16k ctx; prints
+GPU KV cache size + decode tok/s at B=1/8).
