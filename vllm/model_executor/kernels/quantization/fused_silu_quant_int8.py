@@ -230,6 +230,22 @@ def try_stash_fused_silu_quant_int8(
     """
     # Fast negative branches — keep cheap so the legacy path eats near-zero
     # overhead when fusion is off.
+    #
+    # torch.compile / Dynamo guard: this helper is a Python-side producer
+    # (stashes a cache attribute via setattr) and calls
+    # ``torch.cuda.is_current_stream_capturing()`` below, which returns a
+    # bool and cannot be traced into the Dynamo FX graph ("torch.* op
+    # returned non-Tensor"). Under ``VLLM_MI100_TORCH_COMPILE=1`` the
+    # Qwen MoE/MLP forward is wrapped by ``@support_torch_compile``, so
+    # this would abort fullgraph capture. ``torch.compiler.is_compiling()``
+    # is itself Dynamo-traceable and constant-folds to True during capture,
+    # so this branch short-circuits before the untraceable op. Returning
+    # False here is correct: the fusion is a no-op inside a traced graph
+    # (it cannot run the Python stash), and the subsequent
+    # ``act_fn`` + ``down_proj`` sequence is preserved, so the compiled
+    # path is byte-identical to the legacy ``scaled_int8_quant`` path.
+    if torch.compiler.is_compiling():
+        return False
     if is_fused_silu_quant_int8_disabled():
         return False
     if gate_up.dim() != 2 or gate_up.dtype != torch.float16:
