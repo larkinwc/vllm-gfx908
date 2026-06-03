@@ -618,3 +618,55 @@ measured. After a structural change (here LLMM1 halving GPU-busy), revisit prior
 negatives — the cheap A/B flipped from 0% to 3.6x.
 
 Repro: `bench_scripts/graph_ab.py {eager|graph}`, `bench_scripts/graph_combo.py graph turboquant_k8v4`.
+
+# PP-over-TP revisited after LLMM1 + CUDA graphs (issue #55) — the advantage inverted
+
+BENCH_GFX900.md (eager, pre-LLMM1) found pipeline parallel beat tensor parallel at
+equal GPU count by +48-90%, for two reasons: (1) PP swaps the per-layer all-reduce
+for cheap point-to-point sends, and (2) pure TP makes each gfx900 do a small,
+inefficient slice of a matrix-core-less FP16 GEMM. **Both reasons were undermined by
+later work**, so we re-measured.
+
+## What changed since the original PP benchmark
+- **#56 profile**: RCCL all-reduce is only ~2% of the decode step, not the dominant
+  cost the PP motivation assumed.
+- **#59 LLMM1**: decode GEMMs are now real GEMVs, not padded macrotile matmuls. A
+  GEMV is not "inefficiently sliced" by a 4-way TP split -> reason (2) is gone.
+- **#63 CUDA graphs**: the host dispatch gap that PP's pipelining used to hide is
+  now removed for everyone.
+
+## Head-to-head, 4 GPUs, one socket, LLMM1 + CUDA graphs, Qwen3.5-9B
+Offline `LLM.generate`, decode out tok/s (aggregate), max_num_seqs=32.
+
+| concurrency | TP4 | TP2xPP2 | winner |
+|---|---:|---:|---|
+| c=1 (single-stream) | **52.3** | 32.5 | **TP4 +61%** |
+| c=8 | 48.9 | **54.8** | PP +12% |
+| c=32 (peak throughput) | **220.0** | 176.4 | **TP4 +25%** |
+
+Contrast with the old eager numbers (PP won every cell, +48-90%). With LLMM1 +
+graphs, **TP4 now wins single-stream and peak throughput**; PP only edges ahead in a
+narrow mid-concurrency band (c~8) where its pipeline fills but TP hasn't yet reached
+its batched sweet spot.
+
+### Why TP flipped to winning
+- TP4 c=1 went from ~4.6 tok/s (old eager) to **52.3** (LLMM1 + graphs) = ~11x. The
+  things that made TP slow (padded GEMM slices, per-step dispatch) are exactly what
+  LLMM1 + graphs fixed, so TP no longer needs PP to hide them.
+- PP's structural latency tax (c=1 must walk all pipeline stages) is now a net
+  negative because there's no longer a big per-layer overhead for it to amortize.
+
+## 8-GPU PP not usable here (offline)
+TP2xPP4 (8 GPUs) crashes during init on the offline `LLM.generate` path in this build
+— `hipErrorLaunchFailure` across all PP ranks, in **both** eager and graph modes
+(GPUs recover via reset_method=2). The old TP2xPP4 numbers came from server mode with
+`--no-async-scheduling`; the offline PP4 path regressed since. Not pursued further —
+the 4-GPU result already answers the question, and TP4 is the better config anyway.
+
+## Recommendation (updated)
+**Use TP (TP4 within one socket), not PP, for gfx900 decode now that LLMM1 + CUDA
+graphs are in.** PP was the right call in the eager/padded-GEMM era; it is no longer.
+The remaining decode levers are batching/concurrency (TP4 scales to ~220 tok/s at
+c=32) and the int4 + TurboQuant stack.
+
+Repro: `bench_scripts/pp_bench.py {tp4|tp2pp2} {graph|eager} <num_gpus>`.
