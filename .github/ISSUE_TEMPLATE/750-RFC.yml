@@ -7,7 +7,7 @@ body:
 - type: markdown
   attributes:
     value: >
-      #### Please take a look at previous [RFCs](https://github.com/vllm-project/vllm/issues?q=label%3ARFC+sort%3Aupdated-desc) for reference.
+      #### Please take a look at previous [RFCs](https://github.com/larkinwc/vllm-gfx908/issues?q=label%3ARFC+sort%3Aupdated-desc) for reference.
 - type: textarea
   attributes:
     label: Motivation.
@@ -48,5 +48,5 @@ body:
   attributes:
     label: Before submitting a new issue...
     options:
-      - label: Make sure you already searched for relevant issues, and asked the chatbot living at the bottom right corner of the [documentation page](https://docs.vllm.ai/en/latest/), which can answer lots of frequently asked questions.
+      - label: Make sure you already searched for relevant issues in this fork ([larkinwc/vllm-gfx908](https://github.com/larkinwc/vllm-gfx908/issues?q=is%3Aissue+sort%3Acreated-desc+)) before opening a new one.
         required: true
