@@ -670,3 +670,74 @@ The remaining decode levers are batching/concurrency (TP4 scales to ~220 tok/s a
 c=32) and the int4 + TurboQuant stack.
 
 Repro: `bench_scripts/pp_bench.py {tp4|tp2pp2} {graph|eager} <num_gpus>`.
+
+# Multi-GPU topology review: TP4 vs TP8 vs TP16 vs cross-socket PP (issue #55 follow-up)
+
+This box is 8x AMD Radeon Pro V340 = **16 gfx900 dies**, split across two CPU sockets:
+GPUs 0-7 on socket 0, GPUs 8-15 on socket 1. Intra-socket P2P is ~8 GB/s; **the
+cross-socket link is the Xeon E5 v3 QPI path at ~0.26 GB/s** (a hardware ceiling, not
+tunable). Every layout decision is dominated by that 30x cross-socket bandwidth cliff.
+
+All runs below use the recommended decode stack: LLMM1 skinny GEMV (#59) + FULL_DECODE_ONLY
+CUDA graphs (#63), Qwen3.5-9B FP16, `max_num_seqs=32`, offline `LLM.generate`, out tok/s.
+
+## Results
+| Layout | GPUs | Socket(s) | c=1 | c=8 | c=32 | Outcome |
+|---|---:|---|---:|---:|---:|---|
+| **TP4** | 4 | one (0-3) | **52.3** | 48.9 | **220.0** | **best** |
+| TP8 | 8 | one (0-7) | 14.7 | 12.7 | 61.8 | ~3.5x worse than TP4 |
+| TP16 | 16 | both (0-15) | stall | - | - | catastrophic, killed |
+| TP8xPP2 | 16 | both | (inconclusive) | - | - | needs clean revisit |
+
+## TP8 (one socket) is much WORSE than TP4 — more TP hurts here
+TP8 c=1 = 14.7 tok/s, *worse than TP4 running eager* (14.9). Doubling TP from 4 to 8:
+- doubles the per-layer all-reduce participant count (8-way collective over PCIe), and
+- halves each die's GEMV slice. With LLMM1 the decode matmul is already a skinny GEMV;
+  splitting an M=1 GEMV 8 ways makes each slice too small to amortize launch overhead,
+  so the all-reduce cost dominates and throughput collapses.
+- Cold init also scaled with GPU count: TP8 took ~662s (vs ~67s for TP4) for GDN/FLA
+  Triton autotune + graph capture.
+**Takeaway: TP4 is the sweet spot. Going past TP4 on this box is a net loss for decode.**
+
+## TP16 (cross-socket TP) is catastrophic
+Init completed but the first decode step stalled 20+ min and never returned. py-spy
+showed every worker blocked in `all_gather_into_tensor` inside
+`logits_processor._gather_logits` -- the lm_head logits all-gather (vocab=248320)
+across all 16 TP ranks, which **must traverse the 0.26 GB/s QPI link**. Pure TP issues
+a collective on every layer plus this giant logits gather; routing all of that over QPI
+makes a single decode step effectively never finish. Killed; GPUs recovered via
+reset_method=2. **Cross-socket pure TP is unusable -- do not span sockets with TP.**
+
+## TP8xPP2 (cross-socket PP) -- inconclusive, flagged for clean revisit
+The theoretically-correct way to use all 16 GPUs: TP8 *within* each socket (intra-socket
+all-reduce only) with the PP stage boundary crossing QPI as cheap point-to-point sends.
+It initialized and started decoding (8 active requests reached the decode loop), then
+hit a collective `TimeoutError` mid-decode. **But the host was simultaneously overloaded
+(load avg ~30-50) and SSH was timing out, so this is not a clean measurement.** Worse,
+the cross-socket teardown left two socket-1 dies (GPUs 14/15) with a non-responsive SMU
+(`amdgpu: Failed to send message ... ret 0xffffffff` looping) and ~57 kernel ttm workers
+stuck in uninterruptible D-state; those two dies then fell off the PCIe bus and a warm
+reboot did not recover them (needs a cold power cycle). **Verdict: TP8xPP2 is worth a
+proper, isolated retry on a quiet box, NOT a recorded negative result.** See "Revisit"
+below.
+
+## Conclusion / recommendation
+- **Use TP4 on one socket for decode.** It wins single-stream (52.3 tok/s) and peak
+  throughput (220 tok/s at c=32), and avoids every cross-socket pitfall.
+- More TP than 4 hurts (TP8 ~3.5x worse); cross-socket TP (TP16) is unusable.
+- The QPI link (0.26 GB/s) is the hard wall for any 16-GPU layout. The only layout that
+  could plausibly use both sockets is cross-socket PP (point-to-point, not all-reduce),
+  which remains an open question pending a clean retry.
+- For multi-tenant serving, run **independent TP4 (or TP8) engines per socket** rather
+  than one model spanning sockets.
+
+## Revisit later: TP8xPP2 on a quiet box
+Retry `bench_scripts/run_topo.sh tp8pp2 eager 16` (and `graph 16`) only when (a) all 16
+GPUs are healthy after a cold power cycle, (b) the host is idle, and (c) consider raising
+the distributed collective timeout (`--distributed-timeout` / `TORCH_NCCL_*` env) so the
+QPI activation hand-off doesn't trip the default timeout. The question to answer: can PP
+keep the per-layer all-reduce inside each socket and only pay QPI at the single stage
+boundary, and is the resulting tok/s competitive with two independent TP4 engines?
+
+Scripts: `bench_scripts/topo_bench.py {tp4|tp8|tp16|tp8pp2} {graph|eager}` via
+`bench_scripts/run_topo.sh <layout> <mode> <num_gpus>`.
