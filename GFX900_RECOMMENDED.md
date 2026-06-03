@@ -1,4 +1,7 @@
-# Recommended inference setup — gfx900 (V340 / Vega10), Qwen3.5-9B
+# Recommended inference setup — gfx900 (V340 / Vega10)
+
+Covers two validated models on this box: **Qwen3.5-9B** (dense hybrid) and
+**Qwen3-Coder-Next-AWQ-4bit** (sparse MoE, see section near the end).
 
 This is the **prescriptive "how to run"** companion to the deep-dive in
 `PERF_GFX900.md`. It distills everything we measured on this box (8× Radeon Pro
@@ -122,6 +125,90 @@ the per-die cap. For long context **and** batching with the AWQ model, use **TP4
   needing a reboot. (`/etc/modprobe.d/amdgpu-reset.conf`; reversible.)
 - Pure-Triton TurboQuant kernels run on wave64 — the wave32 `__shfl_sync` blocker
   that stops the llama.cpp HIP port does **not** apply to us.
+
+---
+
+## Second model: Qwen3-Coder-Next (sparse MoE, 80B total / 3B active)
+
+`bullpoint/Qwen3-Coder-Next-AWQ-4bit` runs well on gfx900. It is a **hybrid
+sparse-MoE**: 48 layers of `3×(GatedDeltaNet→MoE) + 1×(GatedAttn→MoE)`, 512
+experts (10 active + 1 shared) at expert-intermediate 512, AWQ 4-bit group_size 32
+(compressed-tensors / pack-quantized). ~45 GB of weights. Gated-attn here is
+head_dim 256, 16 Q / 2 KV heads (different from Qwen3.5-9B).
+
+**Recommended run (TP4×PP2 on one socket, graphs, optional TurboQuant):**
+
+```bash
+# 8 dies, one socket. TP stays at the efficient 4; shallow PP2 holds the ~45 GB.
+HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 VLLM_USE_V1=1 \
+vllm serve bullpoint/Qwen3-Coder-Next-AWQ-4bit \
+  --tensor-parallel-size 4 \
+  --pipeline-parallel-size 2 \
+  --no-async-scheduling \
+  --dtype float16 \
+  --gpu-memory-utilization 0.92 \
+  --max-model-len 32768 \
+  --max-num-seqs 32 \
+  --trust-remote-code \
+  --kv-cache-dtype turboquant_k8v4 \
+  --compilation-config '{"mode":0,"cudagraph_mode":[2,0],"cudagraph_capture_sizes":[1,8,16,32]}'
+# PP needs --no-async-scheduling in server mode.
+# Drop --kv-cache-dtype to use FP16 KV (slightly faster single-stream, half the KV capacity).
+```
+
+### Why TP4×PP2 (not TP8)
+Same finding as the dense model: more than TP4 hurts decode (8-way all-reduce +
+tiny per-rank GEMV slices). The ~45 GB of weights do not fit a single-socket TP4
+(8 GiB/die × 4), so we add **shallow PP2** to span 8 dies while keeping each TP
+group at the efficient width of 4. Both TP groups stay inside socket 0 — never
+cross the QPI link (0.26 GB/s).
+
+### Measured decode (bs=1, TP4×PP2)
+| config | tok/s | note |
+|---|---|---|
+| eager | 8.5 | baseline |
+| + CUDA graphs (#63) | 19.3 | 2.3× |
+| + small-m GEMV fix (#65) | **26.8** | **3.2× total** |
+
+The small-m GEMV fix (`shared_expert_gate` is a `Linear[2048→1]`, m=1, which
+missed LLMM1's `m%4==0` gate and fell to a wasteful 64×64 rocBLAS macrotile)
+routes that scalar projection to a fused multiply-reduce. +39% MoE decode; dense
+Qwen3.5-9B is unaffected (the gate is narrow). The MoE expert path itself
+(`fused_moe_kernel_gptq_awq`, Triton, ~177 µs/call on wave64) is healthy and not
+the bottleneck.
+
+### Throughput scales strongly with concurrency
+| c | FP16 KV tok/s | turboquant_k8v4 tok/s |
+|---|---|---|
+| 1 | 26.7 | 23.8 |
+| 8 | 48.3 | 51.7 |
+| 16 | 79.6 | 88.7 |
+| 32 | **113.7** | **114.0** |
+
+**4.3× aggregate from c=1→32.** Concurrency is the real throughput lever (decode
+per-step time is ~flat with batch), exactly as for the dense model.
+
+### TurboQuant on this MoE: throughput-neutral, 2.5× KV capacity
+TurboQuant is the same lossless quirky-K preset (FP8 keys + 4-bit values) and is
+**throughput-neutral** here (table above). Its payoff is **KV-cache capacity**:
+
+| KV dtype | KV cache tokens | Max concurrency @ 32K ctx |
+|---|---|---|
+| auto (FP16) | 62,100 | 1.90× |
+| **turboquant_k8v4** | **156,483** | **4.78×** |
+
+**2.52× more KV capacity** → 4.78× vs 1.90× concurrent 32K-context streams on the
+same VRAM. Use it whenever long context or high concurrency matters; otherwise
+FP16 KV is marginally faster at single-stream. (No code change was needed — the TQ
+backend already uses the gfx900-safe SDPA prefill fallback, since
+`is_flash_attn_varlen_func_available()` is False on this box.)
+
+### Cold start
+~759 s first run (MoE + GDN + TQ Triton autotune), ~156 s warm (autotune caches).
+
+### Repro
+- `bench_scripts/coder_tput.py {auto|turboquant_k8v4}` — concurrency sweep + KV size.
+- `bench_scripts/coder_smoke.py`, `coder_prof.py` — smoke + decode profile.
 
 ## Repro / benchmarks
 - `bench_scripts/tq_measure.py {auto|turboquant_k8v4}` — KV size + decode tok/s.
