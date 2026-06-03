@@ -306,6 +306,39 @@ def benchmark_config(
     run()
     torch.accelerator.synchronize()
 
+    # NOTE(gfx908): On ROCm 7.12 / torch 2.11, a faulting Triton config
+    # captured into a CUDA graph defers its error to
+    # ``at::cuda::CUDAGraph::~CUDAGraph()``, which calls abort() and kills
+    # the whole Ray worker uncatchably (SYSTEM_ERROR mid-tune). Setting
+    # ``VLLM_MOE_TUNE_NO_CUDAGRAPH=1`` times the kernel eagerly instead, so
+    # a bad config surfaces as a catchable RuntimeError at synchronize()
+    # that the tuning loop can skip. Eager timing is slightly noisier but
+    # fine for ranking configs.
+    no_cudagraph = bool(int(os.environ.get("VLLM_MOE_TUNE_NO_CUDAGRAPH", "0")))
+
+    start_event = torch.Event(enable_timing=True)
+    end_event = torch.Event(enable_timing=True)
+
+    if no_cudagraph:
+        # Warmup
+        for _ in range(5):
+            run()
+        torch.accelerator.synchronize()
+
+        latencies: list[float] = []
+        for i in range(num_iters):
+            prepare(i)
+            torch.accelerator.synchronize()
+
+            start_event.record()
+            for _ in range(10):
+                run()
+            end_event.record()
+            end_event.synchronize()
+            latencies.append(start_event.elapsed_time(end_event))
+        avg = sum(latencies) / (num_iters * 10) * 1000  # us
+        return avg
+
     # Capture 10 invocations with CUDA graph
     graph = torch.cuda.CUDAGraph()
     with torch.cuda.graph(graph):
@@ -317,9 +350,6 @@ def benchmark_config(
     for _ in range(5):
         graph.replay()
     torch.accelerator.synchronize()
-
-    start_event = torch.Event(enable_timing=True)
-    end_event = torch.Event(enable_timing=True)
 
     latencies: list[float] = []
     for i in range(num_iters):
