@@ -24,11 +24,12 @@ vllm serve QuantTrio/Qwen3.5-9B-AWQ \
   --max-model-len 16384
 ```
 
-This stacks the two gfx900 wins that we built and validated:
+This stacks the gfx900 wins we built and validated (LLMM1 M=1 GEMV is on by default via `VLLM_ROCM_USE_SKINNY_GEMM=1`):
 
 | Layer | Mechanism | Win | Issue |
 |---|---|---|---|
 | **Weights** | int4 AWQ via hand-written gfx900 GEMV (sidesteps MFMA-less `tl.dot`) | **~1.5× decode vs FP16 on half the GPUs** | #57 |
+| **All M=1 FP16 GEMMs** | LLMM1 skinny GEMV (lm_head + qkv/o/gate_up projections) | **2.2× FP16 decode (150→67 ms/step)** | #59 |
 | **KV cache** | TurboQuant `turboquant_k8v4` (FP8 keys + 4-bit values) | **2.34× context/concurrency per VRAM, ~0 decode cost** | #62 |
 
 Both verified active together (coherent output; decode 9.97 tok/s ≈ standalone AWQ
