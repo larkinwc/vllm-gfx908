@@ -570,3 +570,51 @@ Measured PPL (12,264 tokens, 24x512 windows, prefill logprobs), Qwen3.5-9B TP4:
 FP16 KV = 9.8885; turboquant_k8v4 = 9.8879 (delta -0.006%, lossless within noise).
 Confirms the FP8-key choice avoids the quirky-K catastrophe at zero quality cost.
 Repro: bench_scripts/ppl.py {auto|turboquant_k8v4}.
+
+# UPDATE: HIP CUDA graphs now give 3.6x decode (revisit after LLMM1) — issue #63
+
+The "HIP CUDA-graph investigation — RESOLVED" section above concluded graphs give
+**zero** decode speedup and that enforce_eager should stay the default. **That
+conclusion is now obsolete.** It was correct for its data (GPU-busy 74.6 ms/step, so
+the host dispatch gap was a small slice), but the LLMM1 win (#59) cut GPU-busy to
+27.9 ms/step, making the GPU-idle dispatch gap **59% of the step**. Graphs remove
+exactly that gap.
+
+## Re-test (Qwen3.5-9B TP4, FP16, bs=1 decode, best of 3 x 160 tok)
+| Mode | ms/tok | tok/s |
+|---|---:|---:|
+| Eager (LLMM1) | 67.0 | 14.93 |
+| **Graph + LLMM1** | **18.4** | **54.41** |
+
+3.6x, reproduced twice (18.4 / 18.5 ms), coherent identical output. Config:
+`mode=NONE` + `cudagraph_mode=FULL_DECODE_ONLY` + `capture_sizes=[1]` (Inductor/
+compile stays OFF — only HIP graph capture; Inductor still crashes on ROCm).
+
+## Full decode progression (Qwen3.5-9B, bs=1)
+| Config | tok/s | vs original |
+|---|---:|---:|
+| FP16 TP4 eager (original) | 6.65 | 1.0x |
+| + LLMM1 GEMV (#59) | 14.85 | 2.2x |
+| + CUDA graphs (#63) | **54.4** | **8.2x** |
+
+Full stack (AWQ int4 + TurboQuant KV + LLMM1 + graphs), TP2 on half the GPUs:
+14.12 -> **37.71 tok/s**, coherent.
+
+## Gotcha: hybrid (Mamba/GDN) graph capture needs max_num_seqs <= Mamba cache blocks
+Qwen3.5 is hybrid; each decode sequence needs one Mamba/GDN state cache block. Graph
+capture fails if `max_num_seqs` exceeds the available blocks:
+`max_num_seqs (256) exceeds available Mamba cache blocks (N) ... CUDA graph capture
+cannot proceed`. Fix: set `--max-num-seqs <= N` (N depends on
+gpu_memory_utilization and model; was 42 for AWQ TP2 on 8 GiB dies — use 32).
+
+## New guidance
+**Use CUDA graphs for gfx900 decode** (do NOT pass `enforce_eager`). Set
+`compilation_config(mode=NONE, cudagraph_mode=FULL_DECODE_ONLY, capture_sizes=[1])`
+and `max_num_seqs` within the Mamba-block budget. Cold start still pays the
+GDN/FLA Triton autotune + a 1-2s capture; both cache.
+
+Lesson: a perf conclusion is only valid for the bottleneck profile under which it was
+measured. After a structural change (here LLMM1 halving GPU-busy), revisit prior
+negatives — the cheap A/B flipped from 0% to 3.6x.
+
+Repro: `bench_scripts/graph_ab.py {eager|graph}`, `bench_scripts/graph_combo.py graph turboquant_k8v4`.

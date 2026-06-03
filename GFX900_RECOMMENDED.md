@@ -18,10 +18,13 @@ vllm serve QuantTrio/Qwen3.5-9B-AWQ \
   --tensor-parallel-size 4 \
   --dtype float16 \
   --kv-cache-dtype turboquant_k8v4 \
-  --enforce-eager \
   --gpu-memory-utilization 0.90 \
   --language-model-only \
-  --max-model-len 16384
+  --max-model-len 16384 \
+  --max-num-seqs 32 \
+  --compilation-config '{"mode":0,"cudagraph_mode":[2,0],"cudagraph_capture_sizes":[1]}'
+# NOTE: use CUDA graphs (do NOT pass --enforce-eager) — 3.6x decode on gfx900 (#63).
+# --max-num-seqs must be <= the model's Mamba/GDN cache-block budget or capture fails.
 ```
 
 This stacks the gfx900 wins we built and validated (LLMM1 M=1 GEMV is on by default via `VLLM_ROCM_USE_SKINNY_GEMM=1`):
@@ -30,6 +33,7 @@ This stacks the gfx900 wins we built and validated (LLMM1 M=1 GEMV is on by defa
 |---|---|---|---|
 | **Weights** | int4 AWQ via hand-written gfx900 GEMV (sidesteps MFMA-less `tl.dot`) | **~1.5× decode vs FP16 on half the GPUs** | #57 |
 | **All M=1 FP16 GEMMs** | LLMM1 skinny GEMV (lm_head + qkv/o/gate_up projections) | **2.2× FP16 decode (150→67 ms/step)** | #59 |
+| **Per-step dispatch** | HIP CUDA graphs (FULL_DECODE_ONLY) once GPU-busy is small | **3.6× decode on top of LLMM1** | #63 |
 | **KV cache** | TurboQuant `turboquant_k8v4` (FP8 keys + 4-bit values) | **2.34× context/concurrency per VRAM, ~0 decode cost** | #62 |
 
 Both verified active together (coherent output; decode 9.97 tok/s ≈ standalone AWQ
@@ -42,11 +46,14 @@ Both verified active together (coherent output; decode 9.97 tok/s ≈ standalone
 ### 1. `--dtype float16` (never bf16)
 gfx900 has no usable bf16 path for this model. FP16 is mandatory.
 
-### 2. `--enforce-eager` (always)
-HIP CUDA graphs **work** on gfx900 but give **zero decode speedup** — the decode
-floor is per-step all-reduce + GDN-kernel overhead, not launch overhead. Graphs
-also force Inductor (crashes on ROCm). So eager is the correct default, not a
-workaround. (Full A/B in `PERF_GFX900.md` § HIP CUDA-graph investigation.)
+### 2. CUDA graphs ON (do NOT use `--enforce-eager`) — updated, see #63
+HIP CUDA graphs give a **3.6× decode speedup** on gfx900 (eager 67 → graph 18.4
+ms/tok) once the LLMM1 GEMV (#59) shrinks GPU-busy time so the host dispatch gap
+(59% of the step) dominates. Use `mode=NONE` (Inductor/compile stays off — it
+crashes on ROCm) + `cudagraph_mode=FULL_DECODE_ONLY` + `capture_sizes=[1]`.
+**Constraint:** Qwen3.5 is hybrid (Mamba/GDN); `--max-num-seqs` must be ≤ the
+available Mamba cache blocks or capture fails. (Earlier docs said eager was best —
+that was true before LLMM1; the bottleneck moved. See `PERF_GFX900.md` § #63.)
 
 ### 3. `--kv-cache-dtype turboquant_k8v4` (FP8 keys — NOT a K-quant preset)
 Qwen3 family is **"quirky-K"**: key-side quantization is catastrophic
