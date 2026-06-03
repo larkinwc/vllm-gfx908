@@ -17,4 +17,4 @@ PLEASE FILL IN THE PR DESCRIPTION HERE ENSURING ALL CHECKLIST ITEMS (AT THE BOTT
 - [ ] (Optional) The necessary documentation update, such as updating `supported_models.md` and `examples` for a new model.
 </details>
 
-**BEFORE SUBMITTING, PLEASE READ <https://docs.vllm.ai/en/latest/contributing>** (anything written below this line will be removed by GitHub Actions)
+This is an unofficial community fork of vLLM for AMD gfx908 (MI100). Please read the contribution guidelines in [`AGENTS.md`](../AGENTS.md) before submitting.

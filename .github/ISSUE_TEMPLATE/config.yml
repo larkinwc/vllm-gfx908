@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Questions
-    url: https://discuss.vllm.ai
-    about: Ask questions and discuss with other vLLM community members
+  - name: Upstream vLLM
+    url: https://github.com/vllm-project/vllm
+    about: This is an unofficial community fork for AMD gfx908 (MI100). For general (non-gfx908) questions, please use the upstream vLLM project.
