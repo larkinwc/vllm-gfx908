@@ -173,6 +173,25 @@ def rocm_unquantized_gemm_impl(
     # LLMM1 skinny GEMV still works on wave64 and is ~3.5x faster than the
     # padded rocBLAS macrotile path for the M=1 decode case (e.g. lm_head).
     # wvSplitK device-asserts on gfx900, so only the n==1 LLMM1 branch is enabled.
+    # gfx900: tiny-output M=1 GEMVs (e.g. Qwen3-Next shared_expert_gate,
+    # [hidden -> 1]) have m not divisible by 4, so they fail the LLMM1 gate
+    # below and fall to padded rocBLAS, which computes a wasteful 64x64
+    # macrotile for a 1-row output (~300 us vs ~20 us). For these few-row
+    # cases a fused multiply-reduce is correct and ~14x faster.
+    if (
+        envs.VLLM_ROCM_USE_SKINNY_GEMM
+        and on_gfx900()
+        and x.dtype in [torch.float16, torch.bfloat16]
+        and n == 1
+        and m <= 8
+        and m % 4 != 0
+        and bias is None
+    ):
+        # weight is [m, k]; broadcast x [1, k] over rows and reduce over K -> [m]
+        x_view = x.reshape(-1, x.size(-1))
+        out = (x_view * weight).sum(dim=-1)
+        return out.reshape(*x.shape[:-1], m)
+
     if (
         envs.VLLM_ROCM_USE_SKINNY_GEMM
         and on_gfx900()
