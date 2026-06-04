@@ -156,14 +156,30 @@ vllm serve bullpoint/Qwen3-Coder-Next-AWQ-4bit \
 # Drop --kv-cache-dtype to use FP16 KV (slightly faster single-stream, half the KV capacity).
 ```
 
-### Why TP4×PP2 (not TP8)
-Same finding as the dense model: more than TP4 hurts decode (8-way all-reduce +
-tiny per-rank GEMV slices). The ~45 GB of weights do not fit a single-socket TP4
-(8 GiB/die × 4), so we add **shallow PP2** to span 8 dies while keeping each TP
-group at the efficient width of 4. Both TP groups stay inside socket 0 — never
-cross the QPI link (0.26 GB/s).
+### TP4×PP2 vs TP8 — pick by workload
+The ~45 GB of weights do not fit a single-socket TP4 (8 GiB/die × 4), so the two
+viable 8-die layouts are **TP4×PP2** (shallow PP to span 8 dies, TP stays at the
+efficient width 4) and **TP8**. Both stay inside socket 0 (never cross the
+0.26 GB/s QPI link). Clean A/B (graphs, identical settings):
 
-### Measured decode (bs=1, TP4×PP2)
+| Layout | c=1 | c=8 |
+|---|---|---|
+| **TP8** | **33.2** | 42.3 |
+| **TP4×PP2** | 23.2 | **44.9** |
+
+- **Single-stream / latency:** use **TP8** (+43% at c=1). It is one pipeline stage,
+  so it avoids the PP bubble — at bs=1 the decode profile shows TP4×PP2 spends
+  ~80 ms/step waiting for the other PP stage, which costs more than TP8's heavier
+  8-way all-reduce. (TP8 needs gpu_mem ~0.92 for KV headroom; 0.95 OOMs.)
+- **Throughput / concurrent serving:** use **TP4×PP2** — concurrency fills the PP
+  bubble and TP4's cheaper 4-way all-reduce then wins (c≥8), scaling to 114 tok/s
+  at c=32.
+
+(This inverts the dense-model result where TP4 beat TP8: for the MoE the choice is
+TP8 vs TP4×*PP2*, so it is the 8-way-all-reduce penalty vs the PP-bubble penalty,
+and at bs=1 the bubble is the bigger cost. See issue #65.)
+
+### Measured decode progression (bs=1, TP4×PP2)
 | config | tok/s | note |
 |---|---|---|
 | eager | 8.5 | baseline |
