@@ -2,23 +2,61 @@
 # Issue draft: [gfx908] Fuse MoE routing/glue kernels to cut decode overhead
 
 > Ready-to-file issue for the `larkinwc/vllm-gfx908` fork. Candidate #2 from the
-> `PERF_GFX908.md` decode-triage. File after the split-K GEMM work concludes.
+> `PERF_GFX908.md` decode-triage.
+>
+> **STATUS: DE-PRIORITIZED (2026-06).** A graph-timed feasibility pass (below)
+> shows the realistic end-to-end ceiling is **~1% TPOT per fusable kernel**, with
+> real risk of slowing the 66% GEMM. Filed for the record, not recommended as
+> active work unless the cost model changes. Read the "Reality check" section
+> before starting.
 
-## Summary
+## Reality check — graph-timed ceilings (READ FIRST)
 
-On gfx908 (MI100) W4A16 MoE decode (M=1), the int4 expert **GEMM is only ~63%**
-of the per-layer MoE GPU time; the remaining **~37% is a chain of small
-"routing/glue" kernels** that are launch/overhead-bound, not compute-bound. These
-are the next structural target after the GEMM. This issue proposes fusing them
-to cut the fixed per-layer overhead.
+The original motivation (below) used an **eager-mode** rocprof, which is inflated
+by per-kernel launch gaps (~7 µs each on gfx908). **Real serving runs under CUDA
+graphs, which eliminate those gaps.** Re-measured graph-timed (the numbers that
+actually matter), per layer at M=1:
 
-## Evidence (from this fork's decode profiling)
+| kernel | µs/layer (graph) | % of MoE | 48-layer E2E ceiling | fusability |
+|---|---:|---:|---:|---|
+| `fused_moe_kernel_gptq_awq` (GEMM) | 43.7 | 66% | — | already optimal (split-K failed) |
+| `moe_align_block_size` | 7.2 | 11% | ~1.9% TPOT | C++; scans all 512 experts; hard |
+| `reduce_kernel` | 4.9 | 7% | ~1.3% TPOT | maybe → down-GEMM epilogue |
+| `act_and_mul` | 4.4 | 7% | ~1.1% TPOT | **structurally hard** (gate/up tiles N apart) |
+| `count_and_sort_expert_tokens` | 4.3 | 7% | ~1.1% TPOT | C++ |
+| **total glue** | **~21** | **34%** | **~5.4% TPOT (unreachable)** | — |
 
-rocprof `--kernel-trace` of the real `fused_experts` at M=1 (Qwen3-Coder-Next,
-E=512/top-10, H=2048, N=128/shard at TP=4, gs=32), excluding `torch.randn`
-harness noise — per layer, per token:
+Key facts that sink the value case:
+- **act_and_mul can't sit in the gate_up GEMM epilogue cheaply.** `silu_and_mul`
+  computes `out[i] = silu(c1[i]) * c1[i+N]`; the gate half (cols 0..N) and up half
+  (cols N..2N) live in *different* N-tiles, so a program computing one tile lacks
+  the matching tile. Fusing requires each program to compute *both* tiles (two
+  `tl.dot` regions) — a real GEMM restructure that risks slowing the 66% kernel
+  for a ~1.1% glue saving.
+- **Launch overhead is already hidden by graphs.** The isolated `silu_and_mul`
+  is ~2 µs of true GPU time; the ~7 µs seen eagerly was launch latency that
+  cudagraph_mode removes for free in production. There is no "launch tax" left to
+  reclaim by fusion in the graphed regime.
+- **Each remaining target nets ~1% TPOT** and several are deep C++ (`moe_align`,
+  `count_and_sort`) that scan all 512 experts. The integration-tax lesson from
+  the split-K GEMM (a real micro-saving erased on the full path) applies here at
+  even smaller absolute scale.
 
-| kernel | µs/iter | share | role |
+**Recommendation:** leave MoE decode as-is. The GEMM is optimal and the glue is
+small under graphs. Pursue this only if (a) a higher-concurrency regime shifts
+the glue share materially, or (b) a single fused align+count+act kernel can be
+shown to net > a few % without touching the GEMM tiles.
+
+---
+
+## Original motivation (eager-profile; superseded by the reality check above)
+
+On gfx908 (MI100) W4A16 MoE decode (M=1), an eager rocprof suggested the int4
+expert **GEMM is ~63%** of per-layer MoE GPU time with **~37% routing/glue**.
+That framing over-counts the glue because eager timing includes launch gaps that
+graphs remove (see above). Retained for context:
+
+| kernel | µs/iter (eager) | share | role |
 |---|---:|---:|---|
 | `fused_moe_kernel_gptq_awq` | ~57 | ~63% | int4 expert GEMM (separate effort) |
 | `reduce_kernel` (at::native) | ~12 | ~13% | routing softmax / topk-weight reduce |
@@ -26,14 +64,6 @@ harness noise — per layer, per token:
 | `act_and_mul_kernel` | ~5 | ~6% | SiLU(gate) * up |
 | `count_and_sort_expert_tokens_kernel` | ~4.6 | ~5% | routing histogram/sort |
 | `topkGating` | ~1.4 | ~2% | router top-k |
-
-The glue total (~33 µs) is **~37% of the ~90 µs MoE GPU time per layer**. With 48
-MoE layers and an ~18.5 ms TPOT, the glue is **48 × 33 µs ≈ 1.6 ms ≈ ~8.6% of
-decode** — a larger end-to-end pool than the GEMM's reclaimable slice.
-
-Why they're expensive at M=1: each is a tiny kernel (1 token × top-10) whose
-runtime is dominated by **launch latency**, not work. The fixed ~5–12 µs each
-pays the gfx908 kernel-launch overhead repeatedly.
 
 ## Proposed work
 
@@ -76,7 +106,7 @@ causes that will also threaten this work:
 - **Measure full `fused_experts`, CUDA-graph-timed**, never eager (eager dispatch
   ≈ 800 µs/op swamps everything) and never the isolated kernel alone.
 
-## Done when
+## Done when (if ever revived)
 
 - One or more glue kernels are fused, correctness-validated, and show a net
   CUDA-graph-timed win on `fused_experts` across M = 1–8, **and** an end-to-end
@@ -84,6 +114,10 @@ causes that will also threaten this work:
   `PERF_GFX908.md` §4).
 - Or a documented negative result explaining why fusion didn't net out (as we did
   for tuning and the GEMM split-K).
+
+Given the ~1% ceilings, the only version worth attempting is a **single fused
+align+count(+act) kernel** that removes multiple launches at once *without*
+touching the GEMM tiles — and only if a quick prototype clears a few % net.
 
 ## References in-repo
 - `PERF_GFX908.md` — hardware model, the loop, the decode triage (§6).

@@ -175,11 +175,16 @@ CUDA-graph timing + roofline + occupancy).
   was not.
 
 ### Open / unexplored (candidate next work)
-- **MoE routing-glue fusion:** ~37% of MoE GPU time is small overhead-bound
-  kernels (`moe_align_block_size` 10 µs, `reduce_kernel` 12 µs, `act_and_mul`
-  5 µs, `count_and_sort` 4.6 µs). Folding align/act into the GEMM
-  prologue/epilogue is a *fusion* play (not a GEMV) and is the remaining
-  structural lever. Higher risk; correctness surface large.
+- **MoE routing-glue fusion — DE-PRIORITIZED (2026-06).** The "~37% glue" was an
+  *eager* rocprof inflated by launch gaps. **Graph-timed** (real serving), per
+  layer at M=1: GEMM 43.7 µs (66%), `moe_align` 7.2 µs (11%), `reduce` 4.9 µs
+  (7%), `act_and_mul` 4.4 µs (7%), `count_and_sort` 4.3 µs (7%) — glue ~21 µs
+  (34%) of true GPU time. End-to-end ceilings (48 layers / 18.5 ms TPOT): each
+  fusable kernel ≈ **~1% TPOT**, all glue ≈ 5.4% (unreachable). And `act_and_mul`
+  won't sit in the gate_up epilogue cheaply — gate (cols 0..N) and up (cols
+  N..2N) are in different N-tiles, so fusion means a GEMM restructure that risks
+  the 66% kernel. Verdict: not worth it. Details in
+  `ISSUE_DRAFT_MOE_ROUTING_GLUE_FUSION_GFX908.md` (Reality-check section).
 - **AITER / CK paths** for the int4 MoE GEMM (if available for this shape) —
   would beat Triton-MFMA only if they target the M=1 padding waste in hardware.
 
@@ -212,12 +217,12 @@ generic `tl.dot` tile kernel) and so launched just 80 workgroups.
 
 1. **DONE (negative) — int4 MoE decode GEMM** → split-K MFMA won 1.51×
    isolated but did NOT survive integration (§5). Closed.
-2. **MoE routing-glue fusion** (the ~37% of MoE GPU time in align/reduce/act) —
-   **now the top open candidate.** A *fusion* play (remove launches), not a GEMV.
-   Highest remaining MoE headroom (~8.6% of decode end-to-end) and, unlike
-   split-K, it *removes* launches rather than adding one — so it dodges the
-   integration tax that sank candidate 1. Full spec:
-   `ISSUE_DRAFT_MOE_ROUTING_GLUE_FUSION_GFX908.md`.
+2. **DE-PRIORITIZED — MoE routing-glue fusion.** Graph-timed, the glue is ~34%
+   of MoE GPU time but each fusable kernel caps at **~1% TPOT** end-to-end, and
+   `act_and_mul` fusion would require restructuring the 66% GEMM (gate/up tiles
+   are N apart). The launch overhead the eager profile attributed to glue is
+   already hidden by cudagraphs in production. Closed unless the cost model
+   shifts. Full reality-check: `ISSUE_DRAFT_MOE_ROUTING_GLUE_FUSION_GFX908.md`.
 3. **NOT WORTH IT — dense decode GEMM** (fp16/W4A16/W8A8): already `wvSplitK`,
    full occupancy. A hand kernel would have to beat ROCm's tuned C++; expected
    loss. (Consistent with prior `BENCH_W4A16_*` notes finding dense quant
@@ -236,6 +241,16 @@ Reproduction: `bench_scripts/decode_profile.py <model> <tp>` under
 `rocprofv3 --kernel-trace`. (Note: Qwen tokenizers trip a transformers-v4
 validation bug in the in-process `LLM()` API on this stack — use a
 Llama-family model for the dense triage, or profile Qwen via the server path.)
+
+### Standing conclusion (2026-06)
+The MoE decode well is **mostly dry** at the kernel level: the int4 expert GEMM
+is already occupancy-optimal (split-K wins isolated but not integrated), the
+dense paths already use `wvSplitK`, and the routing/glue is ~34% of MoE GPU time
+but only ~1% TPOT per fusable kernel under cudagraphs. **The one realized MoE
+serving win remains `torch.compile` (~10% geomean on MoE TP=4, ledger above).**
+Further kernel-level MoE decode work is not recommended unless the cost model
+changes (new ROCm/Triton, higher concurrency regime, or a fused multi-launch
+glue kernel that demonstrably clears a few % net).
 
 ---
 
