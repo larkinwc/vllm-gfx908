@@ -72,8 +72,73 @@ PRESET_EXPECTED = {
         key_packed_size=50, value_packed_size=52,
         slot_size=102, slot_size_aligned=102,
     ),
+    # RotorQuant block-diagonal rotation presets. Packed sizes are identical
+    # to the matching Hadamard preset — only the rotation kind differs.
+    "turboquant_planar3_nc": dict(
+        key_fp8=False, key_quant_bits=3,
+        key_mse_bits=3, value_quant_bits=4,
+        mse_bits=3, n_centroids=8, centroid_bits=3,
+        norm_correction=True,
+        key_packed_size=50, value_packed_size=68,
+        slot_size=118, slot_size_aligned=118,
+    ),
+    "turboquant_iso3_nc": dict(
+        key_fp8=False, key_quant_bits=3,
+        key_mse_bits=3, value_quant_bits=4,
+        mse_bits=3, n_centroids=8, centroid_bits=3,
+        norm_correction=True,
+        key_packed_size=50, value_packed_size=68,
+        slot_size=118, slot_size_aligned=118,
+    ),
+    "turboquant_planar4_nc": dict(
+        key_fp8=False, key_quant_bits=4,
+        key_mse_bits=4, value_quant_bits=4,
+        mse_bits=4, n_centroids=16, centroid_bits=4,
+        norm_correction=True,
+        key_packed_size=66, value_packed_size=68,
+        slot_size=134, slot_size_aligned=134,
+    ),
+    "turboquant_iso4_nc": dict(
+        key_fp8=False, key_quant_bits=4,
+        key_mse_bits=4, value_quant_bits=4,
+        mse_bits=4, n_centroids=16, centroid_bits=4,
+        norm_correction=True,
+        key_packed_size=66, value_packed_size=68,
+        slot_size=134, slot_size_aligned=134,
+    ),
+    "turboquant_planar3_sym_nc": dict(
+        key_fp8=False, key_quant_bits=3,
+        key_mse_bits=3, value_quant_bits=3,
+        mse_bits=3, n_centroids=8, centroid_bits=3,
+        norm_correction=True,
+        key_packed_size=50, value_packed_size=52,
+        slot_size=102, slot_size_aligned=102,
+    ),
+    "turboquant_iso3_sym_nc": dict(
+        key_fp8=False, key_quant_bits=3,
+        key_mse_bits=3, value_quant_bits=3,
+        mse_bits=3, n_centroids=8, centroid_bits=3,
+        norm_correction=True,
+        key_packed_size=50, value_packed_size=52,
+        slot_size=102, slot_size_aligned=102,
+    ),
 }
 # fmt: on
+
+
+# Expected rotation metadata per preset.
+PRESET_ROTATION = {
+    "turboquant_k8v4": ("hadamard", False),
+    "turboquant_4bit_nc": ("hadamard", False),
+    "turboquant_k3v4_nc": ("hadamard", False),
+    "turboquant_3bit_nc": ("hadamard", False),
+    "turboquant_planar3_nc": ("planar", False),
+    "turboquant_iso3_nc": ("iso", False),
+    "turboquant_planar4_nc": ("planar", False),
+    "turboquant_iso4_nc": ("iso", False),
+    "turboquant_planar3_sym_nc": ("planar", True),
+    "turboquant_iso3_sym_nc": ("iso", True),
+}
 
 
 # ============================================================================
@@ -119,6 +184,21 @@ class TestTurboQuantConfig:
     def test_norm_correction(self, preset):
         cfg = TurboQuantConfig.from_cache_dtype(preset, head_dim=128)
         assert cfg.norm_correction is PRESET_EXPECTED[preset]["norm_correction"]
+
+    @pytest.mark.parametrize("preset", ALL_PRESETS)
+    def test_rotation_metadata(self, preset):
+        cfg = TurboQuantConfig.from_cache_dtype(preset, head_dim=128)
+        kind, vrot = PRESET_ROTATION[preset]
+        assert cfg.rotation == kind
+        assert cfg.value_rotation is vrot
+
+    def test_value_rotation_requires_block_rotation(self):
+        with pytest.raises(ValueError, match="value_rotation requires"):
+            TurboQuantConfig(rotation="hadamard", value_rotation=True)
+
+    def test_invalid_rotation_raises(self):
+        with pytest.raises(ValueError, match="Unknown rotation"):
+            TurboQuantConfig(rotation="butterfly")
 
     @pytest.mark.parametrize("preset", ALL_PRESETS)
     def test_packed_sizes(self, preset):
@@ -623,3 +703,234 @@ class TestStoreDecodeRoundTrip:
             assert cos_sim > threshold, (
                 f"Preset {preset} head {h}: cosine_sim={cos_sim:.4f} < {threshold}"
             )
+
+
+# ============================================================================
+# RotorQuant block-diagonal rotation tests
+# ============================================================================
+
+
+class TestBlockRotations:
+    """CPU/GPU tests for the planar (Givens) and iso (quaternion) rotations."""
+
+    @pytest.mark.parametrize("kind", ["planar", "iso"])
+    @pytest.mark.parametrize("dim", [64, 128, 256])
+    def test_orthonormal_and_inverse(self, kind, dim):
+        from vllm.model_executor.layers.quantization.turboquant.rotations import (
+            build_rotation,
+        )
+
+        device = DEVICE_TYPE if GPGPU_AVAILABLE else "cpu"
+        PiT = build_rotation(kind, dim, device)
+        Pi = PiT.T.contiguous()
+        eye = torch.eye(dim, device=PiT.device)
+        # Orthonormal: PiT @ PiT.T == I
+        assert torch.allclose(PiT @ PiT.T, eye, atol=1e-4)
+        # Pi is the true inverse of PiT
+        assert torch.allclose(Pi @ PiT, eye, atol=1e-4)
+
+    @pytest.mark.parametrize("kind", ["planar", "iso"])
+    def test_deterministic_across_calls(self, kind):
+        from vllm.model_executor.layers.quantization.turboquant.rotations import (
+            build_rotation,
+        )
+
+        device = DEVICE_TYPE if GPGPU_AVAILABLE else "cpu"
+        a = build_rotation(kind, 128, device)
+        b = build_rotation(kind, 128, device)
+        assert torch.equal(a, b)
+
+    def test_planar_requires_even_dim(self):
+        from vllm.model_executor.layers.quantization.turboquant.rotations import (
+            build_rotation,
+        )
+
+        with pytest.raises(ValueError, match="even head_dim"):
+            build_rotation("planar", 63, "cpu")
+
+    def test_iso_requires_div4_dim(self):
+        from vllm.model_executor.layers.quantization.turboquant.rotations import (
+            build_rotation,
+        )
+
+        with pytest.raises(ValueError, match="divisible by 4"):
+            build_rotation("iso", 66, "cpu")
+
+    @pytest.mark.skipif(not GPGPU_AVAILABLE, reason="GPGPU not available")
+    @pytest.mark.parametrize("kind", ["planar", "iso"])
+    @pytest.mark.parametrize("dim", [64, 128, 256])
+    def test_block_rotate_matches_dense_gemm(self, kind, dim):
+        """The O(D) host block_rotate must equal the dense y = x @ PiT GEMM."""
+        from vllm.model_executor.layers.quantization.turboquant.rotations import (
+            block_rotate,
+            build_rotation,
+            get_rotation_params,
+        )
+
+        device = torch.device(DEVICE_TYPE)
+        PiT = build_rotation(kind, dim, device)
+        params = get_rotation_params(kind, dim, device)
+        x = torch.randn(257, dim, device=device)
+        y_gemm = x @ PiT
+        y_block = block_rotate(x, params)
+        assert torch.allclose(y_gemm, y_block, atol=1e-4)
+
+
+@pytest.mark.skipif(not GPGPU_AVAILABLE, reason="GPGPU + Triton required")
+class TestFusedBlockRotateKernel:
+    """The fused Triton block-rotate kernel must equal the dense GEMM."""
+
+    @pytest.mark.parametrize("kind", ["planar", "iso"])
+    @pytest.mark.parametrize("dim", [64, 128, 256])
+    def test_fused_kernel_matches_gemm(self, kind, dim):
+        from vllm.model_executor.layers.quantization.turboquant.rotations import (
+            build_rotation,
+            get_rotation_params,
+        )
+        from vllm.v1.attention.ops.triton_block_rotate import triton_block_rotate
+
+        device = torch.device(DEVICE_TYPE)
+        PiT = build_rotation(kind, dim, device)
+        params = get_rotation_params(kind, dim, device)
+        x = torch.randn(1000, dim, device=device)
+        y_gemm = x @ PiT
+        y_fused = triton_block_rotate(x, params)
+        assert torch.allclose(y_gemm, y_fused, atol=1e-4)
+
+
+@pytest.mark.skipif(not GPGPU_AVAILABLE, reason="GPGPU + Triton required")
+class TestRotorQuantRoundTrip:
+    """Store→decode roundtrip for the RotorQuant presets.
+
+    Verifies that (a) the block-rotation presets recover values as well as the
+    Hadamard baseline and (b) the fused-rotation store path is bit-identical to
+    the dense GEMM store path.
+    """
+
+    @pytest.mark.parametrize(
+        "preset",
+        [
+            "turboquant_planar3_nc",
+            "turboquant_iso3_nc",
+            "turboquant_planar4_nc",
+            "turboquant_iso4_nc",
+        ],
+    )
+    def test_single_token_roundtrip(self, preset):
+        from vllm.model_executor.layers.quantization.turboquant.centroids import (
+            solve_lloyd_max,
+        )
+        from vllm.model_executor.layers.quantization.turboquant.rotations import (
+            build_rotation,
+            get_rotation_params,
+        )
+        from vllm.v1.attention.ops.triton_turboquant_decode import (
+            triton_turboquant_decode_attention,
+        )
+        from vllm.v1.attention.ops.triton_turboquant_store import (
+            triton_turboquant_store,
+        )
+
+        device = torch.device(DEVICE_TYPE)
+        D, Hk, Hq, B, block_size = 256, 4, 4, 1, 16
+        cfg = TurboQuantConfig.from_cache_dtype(preset, head_dim=D)
+        PiT = build_rotation(cfg.rotation, D, device)
+        Pi = PiT.T.contiguous()
+        rot_params = get_rotation_params(cfg.rotation, D, device)
+        centroids, _ = solve_lloyd_max(D, cfg.centroid_bits)
+        centroids = centroids.float().to(device)
+        cs, _ = centroids.sort()
+        midpoints = ((cs[:-1] + cs[1:]) / 2).to(device)
+
+        torch.manual_seed(123)
+        key = torch.randn(B, Hk, D, device=device, dtype=torch.float16)
+        value = torch.randn(B, Hk, D, device=device, dtype=torch.float16)
+        kv_cache = torch.zeros(
+            1, block_size, Hk, cfg.slot_size_aligned, device=device, dtype=torch.uint8
+        )
+        slot_mapping = torch.tensor([0], device=device, dtype=torch.int32)
+
+        triton_turboquant_store(
+            key, value, kv_cache, slot_mapping, PiT, midpoints,
+            mse_bits=cfg.key_mse_bits, key_packed_size=cfg.key_packed_size,
+            value_quant_bits=cfg.effective_value_quant_bits, key_fp8=cfg.key_fp8,
+            rot_params=rot_params, value_rotation=cfg.value_rotation,
+        )
+
+        query = key.expand(B, Hq, D).contiguous().to(torch.float16)
+        block_table = torch.tensor([[0]], device=device, dtype=torch.int32)
+        seq_lens = torch.tensor([1], device=device, dtype=torch.int32)
+        output = triton_turboquant_decode_attention(
+            query=query, kv_cache=kv_cache, block_table=block_table,
+            seq_lens=seq_lens, Pi=Pi, centroids=centroids,
+            scale=1.0 / math.sqrt(D), mse_bits=cfg.key_mse_bits,
+            key_packed_size=cfg.key_packed_size,
+            value_quant_bits=cfg.effective_value_quant_bits, key_fp8=cfg.key_fp8,
+            norm_correction=cfg.norm_correction, PiT=PiT, rot_params=rot_params,
+            value_rotation=cfg.value_rotation, max_num_kv_splits=4,
+        )
+
+        out_fp32 = output.float()
+        val_fp32 = value.expand(B, Hq, D).float()
+        for h in range(Hq):
+            cos_sim = torch.nn.functional.cosine_similarity(
+                out_fp32[0, h].unsqueeze(0), val_fp32[0, h].unsqueeze(0)
+            ).item()
+            assert cos_sim > 0.85, f"{preset} head {h}: cos={cos_sim:.4f}"
+
+    @pytest.mark.parametrize("preset", ["turboquant_planar3_nc", "turboquant_iso3_nc"])
+    def test_fused_store_matches_gemm_store(self, preset):
+        """Fused-rotation store must produce a bit-identical cache to the GEMM."""
+        from vllm.model_executor.layers.quantization.turboquant.centroids import (
+            solve_lloyd_max,
+        )
+        from vllm.model_executor.layers.quantization.turboquant.rotations import (
+            build_rotation,
+            get_rotation_params,
+        )
+        from vllm.v1.attention.ops.triton_block_rotate import ROTATE_FUSED_MIN_ROWS
+        from vllm.v1.attention.ops.triton_turboquant_store import (
+            triton_turboquant_store,
+        )
+
+        device = torch.device(DEVICE_TYPE)
+        D, Hk, block_size = 256, 1, 16
+        # Enough tokens that NH >= the fused crossover so the fused path is used.
+        N = ROTATE_FUSED_MIN_ROWS + 64
+        num_blocks = (N + block_size - 1) // block_size
+        cfg = TurboQuantConfig.from_cache_dtype(preset, head_dim=D)
+        PiT = build_rotation(cfg.rotation, D, device)
+        rot_params = get_rotation_params(cfg.rotation, D, device)
+        centroids, _ = solve_lloyd_max(D, cfg.centroid_bits)
+        cs, _ = centroids.float().to(device).sort()
+        midpoints = ((cs[:-1] + cs[1:]) / 2).to(device)
+
+        torch.manual_seed(7)
+        key = torch.randn(N, Hk, D, device=device, dtype=torch.float16)
+        value = torch.randn(N, Hk, D, device=device, dtype=torch.float16)
+        slot_mapping = torch.arange(N, device=device, dtype=torch.int32)
+
+        def run(use_fused):
+            kv = torch.zeros(
+                num_blocks, block_size, Hk, cfg.slot_size_aligned,
+                device=device, dtype=torch.uint8,
+            )
+            triton_turboquant_store(
+                key, value, kv, slot_mapping, PiT, midpoints,
+                mse_bits=cfg.key_mse_bits, key_packed_size=cfg.key_packed_size,
+                value_quant_bits=cfg.effective_value_quant_bits,
+                key_fp8=cfg.key_fp8,
+                rot_params=rot_params if use_fused else None,
+                value_rotation=cfg.value_rotation,
+            )
+            return kv
+
+        kv_fused = run(use_fused=True)
+        kv_gemm = run(use_fused=False)
+        # Quantized bytes may differ by ±1 ULP at bucket boundaries; require a
+        # near-perfect match rather than exact byte equality.
+        diff = (kv_fused.int() - kv_gemm.int()).abs()
+        mismatch_frac = (diff > 0).float().mean().item()
+        assert mismatch_frac < 1e-3, (
+            f"{preset}: fused vs GEMM store mismatch frac={mismatch_frac:.2e}"
+        )

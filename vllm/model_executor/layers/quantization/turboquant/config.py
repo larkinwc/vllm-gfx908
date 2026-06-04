@@ -14,29 +14,83 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+from vllm.model_executor.layers.quantization.turboquant.rotations import (
+    ROTATION_HADAMARD,
+    ROTATION_KINDS,
+)
+
 # Named TQ presets: each maps to frozen config parameters.
 # key_quant_bits: 8 = FP8 keys, 3-4 = MSE (Lloyd-Max) quantized keys.
 # value_quant_bits: 3-4 = uniform quantized values.
+# rotation: "hadamard" (dense D×D), or block-diagonal "planar"/"iso"
+#   (RotorQuant family — O(D) rotation, fused into the Triton kernels).
+# value_rotation: if True, the value plane is block-rotated before uniform
+#   quantization (symmetric K+V); requires a block rotation kind.
 TQ_PRESETS: dict[str, dict] = {
     "turboquant_k8v4": {
         "key_quant_bits": 8,
         "value_quant_bits": 4,
         "norm_correction": False,
+        "rotation": ROTATION_HADAMARD,
     },
     "turboquant_4bit_nc": {
         "key_quant_bits": 4,
         "value_quant_bits": 4,
         "norm_correction": True,
+        "rotation": ROTATION_HADAMARD,
     },
     "turboquant_k3v4_nc": {
         "key_quant_bits": 3,
         "value_quant_bits": 4,
         "norm_correction": True,
+        "rotation": ROTATION_HADAMARD,
     },
     "turboquant_3bit_nc": {
         "key_quant_bits": 3,
         "value_quant_bits": 3,
         "norm_correction": True,
+        "rotation": ROTATION_HADAMARD,
+    },
+    # ---- RotorQuant block-diagonal rotations (key-only) ----
+    # Cheap O(D) rotation, value plane stays uniform-quantized (unrotated).
+    "turboquant_planar3_nc": {
+        "key_quant_bits": 3,
+        "value_quant_bits": 4,
+        "norm_correction": True,
+        "rotation": "planar",
+    },
+    "turboquant_iso3_nc": {
+        "key_quant_bits": 3,
+        "value_quant_bits": 4,
+        "norm_correction": True,
+        "rotation": "iso",
+    },
+    "turboquant_planar4_nc": {
+        "key_quant_bits": 4,
+        "value_quant_bits": 4,
+        "norm_correction": True,
+        "rotation": "planar",
+    },
+    "turboquant_iso4_nc": {
+        "key_quant_bits": 4,
+        "value_quant_bits": 4,
+        "norm_correction": True,
+        "rotation": "iso",
+    },
+    # ---- RotorQuant symmetric K+V (value plane also block-rotated) ----
+    "turboquant_planar3_sym_nc": {
+        "key_quant_bits": 3,
+        "value_quant_bits": 3,
+        "norm_correction": True,
+        "rotation": "planar",
+        "value_rotation": True,
+    },
+    "turboquant_iso3_sym_nc": {
+        "key_quant_bits": 3,
+        "value_quant_bits": 3,
+        "norm_correction": True,
+        "rotation": "iso",
+        "value_rotation": True,
     },
 }
 
@@ -90,6 +144,19 @@ class TurboQuantConfig:
     value_quant_bits: int = 4  # 3-4 = uniform quantized values
     seed: int = 42  # kept for backward compatibility; no longer used internally
     norm_correction: bool = False
+    rotation: str = ROTATION_HADAMARD  # hadamard | planar | iso
+    value_rotation: bool = False  # block-rotate values too (symmetric K+V)
+
+    def __post_init__(self) -> None:
+        if self.rotation not in ROTATION_KINDS:
+            raise ValueError(
+                f"Unknown rotation {self.rotation!r}; valid: {ROTATION_KINDS}"
+            )
+        if self.value_rotation and self.rotation == ROTATION_HADAMARD:
+            raise ValueError(
+                "value_rotation requires a block rotation kind (planar/iso); "
+                "the Hadamard value path is not supported."
+            )
 
     @property
     def key_fp8(self) -> bool:
@@ -229,6 +296,8 @@ class TurboQuantConfig:
             key_quant_bits=preset["key_quant_bits"],
             value_quant_bits=preset["value_quant_bits"],
             norm_correction=preset["norm_correction"],
+            rotation=preset.get("rotation", ROTATION_HADAMARD),
+            value_rotation=preset.get("value_rotation", False),
         )
 
 

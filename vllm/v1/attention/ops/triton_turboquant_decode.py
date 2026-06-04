@@ -497,6 +497,8 @@ def triton_turboquant_decode_attention(
     key_fp8: bool = False,
     norm_correction: bool = False,
     PiT: torch.Tensor | None = None,  # [D, D] pre-computed Pi.T contiguous
+    rot_params=None,  # RotationParams for fused O(D) query rotation (or None)
+    value_rotation: bool = False,  # values stored rotated → inverse-rotate output
     # Pre-allocated buffers (optional, avoids per-call allocation)
     mid_o_buf: torch.Tensor | None = None,
     output_buf: torch.Tensor | None = None,
@@ -521,6 +523,22 @@ def triton_turboquant_decode_attention(
     # MSE path: still needs external GEMM (cuBLAS), so q_rot is float32.
     if key_fp8:
         q_rot = query.contiguous()
+    elif rot_params is not None:
+        # RotorQuant block rotation: fused O(D) kernel only pays off at large
+        # row counts. Decode query rotation (B×Hq rows) is small, so fall back
+        # to the dense GEMM there; both are numerically identical.
+        from vllm.v1.attention.ops.triton_block_rotate import (
+            should_use_fused_rotation,
+            triton_block_rotate,
+        )
+
+        q_float = query.float()
+        if should_use_fused_rotation(B * Hq):
+            q_rot = triton_block_rotate(q_float, rot_params).contiguous()
+        else:
+            if PiT is None:
+                PiT = Pi.T.contiguous()
+            q_rot = (q_float @ PiT).contiguous()
     else:
         q_float = query.float()
         if PiT is None:
@@ -626,5 +644,15 @@ def triton_turboquant_decode_attention(
         num_warps=4,
         num_stages=2,
     )
+
+    if value_rotation:
+        # Values were stored rotated (v @ PiT). Because attention is a linear
+        # (softmax-weighted) combination of values and the rotation is the same
+        # for every token, the stage2 output equals out_orig @ PiT. Recover the
+        # original-space output with the inverse rotation out @ Pi (= out @ PiT.T).
+        # Output rows = B×Hq is small at decode, so the dense GEMM is cheapest.
+        inv = Pi if Pi is not None else PiT.T.contiguous()
+        rotated = (output.float() @ inv).to(output.dtype)
+        output.copy_(rotated)
 
     return output  # already in query dtype

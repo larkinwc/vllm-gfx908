@@ -29,6 +29,11 @@ from vllm.config.cache import CacheDType
 from vllm.model_executor.layers.quantization.turboquant.centroids import (
     get_centroids,
 )
+from vllm.model_executor.layers.quantization.turboquant.rotations import (
+    ROTATION_HADAMARD,
+    build_rotation,
+    get_rotation_params,
+)
 from vllm.triton_utils import triton
 from vllm.v1.attention.backend import (
     AttentionBackend,
@@ -102,6 +107,12 @@ class TurboQuantAttentionBackend(AttentionBackend):
         "turboquant_4bit_nc",
         "turboquant_k3v4_nc",
         "turboquant_3bit_nc",
+        "turboquant_planar3_nc",
+        "turboquant_iso3_nc",
+        "turboquant_planar4_nc",
+        "turboquant_iso4_nc",
+        "turboquant_planar3_sym_nc",
+        "turboquant_iso3_sym_nc",
     ]
 
     @staticmethod
@@ -335,21 +346,34 @@ class TurboQuantAttentionImpl(AttentionImpl["TurboQuantMetadata"]):
     def _ensure_on_device(self, layer, device):
         """One-time derivation of TQ buffers (rotation matrix, midpoints).
 
-        The Hadamard rotation is shared across all layers: random sign
-        flips do not improve Lloyd-Max quantization quality because the
-        quantizer is symmetric around zero (sign-flipping a coordinate
-        maps it to the mirror centroid with identical distortion).
+        The rotation is shared across all layers and derived deterministically
+        from (kind, D). Hadamard is symmetric (Pi == PiT); the RotorQuant
+        block-diagonal rotations (planar/iso) are a genuine transpose pair, so
+        we materialize both ``PiT`` (forward) and ``Pi = PiT.T`` (inverse).
+
+        Sign/seed choices do not change Lloyd-Max quality because the quantizer
+        is symmetric around zero.
         """
         if not hasattr(layer, "_tq_cached"):
             D = self.head_size
+            kind = self.tq_config.rotation
 
-            # Pure Hadamard: orthonormal + symmetric (H = H^T), enabling
-            # in-kernel butterfly fusion and trivial inverse for continuation.
-            H = _build_hadamard(D, str(device))
-            layer._tq_PiT = H
-            layer._tq_Pi = H
-            # fp16 copy for rotation in continuation prefill path
-            layer._tq_Pi_half = H.to(torch.float16)
+            if kind == ROTATION_HADAMARD:
+                PiT = _build_hadamard(D, str(device))
+            else:
+                PiT = build_rotation(kind, D, device)
+            Pi = PiT if kind == ROTATION_HADAMARD else PiT.T.contiguous()
+            layer._tq_PiT = PiT
+            layer._tq_Pi = Pi
+            # fp16 copy of the inverse rotation for the continuation path
+            layer._tq_Pi_half = Pi.to(torch.float16)
+
+            # Compact per-block rotation params for the fused kernels
+            # (None for Hadamard → kernels use the dense GEMM path).
+            if kind == ROTATION_HADAMARD:
+                layer._tq_rot_params = None
+            else:
+                layer._tq_rot_params = get_rotation_params(kind, D, device)
 
             # Centroids for Lloyd-Max quantization.
             layer._tq_centroids = get_centroids(D, self.tq_config.centroid_bits).to(
@@ -554,6 +578,8 @@ class TurboQuantAttentionImpl(AttentionImpl["TurboQuantMetadata"]):
             key_packed_size=self.tq_config.key_packed_size,
             value_quant_bits=self.tq_config.effective_value_quant_bits,
             key_fp8=self.tq_config.key_fp8,
+            rot_params=layer._tq_rot_params,
+            value_rotation=self.tq_config.value_rotation,
         )
 
     # ------------------------------------------------------------------ #
@@ -689,6 +715,8 @@ class TurboQuantAttentionImpl(AttentionImpl["TurboQuantMetadata"]):
                         key_fp8=self.tq_config.key_fp8,
                         norm_correction=self.tq_config.norm_correction,
                         PiT=PiT,
+                        rot_params=getattr(layer, "_tq_rot_params", None),
+                        value_rotation=self.tq_config.value_rotation,
                     )
                 else:
                     # Large continuation: dequant cached K/V and use
@@ -802,6 +830,13 @@ class TurboQuantAttentionImpl(AttentionImpl["TurboQuantMetadata"]):
         # Skip .contiguous() — the copy into k_full/v_full handles layout
         v_cached_trim = v_cached[0, :, :cached_len, :].transpose(0, 1)
 
+        # Symmetric K+V: cached values are stored rotated (v @ PiT); recover
+        # original space with the inverse rotation v @ Pi before attention.
+        if self.tq_config.value_rotation:
+            Pi_half = layer._tq_Pi_half
+            v_flat = v_cached_trim.reshape(-1, D).to(torch.float16) @ Pi_half
+            v_cached_trim = v_flat.reshape(cached_len, Hk, D)
+
         # Concatenate cached + current chunk K/V (match query dtype)
         # Pre-allocate full K/V buffer, copy into slices (no cat alloc)
         qdtype = query.dtype
@@ -897,6 +932,8 @@ class TurboQuantAttentionImpl(AttentionImpl["TurboQuantMetadata"]):
             key_fp8=self.tq_config.key_fp8,
             norm_correction=self.tq_config.norm_correction,
             PiT=PiT,
+            rot_params=getattr(layer, "_tq_rot_params", None),
+            value_rotation=self.tq_config.value_rotation,
             mid_o_buf=mid_o_buf,
             output_buf=output_buf,
             lse_buf=lse_buf,

@@ -47,6 +47,12 @@ STR_DTYPE_TO_TORCH_DTYPE = {
     "turboquant_4bit_nc": torch.uint8,
     "turboquant_k3v4_nc": torch.uint8,
     "turboquant_3bit_nc": torch.uint8,
+    "turboquant_planar3_nc": torch.uint8,
+    "turboquant_planar4_nc": torch.uint8,
+    "turboquant_iso3_nc": torch.uint8,
+    "turboquant_iso4_nc": torch.uint8,
+    "turboquant_planar3_sym_nc": torch.uint8,
+    "turboquant_iso3_sym_nc": torch.uint8,
     "nvfp4": torch.uint8,
 }
 
