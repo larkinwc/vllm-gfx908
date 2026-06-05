@@ -19,7 +19,12 @@ from transformers import AutoTokenizer
 
 
 def compute_perplexity_vllm(
-    model_path, max_samples=100, max_len=2048, tp_size=4, dtype="float16"
+    model_path,
+    max_samples=100,
+    max_len=2048,
+    tp_size=4,
+    dtype="float16",
+    kv_cache_dtype="auto",
 ):
     """Compute perplexity using vLLM's offline LLM interface."""
     from vllm import LLM, SamplingParams
@@ -64,6 +69,7 @@ def compute_perplexity_vllm(
     llm = LLM(
         model=model_path,
         dtype=dtype,
+        kv_cache_dtype=kv_cache_dtype,
         trust_remote_code=True,
         tensor_parallel_size=tp_size,
         max_model_len=max_len + 16,
@@ -162,6 +168,12 @@ def main():
     )
     parser.add_argument("--tp-size", type=int, default=4)
     parser.add_argument("--dtype", type=str, default="float16")
+    parser.add_argument(
+        "--kv-cache-dtype",
+        type=str,
+        default="auto",
+        help="KV cache dtype, e.g. auto, turboquant_k3v4_nc, turboquant_planar3_nc",
+    )
     parser.add_argument("--output", type=str, default=None, help="JSON output file")
     args = parser.parse_args()
 
@@ -177,7 +189,9 @@ def main():
                 max_len=args.max_len,
                 tp_size=args.tp_size,
                 dtype=args.dtype,
+                kv_cache_dtype=args.kv_cache_dtype,
             )
+            result["kv_cache_dtype"] = args.kv_cache_dtype
             results.append(result)
         except Exception as e:
             print(f"ERROR evaluating {model_path}: {e}")

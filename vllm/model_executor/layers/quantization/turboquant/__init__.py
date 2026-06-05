@@ -21,6 +21,26 @@ foundational and application references pre-date the TurboQuant paper
 (Zandieh et al., ICLR 2026).
 """
 
-from vllm.model_executor.layers.quantization.turboquant.config import TurboQuantConfig
+from vllm.model_executor.layers.quantization.turboquant.config import (
+    TQ_PRESETS,
+    TurboQuantConfig,
+)
+from vllm.model_executor.layers.quantization.turboquant.rotations import (
+    ROTATION_HADAMARD,
+    ROTATION_ISO,
+    ROTATION_KINDS,
+    ROTATION_PLANAR,
+    build_rotation,
+    get_rotation_params,
+)
 
-__all__ = ["TurboQuantConfig"]
+__all__ = [
+    "TQ_PRESETS",
+    "TurboQuantConfig",
+    "ROTATION_HADAMARD",
+    "ROTATION_ISO",
+    "ROTATION_KINDS",
+    "ROTATION_PLANAR",
+    "build_rotation",
+    "get_rotation_params",
+]

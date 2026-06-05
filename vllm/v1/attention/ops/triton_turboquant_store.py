@@ -358,8 +358,20 @@ def triton_turboquant_store(
     key_packed_size: int,
     value_quant_bits: int,
     key_fp8: bool = False,
+    rot_params=None,  # RotationParams for fused O(D) block rotation (or None)
+    value_rotation: bool = False,  # also block-rotate values (symmetric K+V)
 ):
-    """Launch TQ store kernel (FP8 or MSE path)."""
+    """Launch TQ store kernel (FP8 or MSE path).
+
+    When ``rot_params`` is provided (RotorQuant planar/iso presets) the
+    normalized-key rotation is computed with the fused O(D) block-rotate kernel
+    instead of the dense ``x_hat @ PiT`` GEMM. ``PiT`` is then unused for keys.
+
+    When ``value_rotation`` is set the value plane is block-rotated (``v @ PiT``)
+    before uniform quantization, decorrelating its coordinates. The decode path
+    accumulates in rotated space and inverse-rotates the final attention output,
+    so no value scale/zero metadata changes are needed here.
+    """
     N, H, D = key.shape
     NH = N * H
     block_size = kv_cache.shape[1]
@@ -409,14 +421,34 @@ def triton_turboquant_store(
         )
         return
 
-    # ── MSE PATH: external GEMM + fused bucketize/pack kernel ──
-    # Normalize + rotation GEMM externally (cuBLAS is faster than in-kernel)
+    # ── MSE PATH: rotation + fused bucketize/pack kernel ──
+    # Normalize, then rotate. RotorQuant block rotations use the fused O(D)
+    # kernel; Hadamard uses the dense GEMM (cuBLAS).
     k_flat = key.float().reshape(NH, D)
     norms = k_flat.norm(dim=1, keepdim=True)
     x_hat = k_flat / (norms + 1e-8)
-    y = x_hat @ PiT
+    if rot_params is not None:
+        from vllm.v1.attention.ops.triton_block_rotate import (
+            should_use_fused_rotation,
+            triton_block_rotate,
+        )
+
+        # Both paths are numerically identical (block-diagonal PiT == the block
+        # rotation); pick whichever is faster for this row count (NH).
+        if should_use_fused_rotation(NH):
+            y = triton_block_rotate(x_hat, rot_params)
+        else:
+            y = x_hat @ PiT
+    else:
+        y = x_hat @ PiT
 
     v_flat = value.float().reshape(NH, D)
+    # Symmetric K+V: rotate the value plane (v @ PiT) before quantization.
+    if value_rotation:
+        if rot_params is not None and should_use_fused_rotation(NH):
+            v_flat = triton_block_rotate(v_flat, rot_params)
+        else:
+            v_flat = v_flat @ PiT
 
     # Fused kernel: bucketize + MSE index pack + norm store + value pack
     grid = (NH,)
