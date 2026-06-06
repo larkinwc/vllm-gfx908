@@ -254,7 +254,18 @@ def triton_w4a16_gemm(
     # The dispatch is intentionally narrow: any unsupported group-size or
     # disabled-via-env case falls back to the generic Triton path below.
     if current_platform.is_rocm() and not _mi100_w4a16_disabled():
-        from vllm.platforms.rocm import on_mi100
+        from vllm.platforms.rocm import on_gfx900, on_mi100
+        # gfx900 (Vega10) has no MFMA -> tl.dot is a padded FP32 GEMM and is
+        # *slower* than FP16 at small M. For the decode hot path (M<=8) route to
+        # the dedicated bandwidth-bound int4 GEMV (10-15x vs the tl.dot path).
+        if on_gfx900() and group_size in (32, 64, 128) and M <= 8:
+            from vllm.model_executor.kernels.linear.mixed_precision.gfx900_w4a16_gemv import (
+                w4a16_gemv_gfx900 as _gfx900_gemv,
+            )
+            return _gfx900_gemv(
+                a=a, b_q=b_q, scales=scales,
+                qzeros=qzeros, group_size=group_size, zp_bias=zp_bias,
+            )
         if on_mi100() and group_size in (32, 128):
             from vllm.model_executor.kernels.linear.scaled_mm.mi100_w4a16 import (
                 mi100_w4a16_gemm as _mi100_w4a16_gemm,

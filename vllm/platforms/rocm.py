@@ -204,6 +204,10 @@ _ON_GFX90A = "gfx90a" in _GCN_ARCH
 _ON_GFX942 = "gfx942" in _GCN_ARCH
 _ON_GFX950 = "gfx950" in _GCN_ARCH
 _ON_MI100 = "gfx908" in _GCN_ARCH
+# gfx900 (Vega10, e.g. V340/MI25): GFX9 ISA but NO MFMA matrix cores,
+# no native FP8, no XGMI. Treated as a separate tier that routes around
+# all MFMA/XGMI kernels to portable Triton + rocBLAS paths.
+_ON_GFX900 = "gfx900" in _GCN_ARCH
 
 
 def _capability_from_gcn_arch(gcn_arch: str) -> tuple[int, int] | None:
@@ -318,6 +322,12 @@ def on_mi100() -> bool:
     return _ON_MI100
 
 
+def on_gfx900() -> bool:
+    """Detect gfx900 (Vega10): GFX9 ISA but lacks MFMA, FP8, and XGMI.
+    Must route around MFMA paged-attn/skinny-GEMM and XGMI custom all-reduce."""
+    return _ON_GFX900
+
+
 def on_gfx950() -> bool:
     return _ON_GFX950
 
@@ -418,6 +428,15 @@ def _get_backend_priorities(
             ]
 
     backends = []
+    # gfx900 (Vega10) has no MFMA: the ROCM_ATTN custom paged-attention
+    # kernel cannot run. Prefer the portable Triton attention backend.
+    if _ON_GFX900:
+        backends.append(AttentionBackendEnum.TRITON_ATTN)
+        # TurboQuant KV-cache quant: kernels are pure Triton (no wave32 shuffle),
+        # so they run on wave64 gfx900. Only selected when the user opts in via
+        # --kv-cache-dtype turboquant_*; otherwise TRITON_ATTN above is used.
+        backends.append(AttentionBackendEnum.TURBOQUANT)
+        return backends
     # ROCM_ATTN uses (2, num_blocks, ...) KV cache layout which is
     # incompatible with KV connectors that require blocks-first layout.
     if not use_kv_connector:
