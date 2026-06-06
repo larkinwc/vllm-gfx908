@@ -140,3 +140,14 @@ change and explain why**.
 - **Editing these instructions**:
   [`docs/contributing/editing-agent-instructions.md`](docs/contributing/editing-agent-instructions.md)
   — Rules for modifying AGENTS.md or any domain-specific guide it references.
+
+---
+
+## Prior Experiment Records (MI100/gfx908 fork)
+
+Benchmark logs, A/B verdicts, perf research, and negative results from this
+fork's tuning work live in [`docs/experiments/`](docs/experiments/). Check
+there before re-running a tuning experiment — many approaches have already
+been tried and documented (including what *didn't* work). `BENCH.md` at the
+repo root is the curated summary/index; `docs/experiments/` holds the full
+per-mission records.
