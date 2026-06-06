@@ -39,7 +39,7 @@ All numbers in §Latest are from the **M4 HBM final** stack:
 `NCCL_ALGO` winner, baked into `scripts/launch_hbm_<cell>.sh`. 24 cells = 12
 (`{w8a8,w4a16}` × `{tp1,tp4}` × `c∈{1,2,4}`) × 2 workloads (`synthetic` =
 random 1024/256, `coding` = realistic coding-agent JSONL). Full evidence:
-[`BENCH_INT8_W4A16_HBM.md`](BENCH_INT8_W4A16_HBM.md).
+[`BENCH_INT8_W4A16_HBM.md`](docs/experiments/BENCH_INT8_W4A16_HBM.md).
 
 ### Quality gates (PPL / coding / needle@32k)
 
@@ -131,13 +131,13 @@ noted; each has an env-var disable path.
 | **Triton MI100 tile tuning** | `triton_unified_attention.py`, `triton_prefill_attention.py`, `triton_attn.py` | Decode TILE 16→32, prefill BLOCK 128→64, NUM_PAR_SOFTMAX_SEGMENTS 16→8 | FP16 wins above; carries through to quant stacks |
 | **Adaptive Flash-Decoding (Split-K)** | `triton_attn.py` | +35 % c=1 tput on FP16; default heuristic in M4 quant stack | Sweep confirmed defaults already optimal — see HBM-FA |
 | **Skinny GEMM (gfx908)** | `VLLM_ROCM_USE_SKINNY_GEMM=1`, `__gfx908__` guard in `skinny_gemms.cu` | −27 % TPOT, +28 % c=1 tput on FP16 (off by default for quant stack) | `BENCH.md` §Historical |
-| **Custom Triton W8A8 (`mi100_int8`)** | `vllm/model_executor/kernels/scaled_mm/mi100_int8.py` | INT8×INT8→INT32 MFMA, AOT-tuned configs at `vllm/model_executor/kernels/configs/gfx908/mi100_int8_*` | [`BENCH_INT8_W4A16_M3.md`](BENCH_INT8_W4A16_M3.md) |
-| **Custom Triton W4A16 (`mi100_w4a16`)** | `vllm/model_executor/kernels/linear/mi100_w4a16.py` | group_size=32 INT4 dequant + MFMA; AOT configs at `mi100_w4a16_*` | [`BENCH_INT8_W4A16_M3.md`](BENCH_INT8_W4A16_M3.md) |
-| **hipBLASLt TensileLite library** | `HIPBLASLT_TENSILE_LIBPATH=/root/bench-int8-w4a16/tensilelite/merged_library/library` | Tuned per-shape rocBLAS solutions for W8A8 hot shapes | [`BENCH_INT8_W4A16_M2.md`](BENCH_INT8_W4A16_M2.md) |
-| **Composable Kernel INT8 GEMM** | `csrc/quantization/w8a8/int8/ck/instances/` (4 shapes) | `DeviceGemm_Xdl_CShuffle`, tile `MPerBlock=128 NPerBlock=128 KPerBlock=64 MPerXdl=16 NPerXdl=16` driving `v_mfma_i32_16x16x16i8`; dispatch priority CK > hipBLASLt > Triton | [`BENCH_M4_CK.md`](BENCH_M4_CK.md) |
-| **KV-INT8** | `--kv-cache-dtype int8_per_token_head` | W4A16 decode +8.19 % geomean, W8A8 +3.54 % geomean; halves attention KV HBM traffic | [`BENCH_HBM_M1_KVINT8.md`](BENCH_HBM_M1_KVINT8.md) |
-| **Chunked prefill** | `--enable-chunked-prefill --max-num-batched-tokens=2048 (w8a8) / 4096 (w4a16)` | 11/12 coding-workload cells clear `req_tput ≥ 1.03×` OR `mean_ttft ≤ 0.97×`; peak +17–20 % tput | [`BENCH_HBM_M2_CHUNKED.md`](BENCH_HBM_M2_CHUNKED.md) |
-| **Per-cell NCCL_ALGO** | `NCCL_ALGO=Ring` or empty (rccl heuristic) per TP=4 cell | < 1 % per-cell — no-regression alignment; baked into launch scripts | [`BENCH_HBM_M3_TP.md`](BENCH_HBM_M3_TP.md) |
+| **Custom Triton W8A8 (`mi100_int8`)** | `vllm/model_executor/kernels/scaled_mm/mi100_int8.py` | INT8×INT8→INT32 MFMA, AOT-tuned configs at `vllm/model_executor/kernels/configs/gfx908/mi100_int8_*` | [`BENCH_INT8_W4A16_M3.md`](docs/experiments/BENCH_INT8_W4A16_M3.md) |
+| **Custom Triton W4A16 (`mi100_w4a16`)** | `vllm/model_executor/kernels/linear/mi100_w4a16.py` | group_size=32 INT4 dequant + MFMA; AOT configs at `mi100_w4a16_*` | [`BENCH_INT8_W4A16_M3.md`](docs/experiments/BENCH_INT8_W4A16_M3.md) |
+| **hipBLASLt TensileLite library** | `HIPBLASLT_TENSILE_LIBPATH=/root/bench-int8-w4a16/tensilelite/merged_library/library` | Tuned per-shape rocBLAS solutions for W8A8 hot shapes | [`BENCH_INT8_W4A16_M2.md`](docs/experiments/BENCH_INT8_W4A16_M2.md) |
+| **Composable Kernel INT8 GEMM** | `csrc/quantization/w8a8/int8/ck/instances/` (4 shapes) | `DeviceGemm_Xdl_CShuffle`, tile `MPerBlock=128 NPerBlock=128 KPerBlock=64 MPerXdl=16 NPerXdl=16` driving `v_mfma_i32_16x16x16i8`; dispatch priority CK > hipBLASLt > Triton | [`BENCH_M4_CK.md`](docs/experiments/BENCH_M4_CK.md) |
+| **KV-INT8** | `--kv-cache-dtype int8_per_token_head` | W4A16 decode +8.19 % geomean, W8A8 +3.54 % geomean; halves attention KV HBM traffic | [`BENCH_HBM_M1_KVINT8.md`](docs/experiments/BENCH_HBM_M1_KVINT8.md) |
+| **Chunked prefill** | `--enable-chunked-prefill --max-num-batched-tokens=2048 (w8a8) / 4096 (w4a16)` | 11/12 coding-workload cells clear `req_tput ≥ 1.03×` OR `mean_ttft ≤ 0.97×`; peak +17–20 % tput | [`BENCH_HBM_M2_CHUNKED.md`](docs/experiments/BENCH_HBM_M2_CHUNKED.md) |
+| **Per-cell NCCL_ALGO** | `NCCL_ALGO=Ring` or empty (rccl heuristic) per TP=4 cell | < 1 % per-cell — no-regression alignment; baked into launch scripts | [`BENCH_HBM_M3_TP.md`](docs/experiments/BENCH_HBM_M3_TP.md) |
 | **TunableOp GEMM cache** (FP16) | `PYTORCH_TUNABLEOP_ENABLED=1 PYTORCH_TUNABLEOP_TUNING=0` + cached CSVs | +13.4 % c=1 tput, −88 % TTFT on FP16 (still recommended for FP16 launches; superseded by hipBLASLt+CK on quant) | `BENCH.md` §Historical |
 | **`--disable-custom-all-reduce` on gfx908** | auto-detected by `vllm/platforms/rocm.py` | Required for correct HIP graph capture on gfx908 (custom all-reduce IPC buffers go stale on replay) | `BENCH.md` §Historical |
 
@@ -149,17 +149,17 @@ config above is unambiguous.
 
 | Lever | Status | Reason / impact | Evidence |
 |---|---|---|---|
-| **Triton Flash-Decoding tuning sweep** | **Null result** (M1 HBM-FA) | 9216-config sweep winners coincide **byte-identically** with M4 default heuristic; rocprofv3 shows zero HBM-bytes/inv delta. Flag `VLLM_MI100_USE_TUNED_FLASH_DECODE` ships **default-off** | [`BENCH_HBM_FA_TUNING.md`](BENCH_HBM_FA_TUNING.md) |
-| **CK FA2 INT8-PTH attention** | **NO-GO** (audit) | No `FmhaFwdI8` template in compiled `flash_attn_2_cuda`; no per-token-per-head scale plumbing; storage-layout mismatch with vLLM's inline-padded `head_size + sizeof(f32)` INT8-PTH layout. 3–6 weeks kernel-authoring scope | [`BENCH_HBM_FA_TUNING.md`](BENCH_HBM_FA_TUNING.md) §M2 |
-| **Hand-ISA path (gfx908)** | **Declined** (M5 negative result) | Hot W8A8/W4A16 GEMMs HBM-bound (~21 % HBM / <1 % VALU for W8A8, ~32 % HBM for W4A16); hand-ISA compute levers cannot lift HBM ceiling | [`BENCH_M5_ISA.md`](BENCH_M5_ISA.md) |
-| **W4A16 Composable Kernel** | **Declined** | ROCm 7.12 ships no gfx908-validated packed-INT4 + groupwise-scale-and-zero device template matching vLLM's layout. Op bound for API stability, `ck_w4a16_gemm_supports()` returns `False`; transparent Triton fallback | [`BENCH_M4_CK.md`](BENCH_M4_CK.md) |
-| **`NCCL_ALGO=Tree` on KV-INT8** | **Blocked** (rccl 2.27.7) | KV-INT8 issues AllGather on `ncclInt8`; rccl 2.27.7 has no Tree algo for that dtype combo. Engine init aborts with `ncclInvalidUsage` | [`TP_TOPOLOGY.md`](TP_TOPOLOGY.md) |
-| **Chunked prefill < 2048 tokens** | **Infeasible** | vLLM's `attention block_size ≤ max_num_batched_tokens` guard rejects sizes below Qwen3.5's Mamba-aligned attention block size | [`BENCH_HBM_M2_CHUNKED.md`](BENCH_HBM_M2_CHUNKED.md) §M2 |
+| **Triton Flash-Decoding tuning sweep** | **Null result** (M1 HBM-FA) | 9216-config sweep winners coincide **byte-identically** with M4 default heuristic; rocprofv3 shows zero HBM-bytes/inv delta. Flag `VLLM_MI100_USE_TUNED_FLASH_DECODE` ships **default-off** | [`BENCH_HBM_FA_TUNING.md`](docs/experiments/BENCH_HBM_FA_TUNING.md) |
+| **CK FA2 INT8-PTH attention** | **NO-GO** (audit) | No `FmhaFwdI8` template in compiled `flash_attn_2_cuda`; no per-token-per-head scale plumbing; storage-layout mismatch with vLLM's inline-padded `head_size + sizeof(f32)` INT8-PTH layout. 3–6 weeks kernel-authoring scope | [`BENCH_HBM_FA_TUNING.md`](docs/experiments/BENCH_HBM_FA_TUNING.md) §M2 |
+| **Hand-ISA path (gfx908)** | **Declined** (M5 negative result) | Hot W8A8/W4A16 GEMMs HBM-bound (~21 % HBM / <1 % VALU for W8A8, ~32 % HBM for W4A16); hand-ISA compute levers cannot lift HBM ceiling | [`BENCH_M5_ISA.md`](docs/experiments/BENCH_M5_ISA.md) |
+| **W4A16 Composable Kernel** | **Declined** | ROCm 7.12 ships no gfx908-validated packed-INT4 + groupwise-scale-and-zero device template matching vLLM's layout. Op bound for API stability, `ck_w4a16_gemm_supports()` returns `False`; transparent Triton fallback | [`BENCH_M4_CK.md`](docs/experiments/BENCH_M4_CK.md) |
+| **`NCCL_ALGO=Tree` on KV-INT8** | **Blocked** (rccl 2.27.7) | KV-INT8 issues AllGather on `ncclInt8`; rccl 2.27.7 has no Tree algo for that dtype combo. Engine init aborts with `ncclInvalidUsage` | [`TP_TOPOLOGY.md`](docs/experiments/TP_TOPOLOGY.md) |
+| **Chunked prefill < 2048 tokens** | **Infeasible** | vLLM's `attention block_size ≤ max_num_batched_tokens` guard rejects sizes below Qwen3.5's Mamba-aligned attention block size | [`BENCH_HBM_M2_CHUNKED.md`](docs/experiments/BENCH_HBM_M2_CHUNKED.md) §M2 |
 | **`ROCM_ATTN` prefill-decode split** | Rejected | −5 % tput regression across all concurrency vs Triton unified | FP16-era result |
 | **`--max-num-seqs 8` scheduler tuning** | Rejected | Neutral on coding; −33 % tput on bursty synthetic c=4 | FP16-era result |
 | **TurboQuant KV compression** | Rejected | 6–11 % overhead synthetic, 42–49 % coding on Qwen3.5-9B (only 8/32 layers full-attention) | FP16-era result |
 | **MTP speculative decoding** | Partial | Incompatible with graph mode; 25–45 % slower in eager. Not recommended | FP16-era result |
-| **W8A8 GPTQ (off-the-shelf symmetric)** | Superseded | Original symmetric per-channel GPTQ failed on GatedDeltaNet `in_proj_qkv` (gibberish output despite PPL 10.02). **Resolved** by RedHatAI's `Qwen3.5-9B-w8a8` calibration artifact (PPL 9.6518, coherent generation) | `BENCH.md` §Historical; [`BENCH_INT8_W4A16_FINAL.md`](BENCH_INT8_W4A16_FINAL.md) |
+| **W8A8 GPTQ (off-the-shelf symmetric)** | Superseded | Original symmetric per-channel GPTQ failed on GatedDeltaNet `in_proj_qkv` (gibberish output despite PPL 10.02). **Resolved** by RedHatAI's `Qwen3.5-9B-w8a8` calibration artifact (PPL 9.6518, coherent generation) | `BENCH.md` §Historical; [`BENCH_INT8_W4A16_FINAL.md`](docs/experiments/BENCH_INT8_W4A16_FINAL.md) |
 | **AITER unified attention** | Blocked | `aiter` package not available for gfx908 | FP16-era finding |
 | **FP8 native** | Blocked | MI100 lacks FP8 hardware. Software dequant path emulated only | FP16-era finding |
 
@@ -213,19 +213,19 @@ citations, tuning-hash manifests, rocprofv3 traces). **Do not edit them
 retroactively** — they are anchored to specific vLLM SHAs.
 
 - **W8A8 / W4A16 custom kernels (PR #29 mission):**
-    - [`BENCH_INT8_W4A16_FINAL.md`](BENCH_INT8_W4A16_FINAL.md) — final Pareto aggregate (M0–M5)
-    - [`BENCH_INT8_W4A16_BASELINE.md`](BENCH_INT8_W4A16_BASELINE.md) — M0 stock + M1 baseline grid
-    - [`BENCH_INT8_W4A16_M2.md`](BENCH_INT8_W4A16_M2.md) — hipBLASLt + TensileLite three-way
-    - [`BENCH_INT8_W4A16_M3.md`](BENCH_INT8_W4A16_M3.md) — custom Triton W8A8 + W4A16 kernels
-    - [`BENCH_M4_CK.md`](BENCH_M4_CK.md) — Composable Kernel W8A8 (+ W4A16 declined)
-    - [`BENCH_M5_ISA.md`](BENCH_M5_ISA.md) — hand-ISA path declined (negative result)
+    - [`BENCH_INT8_W4A16_FINAL.md`](docs/experiments/BENCH_INT8_W4A16_FINAL.md) — final Pareto aggregate (M0–M5)
+    - [`BENCH_INT8_W4A16_BASELINE.md`](docs/experiments/BENCH_INT8_W4A16_BASELINE.md) — M0 stock + M1 baseline grid
+    - [`BENCH_INT8_W4A16_M2.md`](docs/experiments/BENCH_INT8_W4A16_M2.md) — hipBLASLt + TensileLite three-way
+    - [`BENCH_INT8_W4A16_M3.md`](docs/experiments/BENCH_INT8_W4A16_M3.md) — custom Triton W8A8 + W4A16 kernels
+    - [`BENCH_M4_CK.md`](docs/experiments/BENCH_M4_CK.md) — Composable Kernel W8A8 (+ W4A16 declined)
+    - [`BENCH_M5_ISA.md`](docs/experiments/BENCH_M5_ISA.md) — hand-ISA path declined (negative result)
 - **HBM Optimization Config-Sweep mission (Epic #22):**
-    - [`BENCH_INT8_W4A16_HBM.md`](BENCH_INT8_W4A16_HBM.md) — M4 final aggregate (24-cell grid above is from §5 here)
-    - [`BENCH_HBM_M1_KVINT8.md`](BENCH_HBM_M1_KVINT8.md) — KV-INT8 sub-mission
-    - [`BENCH_HBM_M2_CHUNKED.md`](BENCH_HBM_M2_CHUNKED.md) — chunked-prefill + chunk-size sweep
-    - [`BENCH_HBM_M3_TP.md`](BENCH_HBM_M3_TP.md) — TP topology / NCCL_ALGO sweep
+    - [`BENCH_INT8_W4A16_HBM.md`](docs/experiments/BENCH_INT8_W4A16_HBM.md) — M4 final aggregate (24-cell grid above is from §5 here)
+    - [`BENCH_HBM_M1_KVINT8.md`](docs/experiments/BENCH_HBM_M1_KVINT8.md) — KV-INT8 sub-mission
+    - [`BENCH_HBM_M2_CHUNKED.md`](docs/experiments/BENCH_HBM_M2_CHUNKED.md) — chunked-prefill + chunk-size sweep
+    - [`BENCH_HBM_M3_TP.md`](docs/experiments/BENCH_HBM_M3_TP.md) — TP topology / NCCL_ALGO sweep
 - **HBM Flash-Decoding tuning + CK FA2 investigation:**
-    - [`BENCH_HBM_FA_TUNING.md`](BENCH_HBM_FA_TUNING.md) — 9216-config sweep null result + CK FA2 NO-GO audit
+    - [`BENCH_HBM_FA_TUNING.md`](docs/experiments/BENCH_HBM_FA_TUNING.md) — 9216-config sweep null result + CK FA2 NO-GO audit
 
 ---
 
@@ -272,7 +272,7 @@ retroactively** — they are anchored to specific vLLM SHAs.
 Notable FP16-era wins:
 
 - **Skinny GEMM (gfx908)** adds `__gfx908__` to the compile guard in `skinny_gemms.cu`, enabling `wvSplitK` and `LLMM1` kernels for small-M GEMM shapes. Single largest per-optimisation FP16 win after CUDA graphs.
-- **Adaptive Flash-Decoding (Split-K)** dynamically scales `NUM_PAR_SOFTMAX_SEGMENTS ∈ {8, 16, 32, 64}` to fully saturate MI100's 120 CUs during decode. **+35 % c=1 tput** (113→152 tok/s) on coding agent. The M4 default heuristic is still this kernel; the HBM-FA tuning sweep confirmed no better configs exist on the workload shapes (see [`BENCH_HBM_FA_TUNING.md`](BENCH_HBM_FA_TUNING.md)).
+- **Adaptive Flash-Decoding (Split-K)** dynamically scales `NUM_PAR_SOFTMAX_SEGMENTS ∈ {8, 16, 32, 64}` to fully saturate MI100's 120 CUs during decode. **+35 % c=1 tput** (113→152 tok/s) on coding agent. The M4 default heuristic is still this kernel; the HBM-FA tuning sweep confirmed no better configs exist on the workload shapes (see [`BENCH_HBM_FA_TUNING.md`](docs/experiments/BENCH_HBM_FA_TUNING.md)).
 - **Block-size 32**: −44 % TTFT, +9.6 % c=4 tput. Carried into all M4 launches.
 - **CUDA graphs on gfx908** were enabled by auto-disabling custom all-reduce (IPC buffers go stale on HIP graph replay):
 
