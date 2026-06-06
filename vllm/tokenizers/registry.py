@@ -44,6 +44,17 @@ _MODEL_TYPES_WITH_INCORRECT_TOKENIZER_CLASS: set[str] = {
     "qwen3_5",
 }
 
+# Some overridden model types need a *specific* fast tokenizer class rather than
+# the generic TokenizersBackend/PreTrainedTokenizerFast fallback. This matters
+# when the model's transformers processor enforces a strict
+# ``isinstance(tokenizer, <ConcreteTokenizer>)`` check (e.g. Qwen3VLProcessor
+# requires Qwen2Tokenizer/Qwen2TokenizerFast). The generic fast tokenizer would
+# fail that check, so we load the concrete class instead. Entries not listed
+# here keep the generic fallback. Format: model_type -> "module:ClassName".
+_MODEL_TYPE_TO_TOKENIZER_CLASS_OVERRIDE: dict[str, str] = {
+    "qwen3_5": "transformers:Qwen2TokenizerFast",
+}
+
 _VLLM_TOKENIZERS = {
     "deepseek_v32": ("deepseek_v32", "DeepseekV32Tokenizer"),
     "deepseek_v4": ("deepseek_v4", "DeepseekV4Tokenizer"),
@@ -243,17 +254,26 @@ def get_tokenizer(
         model_type in _MODEL_TYPES_WITH_INCORRECT_TOKENIZER_CLASS
     )
     if use_tokenizers_backend_override:
-        # transformers v5 has TokenizersBackend; v4 doesn't, fall back to
-        # PreTrainedTokenizerFast which is the equivalent generic fast tokenizer
-        # and is what TokenizersBackend wraps in v5. We then run it through
-        # get_cached_tokenizer to add the vLLM-required cached attributes
-        # (e.g., max_chars_per_token).
-        try:
-            from transformers.tokenization_utils_tokenizers import (
-                TokenizersBackend as _Tk,
-            )
-        except ImportError:
-            from transformers import PreTrainedTokenizerFast as _Tk
+        concrete_qualname = _MODEL_TYPE_TO_TOKENIZER_CLASS_OVERRIDE.get(model_type)
+        if concrete_qualname is not None:
+            # Load the specific fast tokenizer class this model's processor
+            # expects (e.g. Qwen2TokenizerFast for qwen3_5). get_cached_tokenizer
+            # subclasses tokenizer.__class__, so the cached wrapper stays an
+            # instance of the concrete class and passes strict processor
+            # isinstance checks (e.g. Qwen3VLProcessor).
+            _Tk = resolve_obj_by_qualname(concrete_qualname.replace(":", "."))
+        else:
+            # transformers v5 has TokenizersBackend; v4 doesn't, fall back to
+            # PreTrainedTokenizerFast which is the equivalent generic fast
+            # tokenizer and is what TokenizersBackend wraps in v5. We then run
+            # it through get_cached_tokenizer to add the vLLM-required cached
+            # attributes (e.g., max_chars_per_token).
+            try:
+                from transformers.tokenization_utils_tokenizers import (
+                    TokenizersBackend as _Tk,
+                )
+            except ImportError:
+                from transformers import PreTrainedTokenizerFast as _Tk
 
         logger.debug(
             "Overriding tokenizer_class to %s for model_type=%r",
