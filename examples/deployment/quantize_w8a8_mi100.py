@@ -8,7 +8,16 @@ from llm-compressor, producing a model that leverages MI100's INT8 MFMA
 instructions (185 TOPS vs 46 TFLOPS FP16).
 
 Prerequisites:
-    pip install llmcompressor transformers datasets
+    llm-compressor pins transformers<=4.57.x and compressed-tensors==0.16,
+    which conflict with the vLLM serving environment (transformers v5,
+    compressed-tensors 0.17). Install it in a DEDICATED venv, NOT the vLLM
+    serving env, and run this offline quantization script with that venv:
+
+        uv venv --python 3.12 /opt/llmcompressor-env
+        uv pip install --python /opt/llmcompressor-env/bin/python llmcompressor
+        /opt/llmcompressor-env/bin/python examples/deployment/quantize_w8a8_mi100.py ...
+
+    The quantized model output is then served by the (separate) vLLM env.
 
 Usage:
     # Quantize Qwen3.5-9B for MI100
@@ -84,8 +93,13 @@ def main():
         from llmcompressor.modifiers.quantization import GPTQModifier
         from llmcompressor.modifiers.smoothquant import SmoothQuantModifier
     except ImportError:
-        print("ERROR: llmcompressor not installed. Run:")
-        print("  pip install llmcompressor")
+        print("ERROR: llmcompressor not installed in this environment.")
+        print("It must live in a DEDICATED venv (not the vLLM serving env),")
+        print("because it pins transformers<=4.57 / compressed-tensors==0.16:")
+        print("  uv venv --python 3.12 /opt/llmcompressor-env")
+        print("  uv pip install --python /opt/llmcompressor-env/bin/python "
+              "llmcompressor")
+        print("Then run this script with /opt/llmcompressor-env/bin/python")
         sys.exit(1)
 
     from datasets import load_dataset
