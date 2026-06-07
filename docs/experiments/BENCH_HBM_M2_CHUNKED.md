@@ -95,13 +95,13 @@ and the machine-readable JSON at
 [`cudagraph_feasibility.md`](/root/bench-int8-w4a16-hbm/m2-chunked/cudagraph_feasibility.md)
 documents four probe runs (w8a8 / w4a16 × FULL / FULL_AND_PIECEWISE):
 
-* **FULL** was demoted to `FULL_DECODE_ONLY` at engine init by
+- **FULL** was demoted to `FULL_DECODE_ONLY` at engine init by
   `compilation.py:1343` because the active attention backend
   (`GDNAttentionBackend`, selected by Qwen3.5's Mamba+attention hybrid
   architecture) declares `AttentionCGSupport.UNIFORM_BATCH`, which is
   incompatible with FULL's variable-length prefill batches. Cause is
   architectural, independent of chunk size or quant scheme.
-* **FULL_AND_PIECEWISE** was demoted to `FULL_DECODE_ONLY` by the gfx908
+- **FULL_AND_PIECEWISE** was demoted to `FULL_DECODE_ONLY` by the gfx908
   pre-guard at `rocm.py:775` (citing measured PIECEWISE regression
   −9.7 % at c=8/TP>1 and KV-cache footprint blow-up). PIECEWISE also
   structurally requires `torch.compile`, which is broken on gfx908
@@ -152,8 +152,8 @@ new `CUDAGRAPH_MODE` env-var hook is opt-in only and defaults to empty
 Full 144-row table (12 cells × 2 workloads × 6 metrics) emitted by
 `scripts/mi100/aggregate_hbm.py --milestone m2-chunked`:
 
-* CSV (machine-readable): `/root/bench-int8-w4a16-hbm/m2-chunked/m2_pareto.csv`
-* Markdown (human-readable, rendered table): `/root/bench-int8-w4a16-hbm/m2-chunked/m2_pareto.md`
+- CSV (machine-readable): `/root/bench-int8-w4a16-hbm/m2-chunked/m2_pareto.csv`
+- Markdown (human-readable, rendered table): `/root/bench-int8-w4a16-hbm/m2-chunked/m2_pareto.md`
 
 Each row joins on `(model, tp, concurrency, workload)` against the per-cell
 production `winner_value` from `/root/bench-int8-w4a16/final/final_grid.csv`
@@ -198,15 +198,15 @@ cost dominates the TTFT.
 
 ### Verdict per quant
 
-* **w8a8 — WIN-BAR-MET** on the task-spec prefill bar (6/6 coding cells
+- **w8a8 — WIN-BAR-MET** on the task-spec prefill bar (6/6 coding cells
   pass) and on the decode-dominated `output_throughput` aggregator
   win-bar (4/8 cell×workload combinations, peak `+10.61 %` on
   `w8a8_tp4_c2_coding`).
-* **w4a16 — WIN-BAR-MET** on the task-spec prefill bar (5/6 coding cells
+- **w4a16 — WIN-BAR-MET** on the task-spec prefill bar (5/6 coding cells
   pass) and on the decode-dominated `output_throughput` aggregator
   win-bar (7/8 cell×workload combinations, peak `+19.10 %` on
   `w4a16_tp4_c2_coding`).
-* **Aggregate: WIN-BAR-MET on both quant schemes.** No negative-result
+- **Aggregate: WIN-BAR-MET on both quant schemes.** No negative-result
   clause invoked; no rocprofv3 trace required for VAL-CHUNKED-004.
 
 ## Pareto Exceptions
@@ -216,13 +216,13 @@ cost dominates the TTFT.
 
 Headline regressions:
 
-* **w8a8_tp4_c2 synthetic** `tput` −2.29 %, `req_tput` −2.29 %.
+- **w8a8_tp4_c2 synthetic** `tput` −2.29 %, `req_tput` −2.29 %.
   Fixed-1024-token inputs fit in a single 2048-token chunk; chunked
   scheduling adds overhead without unlocking cross-request batching
   benefits. Same cell on coding workload WINS by +10.61 %.
-* **w8a8_tp4_c4 synthetic** `tput` −6.97 %, `req_tput` −6.97 %, plus
+- **w8a8_tp4_c4 synthetic** `tput` −6.97 %, `req_tput` −6.97 %, plus
   `mean_tpot` +7.18 %. Same root cause amplified by higher concurrency.
-* **TTFT inflation is universal across cells** (mean_ttft up 4–100 %,
+- **TTFT inflation is universal across cells** (mean_ttft up 4–100 %,
   p99_ttft up 1.9 %–477 %). This is the expected scheduling tradeoff:
   chunked prefill splits per-prompt prefill across batches, increasing
   per-prompt first-token latency in exchange for higher cross-prompt
@@ -289,7 +289,7 @@ seed=42 fixed.
 
 ### File inventory (relative to `/root/bench-int8-w4a16-hbm/m2-chunked/`)
 
-```
+```text
 m2-chunked/
 ├── chunk_sweep.json              # m2-chunk-size-sweep output (read by grid)
 ├── chunk_sweep_summary.md        # human-readable per-quant table
@@ -318,15 +318,15 @@ m2-chunked/
 
 Cross-references:
 
-* M1 KV-INT8 (`int8_per_token_head`) baseline & decision:
+- M1 KV-INT8 (`int8_per_token_head`) baseline & decision:
   [`BENCH_HBM_M1_KVINT8.md`](BENCH_HBM_M1_KVINT8.md)
-* M2 chunk-size sweep details:
+- M2 chunk-size sweep details:
   [`chunk_sweep_summary.md`](/root/bench-int8-w4a16-hbm/m2-chunked/chunk_sweep_summary.md)
-* M2 cudagraph feasibility:
+- M2 cudagraph feasibility:
   [`cudagraph_feasibility.md`](/root/bench-int8-w4a16-hbm/m2-chunked/cudagraph_feasibility.md)
-* Production baseline this report compares against:
+- Production baseline this report compares against:
   [`BENCH_INT8_W4A16_FINAL.md`](BENCH_INT8_W4A16_FINAL.md) (commit
   `ee793dbff`); per-cell numbers in
   `/root/bench-int8-w4a16/final/final_grid.csv`.
-* Validation contract: `validation-contract.md` §
+- Validation contract: `validation-contract.md` §
   `m2-chunked-prefill` (VAL-CHUNKED-001..004).

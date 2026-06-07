@@ -41,6 +41,7 @@ Bench: `vllm bench serve`, dataset random 1024/256, num_prompts=200, seed 42,
 | tp1_c4 | 101.4517 | 71.2048 | **−29.81%** | 36.72 | 49.26 |
 
 Raw JSON:
+
 - legacy: `/root/bench-w4a16/m3v/legacy_tp1/tp1_c{1,2,4}.json`
 - marlin: `/root/bench-w4a16/m3v/marlin_tp1/tp1_c{1,2,4}.json`
 

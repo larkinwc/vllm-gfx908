@@ -27,7 +27,7 @@ Copied from `/root/bench-w4a16/manifest.json`:
 
 Pinned runtime env (all runs):
 
-```
+```text
 LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib
 ROCM_PATH=/opt/rocm/core-7.12
 PYTORCH_ROCM_ARCH=gfx908
@@ -114,7 +114,7 @@ Exactly **1 genuine model-quality failure**: `py_rate_limit` (sanity-call
 failures). Among the 8 prompts whose language toolchain is available
 (7 python + 1 bash), the score is **7/8**. Per-prompt:
 
-```
+```text
 py_two_sum         python      PASS
 py_fib             python      PASS
 py_palindrome      python      PASS
@@ -138,12 +138,12 @@ prompts to obtain a clean 10-prompt coding score on the legacy kernel.
   `/root/bench-w4a16/m0/harness_manifest.json`
 - Version manifest: `/root/bench-w4a16/manifest.json`
 - rocprof capture: `/root/bench-w4a16/m0/rocprof/`
-  - `kernel_trace.csv` (14,143 records), `pmc.csv` (FETCH_SIZE/WRITE_SIZE),
+    - `kernel_trace.csv` (14,143 records), `pmc.csv` (FETCH_SIZE/WRITE_SIZE),
     `capture_summary.json`
-  - HBM derivation scripts + report: `hbm_aggregate.py`, `hbm_summary.py`,
+    - HBM derivation scripts + report: `hbm_aggregate.py`, `hbm_summary.py`,
     `hbm_report.txt`, `hbm_compact.txt`
 - Quality evals: `/root/bench-w4a16/m0/quality/`
-  - `ppl_w4a16.json`, `niah_w4a16.json`,
+    - `ppl_w4a16.json`, `niah_w4a16.json`,
     `m6_coding_eval_w4a16-baseline.json` / `.md`
 
 ---

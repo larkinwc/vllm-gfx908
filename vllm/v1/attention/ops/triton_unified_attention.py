@@ -759,6 +759,7 @@ def _get_tile_size(
 
     if current_platform.is_rocm():
         from vllm.platforms.rocm import on_mi100
+
         if on_mi100():
             return 32
 
@@ -971,6 +972,7 @@ def unified_attention(
         from vllm.v1.attention.backends.triton_attn import (
             _compute_flash_decoding_splits,
         )
+
         num_segments = _compute_flash_decoding_splits(
             max_seq_len=max_seqlen_k,
             num_seqs=num_seqs,
@@ -1083,4 +1085,3 @@ def unified_attention(
             NUM_SEGMENTS_PER_SEQ=num_segments,
             USE_FP8=output_scale is not None,
         )
-

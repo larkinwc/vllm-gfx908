@@ -56,14 +56,14 @@ def _reference_int8_gemm(a, b, scale_a, scale_b):
 def test_ck_int8_gemm_matches_pytorch_reference(ck_int8_gemm, shape, seed):
     M, N, K = shape
     g = torch.Generator(device="cuda").manual_seed(seed)
-    a = torch.randint(-100, 101, (M, K), generator=g, device="cuda",
-                      dtype=torch.int8)
-    b = torch.randint(-100, 101, (N, K), generator=g, device="cuda",
-                      dtype=torch.int8)
-    scale_a = torch.rand((M,), generator=g, device="cuda",
-                         dtype=torch.float32) * 0.01 + 0.001
-    scale_b = torch.rand((N,), generator=g, device="cuda",
-                         dtype=torch.float32) * 0.01 + 0.001
+    a = torch.randint(-100, 101, (M, K), generator=g, device="cuda", dtype=torch.int8)
+    b = torch.randint(-100, 101, (N, K), generator=g, device="cuda", dtype=torch.int8)
+    scale_a = (
+        torch.rand((M,), generator=g, device="cuda", dtype=torch.float32) * 0.01 + 0.001
+    )
+    scale_b = (
+        torch.rand((N,), generator=g, device="cuda", dtype=torch.float32) * 0.01 + 0.001
+    )
 
     out_ck = ck_int8_gemm(a, b, scale_a, scale_b, None, 1)
     _, out_ref = _reference_int8_gemm(a, b, scale_a, scale_b)
@@ -80,4 +80,5 @@ def test_ck_int8_gemm_matches_pytorch_reference(ck_int8_gemm, shape, seed):
     # output value), so we use the spec's rel-err gate as the binding check.
     assert max_rel <= 1e-2, (
         f"shape={shape} seed={seed}: max_rel_err={max_rel:.4e} "
-        f"max_abs_err={max_abs:.4e} exceeds 1e-2 (VAL-CK-005)")
+        f"max_abs_err={max_abs:.4e} exceeds 1e-2 (VAL-CK-005)"
+    )

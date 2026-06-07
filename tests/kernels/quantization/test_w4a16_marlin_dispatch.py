@@ -15,6 +15,7 @@ hook in ``process_weights_after_loading``, and the selection order in
 The flag is toggled via env (monkeypatch); ``on_mi100`` is mocked where the
 selection is being exercised. Module-level skip on non-ROCm.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -46,10 +47,10 @@ mi100_legacy_mod = importlib.import_module(
 )
 rocm_platform_mod = importlib.import_module("vllm.platforms.rocm")
 
-from vllm.model_executor.kernels.linear.mixed_precision.MPLinearKernel import (  # noqa: E501
+from vllm.model_executor.kernels.linear.mixed_precision.MPLinearKernel import (  # noqa: E402,E501
     MPLinearLayerConfig,
 )
-from vllm.scalar_type import scalar_types
+from vllm.scalar_type import scalar_types  # noqa: E402
 
 MARLIN_FLAG = "VLLM_MI100_W4A16_USE_MARLIN_REPACK"
 DISABLE_FLAG = "VLLM_DISABLE_MI100_W4A16"
@@ -95,8 +96,7 @@ def _make_spy(M: int, N: int, dtype: torch.dtype):
 def _install_spies(monkeypatch, M, N, dtype):
     marlin_spy, marlin_calls = _make_spy(M, N, dtype)
     legacy_spy, legacy_calls = _make_spy(M, N, dtype)
-    monkeypatch.setattr(
-        mi100_marlin_mod, "mi100_w4a16_marlin_gemm", marlin_spy)
+    monkeypatch.setattr(mi100_marlin_mod, "mi100_w4a16_marlin_gemm", marlin_spy)
     monkeypatch.setattr(mi100_legacy_mod, "mi100_w4a16_gemm", legacy_spy)
     return marlin_calls, legacy_calls
 
@@ -115,8 +115,9 @@ def _make_legacy_layer(K, N, G, has_zp, seed=0):
     num_groups = K // G
     w_int4_kn = torch.randint(0, 16, (K, N), device=device, dtype=torch.int32)
     w_q = _pack_int4_along_n(w_int4_kn)
-    w_s = (0.05 * torch.rand(
-        (num_groups, N), device=device, dtype=torch.float32)).to(torch.float16)
+    w_s = (0.05 * torch.rand((num_groups, N), device=device, dtype=torch.float32)).to(
+        torch.float16
+    )
 
     weight_type = scalar_types.uint4 if has_zp else scalar_types.uint4b8
     config = MPLinearLayerConfig(
@@ -144,7 +145,8 @@ def _make_legacy_layer(K, N, G, has_zp, seed=0):
     layer.w_s = w_s
     if has_zp:
         zeros_int4 = torch.randint(
-            0, 16, (num_groups, N), device=device, dtype=torch.int32)
+            0, 16, (num_groups, N), device=device, dtype=torch.int32
+        )
         layer.w_zp = _pack_int4_along_n(zeros_int4)
     return layer, kernel
 
@@ -158,6 +160,7 @@ def _tp_initialized() -> bool:
     from vllm.distributed.parallel_state import (
         get_tensor_model_parallel_rank,
     )
+
     try:
         get_tensor_model_parallel_rank()
         return True
@@ -173,10 +176,13 @@ def _ensure_distributed():
         ensure_model_parallel_initialized,
         init_distributed_environment,
     )
+
     with set_current_vllm_config(VllmConfig()):
         init_distributed_environment(
-            world_size=1, rank=0,
-            distributed_init_method="tcp://127.0.0.1:0", local_rank=0,
+            world_size=1,
+            rank=0,
+            distributed_init_method="tcp://127.0.0.1:0",
+            local_rank=0,
         )
         ensure_model_parallel_initialized(1, 1)
 
@@ -193,8 +199,7 @@ def _build_checkpoint_layer(K, N, G, has_zp, seed=0):
     torch.manual_seed(seed)
     w_int4_kn = torch.randint(0, 16, (K, N), device=device, dtype=torch.int32)
     w_ckpt_nk8 = _pack_int4_along_k_to_ckpt(w_int4_kn)  # [N, K//8]
-    scales_ckpt_nkg = 0.05 * torch.rand(
-        (N, K // G), device=device, dtype=torch.float16)
+    scales_ckpt_nkg = 0.05 * torch.rand((N, K // G), device=device, dtype=torch.float16)
 
     weight_type = scalar_types.uint4 if has_zp else scalar_types.uint4b8
     config = MPLinearLayerConfig(
@@ -223,26 +228,36 @@ def _build_checkpoint_layer(K, N, G, has_zp, seed=0):
     layer.register_parameter(
         "weight_packed",
         PackedvLLMParameter(
-            data=w_ckpt_nk8, weight_loader=weight_loader,
-            input_dim=1, output_dim=0, packed_factor=8, packed_dim=1,
+            data=w_ckpt_nk8,
+            weight_loader=weight_loader,
+            input_dim=1,
+            output_dim=0,
+            packed_factor=8,
+            packed_dim=1,
         ),
     )
     layer.register_parameter(
         "weight_scale",
         GroupQuantScaleParameter(
-            data=scales_ckpt_nkg, weight_loader=weight_loader,
-            input_dim=1, output_dim=0,
+            data=scales_ckpt_nkg,
+            weight_loader=weight_loader,
+            input_dim=1,
+            output_dim=0,
         ),
     )
     if has_zp:
         zeros_int4_gn = torch.randint(
-            0, 16, (K // G, N), device=device, dtype=torch.int32)
+            0, 16, (K // G, N), device=device, dtype=torch.int32
+        )
         zeros_ckpt_n8kg = _pack_int4_along_n(zeros_int4_gn).t().contiguous()
         layer.register_parameter(
             "weight_zero_point",
             PackedColumnParameter(
-                data=zeros_ckpt_n8kg, weight_loader=weight_loader,
-                output_dim=0, packed_factor=8, packed_dim=0,
+                data=zeros_ckpt_n8kg,
+                weight_loader=weight_loader,
+                output_dim=0,
+                packed_factor=8,
+                packed_dim=0,
             ),
         )
     return layer, kernel
@@ -275,7 +290,8 @@ def test_default_off_selects_legacy(monkeypatch, has_zp):
     marlin_calls, legacy_calls = _install_spies(monkeypatch, M, N, torch.float16)
 
     x = (0.1 * torch.randn((M, K), device=device, dtype=torch.float32)).to(
-        torch.float16)
+        torch.float16
+    )
     kernel.apply_weights(layer, x)
 
     assert len(marlin_calls) == 0, "marlin must NOT be invoked when flag off"
@@ -299,7 +315,8 @@ def test_flag_on_selects_marlin(monkeypatch, has_zp, group_size):
 
     marlin_calls, legacy_calls = _install_spies(monkeypatch, M, N, torch.float16)
     x = (0.1 * torch.randn((M, K), device=device, dtype=torch.float32)).to(
-        torch.float16)
+        torch.float16
+    )
     kernel.apply_weights(layer, x)
 
     assert len(marlin_calls) == 1, "marlin gemm must be selected"
@@ -321,7 +338,8 @@ def test_disable_precedence_over_marlin(monkeypatch):
 
     marlin_calls, legacy_calls = _install_spies(monkeypatch, M, N, torch.float16)
     x = (0.1 * torch.randn((M, K), device=device, dtype=torch.float32)).to(
-        torch.float16)
+        torch.float16
+    )
     kernel.apply_weights(layer, x)
 
     assert len(marlin_calls) == 0, "DISABLE must prevent marlin invocation"
@@ -343,7 +361,8 @@ def test_group_gate(monkeypatch):
     assert _has_marlin_attrs(layer32)
     marlin_calls, _ = _install_spies(monkeypatch, M, N, torch.float16)
     x = (0.1 * torch.randn((M, K), device=device, dtype=torch.float32)).to(
-        torch.float16)
+        torch.float16
+    )
     kernel32.apply_weights(layer32, x)
     assert len(marlin_calls) == 1, "g=32 must select marlin"
 
@@ -371,7 +390,8 @@ def test_non_mi100_preserves_legacy(monkeypatch):
 
     marlin_calls, _ = _install_spies(monkeypatch, M, N, torch.float16)
     x = (0.1 * torch.randn((M, K), device=device, dtype=torch.float32)).to(
-        torch.float16)
+        torch.float16
+    )
     kernel.apply_weights(layer, x)
     assert len(marlin_calls) == 0, "marlin must NOT be invoked on non-MI100"
 
@@ -410,8 +430,7 @@ def test_repack_hook(monkeypatch, has_zp, group_size):
     assert torch.equal(layer_off.weight_packed, layer_on.weight_packed)
     assert torch.equal(layer_off.weight_scale, layer_on.weight_scale)
     if has_zp:
-        assert torch.equal(
-            layer_off.weight_zero_point, layer_on.weight_zero_point)
+        assert torch.equal(layer_off.weight_zero_point, layer_on.weight_zero_point)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="ROCm GPU required")
@@ -431,7 +450,8 @@ def test_byte_identical_disable_path(monkeypatch, has_zp):
     M = 16
     torch.manual_seed(123)
     x = (0.1 * torch.randn((M, K), device=device, dtype=torch.float32)).to(
-        torch.float16)
+        torch.float16
+    )
 
     out = kernel.apply_weights(layer, x)
 

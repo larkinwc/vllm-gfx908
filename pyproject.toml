@@ -54,6 +54,10 @@ lora_hf_hub_resolver = "vllm.plugins.lora_resolvers.hf_hub_resolver:register_hf_
 where = ["."]
 include = ["vllm*"]
 
+[tool.ruff]
+# Vendored third-party sources are kept byte-for-byte; do not lint or reformat.
+extend-exclude = ["vllm/third_party/**"]
+
 [tool.ruff.lint.per-file-ignores]
 "vllm/third_party/**" = ["ALL"]
 "vllm/version.py" = ["F401"]
@@ -130,7 +134,9 @@ extend-exclude = ["tests/models/fixtures/*", "tests/prompts/*", "tests/tokenizer
     "tests/v1/engine/test_fast_incdec_prefix_err.py", ".git/*", "csrc/cpu/sgl-kernels/*",
     "rust/src/chat/src/renderer/deepseek_v32/fixtures/*",
     "rust/src/tool-parser/src/gemma4.rs", "rust/src/text/src/output/decoded.rs",
-    "rust/src/tokenizer/src/incremental.rs", "rust/src/reasoning-parser/src/tests.rs"]
+    "rust/src/tokenizer/src/incremental.rs", "rust/src/reasoning-parser/src/tests.rs",
+    # gfx908 fork: captured machine-generated install/smoke logs
+    "*.log"]
 ignore-hidden = false
 
 [tool.typos.default]
@@ -144,6 +150,9 @@ cudaDevAttrMaxSharedMemoryPerBlockOptin = "cudaDevAttrMaxSharedMemoryPerBlockOpt
 sharedMemPerBlockOptin = "sharedMemPerBlockOptin"
 
 depthwise_seperable_out_channel = "depthwise_seperable_out_channel"
+# gfx908 fork: TensileLite kernel-trace SHA digests (hex, not words)
+b686daa25aa593a7 = "b686daa25aa593a7"
+2a4d5ded1e5934ef = "2a4d5ded1e5934ef"
 pard_token = "pard_token"
 ptd_token_id = "ptd_token_id"
 ser_de = "ser_de"
@@ -184,6 +193,10 @@ wht = "wht"
 WHT = "WHT"
 # Huawei Compute Architecture for Neural Networks
 CANN = "CANN"
+# gfx908 fork: local code identifiers / test fixtures, not misspellings
+relm = "relm"
+DELT = "DELT"
+abd = "abd"
 
 [tool.uv]
 no-build-isolation-package = ["torch"]

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """M3-F2 per-cell delta aggregator.
 
 Compares library/bench-post-sync/ vs library/bench-baseline/ across:
@@ -19,21 +21,24 @@ Writes:
   library/bench-delta/d4-hbm-delta.json
   library/bench-delta/summary.json (top-line verdict, per-cell verdicts)
 """
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-ROOT = Path("/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/loose-rats-clean-phm2k")
+ROOT = Path(
+    "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/loose-rats-clean-phm2k"  # noqa: E501
+)
 BASE = ROOT / "library" / "bench-baseline"
 POST = ROOT / "library" / "bench-post-sync"
 DELT = ROOT / "library" / "bench-delta"
 DELT.mkdir(parents=True, exist_ok=True)
 
 # Thresholds
-THR_REG_PCT = -3.0       # D1, D2 throughput
-LAT_REG_PCT = +2.0       # D3 latency
-HBM_REG_PCT = +2.0       # D4 HBM bytes
+THR_REG_PCT = -3.0  # D1, D2 throughput
+LAT_REG_PCT = +2.0  # D3 latency
+HBM_REG_PCT = +2.0  # D4 HBM bytes
 
 
 def pct(post: float, base: float) -> float:
@@ -52,7 +57,7 @@ def load_grid(path: Path) -> dict:
 
 
 def aggregate_postsync_grid() -> dict:
-    """Build a post-sync grid JSON mirroring baseline schema by reading per-cell files."""
+    """Build a post-sync grid JSON mirroring baseline schema from per-cell files."""
     cells = []
     for wl in ("synthetic", "coding"):
         d = POST / "grid" / wl
@@ -93,29 +98,36 @@ def compute_grid_deltas() -> dict:
         verdict = "PASS"
         if d_tput < THR_REG_PCT:
             verdict = "REGRESSION"
-            regressions.append({
+            regressions.append(
+                {
+                    "cell": key,
+                    "metric": "output_throughput_toks_s",
+                    "baseline": b_tput,
+                    "postsync": p_tput,
+                    "delta_pct": d_tput,
+                }
+            )
+        rows.append(
+            {
                 "cell": key,
-                "metric": "output_throughput_toks_s",
-                "baseline": b_tput,
-                "postsync": p_tput,
-                "delta_pct": d_tput,
-            })
-        rows.append({
-            "cell": key,
-            "baseline_tput": b_tput,
-            "postsync_tput": p_tput,
-            "delta_tput_pct": d_tput,
-            "baseline_ttft_ms": b_ttft,
-            "postsync_ttft_ms": p_ttft,
-            "delta_ttft_pct": d_ttft,
-            "baseline_tpot_ms": b_tpot,
-            "postsync_tpot_ms": p_tpot,
-            "delta_tpot_pct": d_tpot,
-            "verdict": verdict,
-        })
-    return {"rows": rows, "regressions": regressions,
-            "threshold_pct": THR_REG_PCT,
-            "metric": "output_throughput_toks_s"}
+                "baseline_tput": b_tput,
+                "postsync_tput": p_tput,
+                "delta_tput_pct": d_tput,
+                "baseline_ttft_ms": b_ttft,
+                "postsync_ttft_ms": p_ttft,
+                "delta_ttft_pct": d_ttft,
+                "baseline_tpot_ms": b_tpot,
+                "postsync_tpot_ms": p_tpot,
+                "delta_tpot_pct": d_tpot,
+                "verdict": verdict,
+            }
+        )
+    return {
+        "rows": rows,
+        "regressions": regressions,
+        "threshold_pct": THR_REG_PCT,
+        "metric": "output_throughput_toks_s",
+    }
 
 
 def compute_d2() -> dict:
@@ -148,15 +160,27 @@ def compute_d3() -> dict:
     for k in ("avg_latency",):
         b, p = base[k], post[k]
         d = pct(p, b)
-        rows[k] = {"baseline_s": b, "postsync_s": p, "delta_pct": d,
-                   "verdict": "REGRESSION" if d > LAT_REG_PCT else "PASS"}
+        rows[k] = {
+            "baseline_s": b,
+            "postsync_s": p,
+            "delta_pct": d,
+            "verdict": "REGRESSION" if d > LAT_REG_PCT else "PASS",
+        }
     for pk in ("50", "90", "99"):
         b = base["percentiles"][pk]
         p = post["percentiles"][pk]
         d = pct(p, b)
-        rows[f"p{pk}"] = {"baseline_s": b, "postsync_s": p, "delta_pct": d,
-                          "verdict": "REGRESSION" if d > LAT_REG_PCT else "PASS"}
-    verdict = "REGRESSION" if any(r["verdict"] == "REGRESSION" for r in rows.values()) else "PASS"
+        rows[f"p{pk}"] = {
+            "baseline_s": b,
+            "postsync_s": p,
+            "delta_pct": d,
+            "verdict": "REGRESSION" if d > LAT_REG_PCT else "PASS",
+        }
+    verdict = (
+        "REGRESSION"
+        if any(r["verdict"] == "REGRESSION" for r in rows.values())
+        else "PASS"
+    )
     return {"metrics": rows, "threshold_pct": LAT_REG_PCT, "verdict": verdict}
 
 
@@ -167,14 +191,30 @@ def compute_d4() -> dict:
         return {"status": "MISSING_POST"}
     post = json.loads(post_path.read_text())
     rows = {}
-    for k in ("hbm_bytes_per_output_token", "hbm_bytes_per_total_token", "total_hbm_bytes"):
+    for k in (
+        "hbm_bytes_per_output_token",
+        "hbm_bytes_per_total_token",
+        "total_hbm_bytes",
+    ):
         b, p = base[k], post[k]
         d = pct(p, b)
-        rows[k] = {"baseline": b, "postsync": p, "delta_pct": d,
-                   "verdict": "REGRESSION" if d > HBM_REG_PCT else "PASS"}
-    verdict = "REGRESSION" if rows["hbm_bytes_per_output_token"]["verdict"] == "REGRESSION" else "PASS"
-    return {"metrics": rows, "threshold_pct": HBM_REG_PCT, "verdict": verdict,
-            "primary_metric": "hbm_bytes_per_output_token"}
+        rows[k] = {
+            "baseline": b,
+            "postsync": p,
+            "delta_pct": d,
+            "verdict": "REGRESSION" if d > HBM_REG_PCT else "PASS",
+        }
+    verdict = (
+        "REGRESSION"
+        if rows["hbm_bytes_per_output_token"]["verdict"] == "REGRESSION"
+        else "PASS"
+    )
+    return {
+        "metrics": rows,
+        "threshold_pct": HBM_REG_PCT,
+        "verdict": verdict,
+        "primary_metric": "hbm_bytes_per_output_token",
+    }
 
 
 def main() -> int:
@@ -204,6 +244,7 @@ def main() -> int:
     # regressions are mild (>= -5% throughput, <= +5% latency/HBM); FAIL otherwise.
     def is_mild_thr(p):
         return p > -5.0
+
     def is_mild_lat(p):
         return p < +5.0
 

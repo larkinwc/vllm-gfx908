@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 Compare two W8A8 TP=1 c=1 synthetic result JSONs and emit
 canary_diff.json with the throughput delta percent.
@@ -8,6 +9,7 @@ Usage:
     canary_diff.py --runA <path> --runB <path> \
         --out /root/bench-int8-w4a16/baseline/canary_diff.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -29,16 +31,18 @@ def main() -> int:
 
     runs = []
     for label, d in (("runA", a), ("runB", b)):
-        runs.append({
-            "label": label,
-            "source": str(args.runA if label == "runA" else args.runB),
-            "output_throughput_toks_s": float(d["output_throughput_toks_s"]),
-            "p50_ttft_ms": float(d["p50_ttft_ms"]),
-            "p50_tpot_ms": float(d["p50_tpot_ms"]),
-            "vllm_commit": d.get("vllm_commit"),
-            "harness_commit": d.get("harness_commit"),
-            "timestamp": d.get("timestamp"),
-        })
+        runs.append(
+            {
+                "label": label,
+                "source": str(args.runA if label == "runA" else args.runB),
+                "output_throughput_toks_s": float(d["output_throughput_toks_s"]),
+                "p50_ttft_ms": float(d["p50_ttft_ms"]),
+                "p50_tpot_ms": float(d["p50_tpot_ms"]),
+                "vllm_commit": d.get("vllm_commit"),
+                "harness_commit": d.get("harness_commit"),
+                "timestamp": d.get("timestamp"),
+            }
+        )
 
     a_t = runs[0]["output_throughput_toks_s"]
     b_t = runs[1]["output_throughput_toks_s"]

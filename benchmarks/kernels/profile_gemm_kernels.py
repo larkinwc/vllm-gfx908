@@ -1,4 +1,6 @@
 #!/opt/vllm-env/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 GEMM Kernel Profiling for MI100 (gfx908) using rocprofv3
 
@@ -31,11 +33,12 @@ import argparse
 import csv
 import json
 import os
-import re
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+
+import regex as re
 
 VLLM_PYTHON = "/opt/vllm-env/bin/python3"
 ROCPROFV3 = "/opt/rocm/bin/rocprofv3"
@@ -44,13 +47,14 @@ SERVER_URL = "http://localhost:8000"
 DEFAULT_MODEL = "/models/Qwen3.5-9B"
 
 MI100_PEAK_BW_BYTES_PER_SEC = 1.23e12  # 1.23 TB/s HBM2
-MI100_PEAK_FLOPS_FP16 = 184.6e12      # 184.6 TFLOPS FP16 (with MFMA)
+MI100_PEAK_FLOPS_FP16 = 184.6e12  # 184.6 TFLOPS FP16 (with MFMA)
 MI100_NUM_CUS = 120
 
 
 def check_server_health():
     try:
         import urllib.request
+
         with urllib.request.urlopen(f"{SERVER_URL}/health", timeout=5) as r:
             return r.status == 200
     except Exception:
@@ -61,12 +65,15 @@ def send_inference_request(
     prompt="Write a Python function to sort a list.", max_tokens=128
 ):
     import urllib.request
-    payload = json.dumps({
-        "model": os.path.basename(DEFAULT_MODEL),
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": max_tokens,
-        "temperature": 0.7,
-    }).encode()
+
+    payload = json.dumps(
+        {
+            "model": os.path.basename(DEFAULT_MODEL),
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens,
+            "temperature": 0.7,
+        }
+    ).encode()
     req = urllib.request.Request(
         f"{SERVER_URL}/v1/chat/completions",
         data=payload,
@@ -146,9 +153,13 @@ def run_kernel_trace_triage(output_dir):
     cmd = [
         ROCPROFV3,
         "--kernel-trace",
-        "--output-format", "csv",
-        "--output-directory", trace_dir,
-        "--", VLLM_PYTHON, workload_script,
+        "--output-format",
+        "csv",
+        "--output-directory",
+        trace_dir,
+        "--",
+        VLLM_PYTHON,
+        workload_script,
     ]
 
     print(f"Running: {' '.join(cmd)}")
@@ -182,14 +193,18 @@ def parse_kernel_trace(trace_dir):
                 name = row.get(
                     "Kernel_Name", row.get("kernel_name", row.get("Name", ""))
                 )
-                duration_ns = int(row.get(
-                    "Duration_ns", row.get("duration", row.get("DurationNs", 0))
-                ))
+                duration_ns = int(
+                    row.get(
+                        "Duration_ns", row.get("duration", row.get("DurationNs", 0))
+                    )
+                )
                 if name:
                     if name not in kernels:
                         kernels[name] = {
-                            "name": name, "count": 0,
-                            "total_ns": 0, "durations": [],
+                            "name": name,
+                            "count": 0,
+                            "total_ns": 0,
+                            "durations": [],
                         }
                     kernels[name]["count"] += 1
                     kernels[name]["total_ns"] += duration_ns
@@ -200,7 +215,7 @@ def parse_kernel_trace(trace_dir):
 
     # Compute stats
     total_time = sum(k["total_ns"] for k in ranked)
-    print(f"\nTotal kernel time: {total_time/1e6:.1f} ms")
+    print(f"\nTotal kernel time: {total_time / 1e6:.1f} ms")
     print(f"Total unique kernels: {len(ranked)}")
     print()
 
@@ -216,13 +231,25 @@ def parse_kernel_trace(trace_dir):
         avg_us = (k["total_ns"] / k["count"]) / 1000.0
         total_ms = k["total_ns"] / 1e6
         short_name = k["name"][:60]
-        is_gemm = any(g in k["name"].lower() for g in
-                      ["gemm", "gemv", "rocblas", "hipblas", "mfma", "matmul",
-                       "linear", "sgemm", "hgemm", "batched"])
+        is_gemm = any(
+            g in k["name"].lower()
+            for g in [
+                "gemm",
+                "gemv",
+                "rocblas",
+                "hipblas",
+                "mfma",
+                "matmul",
+                "linear",
+                "sgemm",
+                "hgemm",
+                "batched",
+            ]
+        )
 
         marker = " [GEMM]" if is_gemm else ""
         print(
-            f"{i+1:<5} {pct:>5.1f}% {k['count']:>7}"
+            f"{i + 1:<5} {pct:>5.1f}% {k['count']:>7}"
             f" {avg_us:>10.1f} {total_ms:>10.2f} {short_name}{marker}"
         )
 
@@ -270,8 +297,10 @@ def run_deep_profile(output_dir, kernel_regex=None, top_n=3, ranked_kernels=None
         regex = "|".join(re.escape(n) for n in names)
         kernel_filter = ["--kernel-include-regex", regex]
     else:
-        kernel_filter = ["--kernel-include-regex",
-                         ".*gemm.*|.*Gemm.*|.*GEMM.*|.*rocblas.*|.*hipblas.*|.*matmul.*"]
+        kernel_filter = [
+            "--kernel-include-regex",
+            ".*gemm.*|.*Gemm.*|.*GEMM.*|.*rocblas.*|.*hipblas.*|.*matmul.*",
+        ]
 
     # Memory counters pass
     print("Pass 1: Memory counters (FETCH_SIZE, WRITE_SIZE, TCC_HIT, TCC_MISS)...")
@@ -280,11 +309,16 @@ def run_deep_profile(output_dir, kernel_regex=None, top_n=3, ranked_kernels=None
 
     cmd_mem = [
         ROCPROFV3,
-        "--pmc", "FETCH_SIZE,WRITE_SIZE,TCC_HIT_sum,TCC_MISS_sum",
+        "--pmc",
+        "FETCH_SIZE,WRITE_SIZE,TCC_HIT_sum,TCC_MISS_sum",
         *kernel_filter,
-        "--output-format", "csv",
-        "--output-directory", mem_dir,
-        "--", VLLM_PYTHON, workload_script,
+        "--output-format",
+        "csv",
+        "--output-directory",
+        mem_dir,
+        "--",
+        VLLM_PYTHON,
+        workload_script,
     ]
 
     result = subprocess.run(
@@ -296,11 +330,16 @@ def run_deep_profile(output_dir, kernel_regex=None, top_n=3, ranked_kernels=None
         print("  Retrying with FETCH_SIZE,WRITE_SIZE only...")
         cmd_mem_fallback = [
             ROCPROFV3,
-            "--pmc", "FETCH_SIZE,WRITE_SIZE",
+            "--pmc",
+            "FETCH_SIZE,WRITE_SIZE",
             *kernel_filter,
-            "--output-format", "csv",
-            "--output-directory", mem_dir,
-            "--", VLLM_PYTHON, workload_script,
+            "--output-format",
+            "csv",
+            "--output-directory",
+            mem_dir,
+            "--",
+            VLLM_PYTHON,
+            workload_script,
         ]
         result = subprocess.run(
             cmd_mem_fallback, env=env, capture_output=True, text=True, timeout=600
@@ -314,11 +353,16 @@ def run_deep_profile(output_dir, kernel_regex=None, top_n=3, ranked_kernels=None
 
     cmd_compute = [
         ROCPROFV3,
-        "--pmc", "SQ_WAVES,SQ_INSTS_VALU,SQ_INSTS_MFMA",
+        "--pmc",
+        "SQ_WAVES,SQ_INSTS_VALU,SQ_INSTS_MFMA",
         *kernel_filter,
-        "--output-format", "csv",
-        "--output-directory", compute_dir,
-        "--", VLLM_PYTHON, workload_script,
+        "--output-format",
+        "csv",
+        "--output-directory",
+        compute_dir,
+        "--",
+        VLLM_PYTHON,
+        workload_script,
     ]
 
     result = subprocess.run(
@@ -330,11 +374,16 @@ def run_deep_profile(output_dir, kernel_regex=None, top_n=3, ranked_kernels=None
         print("  Retrying with SQ_WAVES only...")
         cmd_waves = [
             ROCPROFV3,
-            "--pmc", "SQ_WAVES",
+            "--pmc",
+            "SQ_WAVES",
             *kernel_filter,
-            "--output-format", "csv",
-            "--output-directory", compute_dir,
-            "--", VLLM_PYTHON, workload_script,
+            "--output-format",
+            "csv",
+            "--output-directory",
+            compute_dir,
+            "--",
+            VLLM_PYTHON,
+            workload_script,
         ]
         result = subprocess.run(
             cmd_waves, env=env, capture_output=True, text=True, timeout=600
@@ -361,10 +410,13 @@ def parse_deep_profile(deep_dir):
                             continue
                         if name not in results:
                             results[name] = {"name": name}
-                        results[name].update({
-                            k: v for k, v in row.items()
-                            if k not in ("Kernel_Name", "kernel_name")
-                        })
+                        results[name].update(
+                            {
+                                k: v
+                                for k, v in row.items()
+                                if k not in ("Kernel_Name", "kernel_name")
+                            }
+                        )
             except Exception as e:
                 print(f"  Warning: Could not parse {csv_file}: {e}")
 
@@ -390,7 +442,7 @@ def parse_deep_profile(deep_dir):
             bw_bytes_per_sec = (fetch + write) * 32 / duration_s
             bw_util = bw_bytes_per_sec / MI100_PEAK_BW_BYTES_PER_SEC * 100
             print(
-                f"  Memory BW: {bw_bytes_per_sec/1e9:.1f} GB/s"
+                f"  Memory BW: {bw_bytes_per_sec / 1e9:.1f} GB/s"
                 f" ({bw_util:.1f}% of peak)"
             )
 
@@ -410,8 +462,7 @@ def parse_deep_profile(deep_dir):
             total_insts = mfma_insts + valu_insts
             mfma_pct = mfma_insts / total_insts * 100 if total_insts > 0 else 0
             print(
-                f"  MFMA Instructions: {mfma_insts:.0f}"
-                f" ({mfma_pct:.1f}% of VALU+MFMA)"
+                f"  MFMA Instructions: {mfma_insts:.0f} ({mfma_pct:.1f}% of VALU+MFMA)"
             )
             print(f"  VALU Instructions: {valu_insts:.0f}")
             print(f"  Wavefronts: {sq_waves:.0f}")
@@ -435,7 +486,8 @@ def classify_bottleneck(data):
     bw_bytes_per_sec = (fetch + write) * 32 / duration_s if duration_s > 0 else 0
     bw_util = (
         bw_bytes_per_sec / MI100_PEAK_BW_BYTES_PER_SEC
-        if MI100_PEAK_BW_BYTES_PER_SEC > 0 else 0
+        if MI100_PEAK_BW_BYTES_PER_SEC > 0
+        else 0
     )
 
     total_insts = mfma_insts + valu_insts
@@ -444,7 +496,7 @@ def classify_bottleneck(data):
     if bw_util > 0.6 and mfma_pct < 0.3:
         print(
             f"  Bottleneck: MEMORY-BOUND"
-            f" (BW {bw_util*100:.0f}%, MFMA {mfma_pct*100:.0f}%)"
+            f" (BW {bw_util * 100:.0f}%, MFMA {mfma_pct * 100:.0f}%)"
         )
         print(
             "  Recommendation: Already memory-bound."
@@ -453,13 +505,13 @@ def classify_bottleneck(data):
     elif mfma_pct > 0.5 and bw_util < 0.3:
         print(
             f"  Bottleneck: COMPUTE-BOUND"
-            f" (BW {bw_util*100:.0f}%, MFMA {mfma_pct*100:.0f}%)"
+            f" (BW {bw_util * 100:.0f}%, MFMA {mfma_pct * 100:.0f}%)"
         )
         print("  Recommendation: Adjust tile sizes or use larger MFMA variants.")
     elif mfma_pct < 0.3 and bw_util < 0.3:
         print(
             f"  Bottleneck: LATENCY-BOUND"
-            f" (BW {bw_util*100:.0f}%, MFMA {mfma_pct*100:.0f}%)"
+            f" (BW {bw_util * 100:.0f}%, MFMA {mfma_pct * 100:.0f}%)"
         )
         print(
             "  Recommendation: Low utilization."
@@ -468,7 +520,7 @@ def classify_bottleneck(data):
     else:
         print(
             f"  Bottleneck: BALANCED"
-            f" (BW {bw_util*100:.0f}%, MFMA {mfma_pct*100:.0f}%)"
+            f" (BW {bw_util * 100:.0f}%, MFMA {mfma_pct * 100:.0f}%)"
         )
 
 
@@ -573,7 +625,7 @@ def main():
             deep = run_deep_profile(
                 args.output_dir,
                 top_n=args.top_n,
-                ranked_kernels=gemm_kernels if gemm_kernels else ranked[:args.top_n],
+                ranked_kernels=gemm_kernels if gemm_kernels else ranked[: args.top_n],
             )
             generate_report(args.output_dir, triage_results=triage, deep_results=deep)
         else:

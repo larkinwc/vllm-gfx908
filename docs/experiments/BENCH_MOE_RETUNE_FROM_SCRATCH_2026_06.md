@@ -12,11 +12,14 @@ meaningful tuning headroom for the int4_w4a16 MoE kernel at decode sizes.**
 ### 1. The stock tuner crashes ~50 configs in (uncatchable C++ abort)
 
 `benchmarks/kernels/benchmark_moe.py` dies mid-search on this stack:
-```
+
+```text
 at::cuda::CUDAGraph::~CUDAGraph() -> c10_cuda_check_implementation() -> abort()
 ray.exceptions.ActorDiedError: ... Worker exit type: SYSTEM_ERROR
 ```
+
 Ruled out, by experiment:
+
 - **Not a single bad config** — every individual tile (incl. `BLOCK_K=256`,
   `num_warps=1`) runs fine in isolation (~450 us).
 - **Not OOM, not the device-guard, not the cache-clear interval** — the crash
@@ -31,6 +34,7 @@ Ruled out, by experiment:
 
 Built `/root/fp16-bench/moe_tune_isolated.py`: a parent orchestrator that tunes
 each batch size in short-lived **worker subprocesses**, each of which
+
 - times configs eagerly (new `VLLM_MOE_TUNE_NO_CUDAGRAPH=1` path added to
   `benchmark_moe.py` so faults are catchable `RuntimeError`s, not graph-dtor
   aborts),
@@ -61,6 +65,7 @@ within a few us across hundreds of tile shapes).
 
 The `int4_w4a16` decode kernel at small M is **fixed-overhead-bound, not
 tile-efficiency-bound**:
+
 - 512 experts with top-10 routing → the gather/scatter + per-expert dispatch and
   the wna16 dequant path dominate the ~450 us, and those costs are independent
   of `BLOCK_SIZE_*` / `num_warps`.

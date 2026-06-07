@@ -14,7 +14,7 @@
 > **Use `library/correctness-gates-resync.md` as the canonical post-rebuild
 > correctness-gate record for the sync PR body and the validation contract.**
 > The numbers below are kept for forensic comparison only.
-
+>
 > Surface C of the upstream-sync mission validation contract on the post-sync tip.
 > Single-GPU MI100 (gfx908), CUDA_VISIBLE_DEVICES=0. Engine and harness commands
 > captured verbatim below for reproducibility (per AGENTS.md §"Bench reproducibility").

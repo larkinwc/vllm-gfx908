@@ -37,5 +37,6 @@ Because zero cells exceed any threshold (max throughput regression
 is −1.12 %, max latency uplift is +0.19 %, HBM is −0.003 %), no
 per-upstream-PR bisection was triggered. The hot-file conflict
 upstream PR set referenced in `benchmark-worker` SKILL (#42095, #43660,
-#42080, #41434, #40327, #43731, #40687) all merged cleanly into the
+\#42080, #41434, #40327, #43731, #40687) all merged cleanly into the
+
 sync branch without measurable MI100 perf impact under this harness.

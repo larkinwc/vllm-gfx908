@@ -33,6 +33,7 @@ Tuning knobs and their gfx908 implications (per user M3 brief):
 Per-shape autotune configs are read from
 ``vllm/model_executor/kernels/configs/gfx908/mi100_w4a16_M*_N*_K*_g*.json``.
 """
+
 from __future__ import annotations
 
 import logging
@@ -51,18 +52,23 @@ _SUPPORTED_GROUP_SIZES = (32, 64, 128)
 
 @triton.jit
 def mi100_w4a16_gemm_kernel(
-    a_ptr,            # [M, K] fp16/bf16
-    b_ptr,            # [K, N//8] int32 (GPTQ sequential-packed N)
-    scales_ptr,       # [K//G, N] same dtype as a
-    zeros_ptr,        # [K//G, N//8] int32 (only used when HAS_ZP)
-    c_ptr,            # [M, N] fp16/bf16
-    M, N, K,
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
+    a_ptr,  # [M, K] fp16/bf16
+    b_ptr,  # [K, N//8] int32 (GPTQ sequential-packed N)
+    scales_ptr,  # [K//G, N] same dtype as a
+    zeros_ptr,  # [K//G, N//8] int32 (only used when HAS_ZP)
+    c_ptr,  # [M, N] fp16/bf16
+    M,
+    N,
+    K,
+    stride_am,
+    stride_ak,
+    stride_bk,
+    stride_bn,
+    stride_cm,
+    stride_cn,
     group_size,
     HAS_ZP: tl.constexpr,
-    ZP_BIAS: tl.constexpr,   # 8 for uint4b8 (symmetric), 0 for asymmetric
+    ZP_BIAS: tl.constexpr,  # 8 for uint4b8 (symmetric), 0 for asymmetric
     BLOCK_M: tl.constexpr,
     BLOCK_N: tl.constexpr,
     BLOCK_K: tl.constexpr,
@@ -85,12 +91,12 @@ def mi100_w4a16_gemm_kernel(
     # Per-column shift table for the GPTQ sequential nibble layout.
     # Column j gets shift (j % 8) * 4. Build via broadcast+reshape so
     # Triton's compile-time shape inference is happy.
-    shifts_row = tl.arange(0, 8) * 4                       # [8]
-    shifts_2d = tl.broadcast_to(shifts_row[None, :],
-                                (BLOCK_N // 8, 8))         # [N//8, 8]
-    shifts_1d = tl.reshape(shifts_2d, (BLOCK_N,))          # [BLOCK_N]
-    shifts = tl.broadcast_to(shifts_1d[None, :],
-                             (BLOCK_K, BLOCK_N))           # [BLOCK_K, BLOCK_N]
+    shifts_row = tl.arange(0, 8) * 4  # [8]
+    shifts_2d = tl.broadcast_to(shifts_row[None, :], (BLOCK_N // 8, 8))  # [N//8, 8]
+    shifts_1d = tl.reshape(shifts_2d, (BLOCK_N,))  # [BLOCK_N]
+    shifts = tl.broadcast_to(
+        shifts_1d[None, :], (BLOCK_K, BLOCK_N)
+    )  # [BLOCK_K, BLOCK_N]
 
     # Scales column offsets (one scalar per output column per group).
     offs_sn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
@@ -103,14 +109,12 @@ def mi100_w4a16_gemm_kernel(
         mask_k = offs_k < K
 
         # ---- Activations: [BLOCK_M, BLOCK_K] fp16/bf16 ----
-        a_ptrs = (a_ptr + offs_m[:, None] * stride_am
-                  + offs_k[None, :] * stride_ak)
+        a_ptrs = a_ptr + offs_m[:, None] * stride_am + offs_k[None, :] * stride_ak
         mask_a = (offs_m[:, None] < M) & mask_k[None, :]
         a = tl.load(a_ptrs, mask=mask_a, other=0.0)
 
         # ---- Packed-int4 weights: [BLOCK_K, BLOCK_N//8] int32 ----
-        b_ptrs = (b_ptr + offs_k[:, None] * stride_bk
-                  + offs_bn[None, :] * stride_bn)
+        b_ptrs = b_ptr + offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn
         mask_b = mask_k[:, None] & (offs_bn[None, :] < N // 8)
         b_packed = tl.load(b_ptrs, mask=mask_b, other=0)
 
@@ -127,15 +131,13 @@ def mi100_w4a16_gemm_kernel(
 
         scale_offset = g_idx * N + offs_sn
         scale_mask = offs_sn < N
-        scales = tl.load(scales_ptr + scale_offset,
-                         mask=scale_mask, other=1.0)
+        scales = tl.load(scales_ptr + scale_offset, mask=scale_mask, other=1.0)
         scales = tl.broadcast_to(scales[None, :], (BLOCK_K, BLOCK_N))
 
         if HAS_ZP:
             zero_offset = g_idx * (N // 8) + offs_bn
             zero_mask = offs_bn < N // 8
-            z_packed = tl.load(zeros_ptr + zero_offset,
-                               mask=zero_mask, other=0)
+            z_packed = tl.load(zeros_ptr + zero_offset, mask=zero_mask, other=0)
             z = tl.interleave(z_packed, z_packed)
             z = tl.interleave(z, z)
             z = tl.interleave(z, z)
@@ -151,8 +153,7 @@ def mi100_w4a16_gemm_kernel(
         accumulator += tl.dot(a, b_fp, out_dtype=tl.float32)
 
     c = accumulator.to(c_ptr.type.element_ty)
-    c_ptrs = (c_ptr + offs_m[:, None] * stride_cm
-              + offs_n[None, :] * stride_cn)
+    c_ptrs = c_ptr + offs_m[:, None] * stride_cm + offs_n[None, :] * stride_cn
     mask_c = (offs_m[:, None] < M) & (offs_n[None, :] < N)
     tl.store(c_ptrs, c, mask=mask_c)
 
@@ -205,8 +206,7 @@ def mi100_w4a16_gemm(
         f"b_q shape mismatch: {b_q.shape} vs ({K}, {N // 8})"
     )
     assert scales.shape == (K // group_size, N), (
-        f"scales shape mismatch: {scales.shape} vs "
-        f"({K // group_size}, {N})"
+        f"scales shape mismatch: {scales.shape} vs ({K // group_size}, {N})"
     )
     if qzeros is not None:
         assert qzeros.shape == (K // group_size, N // 8), (
@@ -230,17 +230,13 @@ def mi100_w4a16_gemm(
         num_warps = int(cfg.get("num_warps", 4))
         num_stages = int(cfg.get("num_stages", 2))
         if "matrix_instr_nonkdim" in cfg:
-            extra_launch["matrix_instr_nonkdim"] = int(
-                cfg["matrix_instr_nonkdim"]
-            )
+            extra_launch["matrix_instr_nonkdim"] = int(cfg["matrix_instr_nonkdim"])
         if "kpack" in cfg:
             extra_launch["kpack"] = int(cfg["kpack"])
         if "waves_per_eu" in cfg:
             extra_launch["waves_per_eu"] = int(cfg["waves_per_eu"])
     else:
-        BLOCK_M, BLOCK_N, BLOCK_K, num_warps, num_stages = (
-            _default_block_sizes(M)
-        )
+        BLOCK_M, BLOCK_N, BLOCK_K, num_warps, num_stages = _default_block_sizes(M)
 
     # Each tile must lie within a single quant group.
     if group_size < BLOCK_K:
@@ -249,11 +245,20 @@ def mi100_w4a16_gemm(
     grid = (triton.cdiv(M, BLOCK_M), triton.cdiv(N, BLOCK_N))
 
     mi100_w4a16_gemm_kernel[grid](
-        a, b_q, scales, zeros_ptr_arg, c,
-        M, N, K,
-        a.stride(0), a.stride(1),
-        b_q.stride(0), b_q.stride(1),
-        c.stride(0), c.stride(1),
+        a,
+        b_q,
+        scales,
+        zeros_ptr_arg,
+        c,
+        M,
+        N,
+        K,
+        a.stride(0),
+        a.stride(1),
+        b_q.stride(0),
+        b_q.stride(1),
+        c.stride(0),
+        c.stride(1),
         group_size=group_size,
         HAS_ZP=has_zp,
         ZP_BIAS=zp_bias,

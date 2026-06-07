@@ -12,6 +12,7 @@ shape blocks Milestone 2 (VAL-TENSILE-005).
 
 Tests are skipped when not running on a gfx908 GPU.
 """
+
 from __future__ import annotations
 
 import json
@@ -20,9 +21,7 @@ from pathlib import Path
 import pytest
 import torch
 
-pytest.importorskip(
-    "vllm.model_executor.kernels.linear.scaled_mm.mi100_hipblaslt"
-)
+pytest.importorskip("vllm.model_executor.kernels.linear.scaled_mm.mi100_hipblaslt")
 
 from vllm.model_executor.kernels.linear.scaled_mm.mi100_hipblaslt import (  # noqa: E402,E501
     mi100_hipblaslt_scaled_mm,
@@ -43,8 +42,7 @@ pytestmark = pytest.mark.skipif(
 
 
 _MANIFEST = Path(__file__).resolve().parents[3] / (
-    "vllm/model_executor/kernels/configs/gfx908/"
-    "hipblaslt_tuned_shapes.json"
+    "vllm/model_executor/kernels/configs/gfx908/hipblaslt_tuned_shapes.json"
 )
 
 
@@ -61,9 +59,13 @@ def _tuned_shapes() -> list[tuple[int, int, int]]:
     return out
 
 
-def _reference_w8a8(a: torch.Tensor, b: torch.Tensor,
-                    sa: torch.Tensor, sb: torch.Tensor,
-                    out_dtype: torch.dtype) -> torch.Tensor:
+def _reference_w8a8(
+    a: torch.Tensor,
+    b: torch.Tensor,
+    sa: torch.Tensor,
+    sb: torch.Tensor,
+    out_dtype: torch.dtype,
+) -> torch.Tensor:
     """fp32 reference: cast int8 inputs to fp32, GEMM in fp32, then apply
     per-token / per-channel scales. Avoids ``torch.matmul`` int32 path
     which is unimplemented on ROCm. With both operands in [-32, 31] and
@@ -77,7 +79,8 @@ def _reference_w8a8(a: torch.Tensor, b: torch.Tensor,
 
 
 @pytest.mark.parametrize(
-    "M,N,K", _tuned_shapes() or [(32, 64, 64)],
+    "M,N,K",
+    _tuned_shapes() or [(32, 64, 64)],
     ids=lambda v: str(v),
 )
 def test_hipblaslt_matches_reference(M: int, N: int, K: int) -> None:
@@ -95,7 +98,12 @@ def test_hipblaslt_matches_reference(M: int, N: int, K: int) -> None:
     sb = (torch.rand(N, 1, device="cuda", dtype=torch.float32) * 0.05) + 0.001
 
     out = mi100_hipblaslt_scaled_mm(
-        a, b, sa, sb, out_dtype=torch.float16, bias=None,
+        a,
+        b,
+        sa,
+        sb,
+        out_dtype=torch.float16,
+        bias=None,
     )
     ref = _reference_w8a8(a, b, sa, sb, out_dtype=torch.float16)
 
@@ -108,8 +116,9 @@ def test_hipblaslt_matches_reference(M: int, N: int, K: int) -> None:
     max_rel_err = rel.max().item()
 
     # Print on failure for fast triage.
-    msg = (f"M={M} N={N} K={K} max_abs_err={max_abs_err:.3e} "
-           f"max_rel_err={max_rel_err:.3e}")
+    msg = (
+        f"M={M} N={N} K={K} max_abs_err={max_abs_err:.3e} max_rel_err={max_rel_err:.3e}"
+    )
     assert torch.allclose(out, ref, atol=1e-2, rtol=5e-2), msg
 
 
@@ -124,10 +133,20 @@ def test_bias_is_applied() -> None:
     bias = torch.full((N,), 0.5, dtype=torch.float16, device="cuda")
 
     out_no_bias = mi100_hipblaslt_scaled_mm(
-        a, b, sa, sb, out_dtype=torch.float16, bias=None,
+        a,
+        b,
+        sa,
+        sb,
+        out_dtype=torch.float16,
+        bias=None,
     )
     out_bias = mi100_hipblaslt_scaled_mm(
-        a, b, sa, sb, out_dtype=torch.float16, bias=bias,
+        a,
+        b,
+        sa,
+        sb,
+        out_dtype=torch.float16,
+        bias=bias,
     )
     diff = (out_bias.float() - out_no_bias.float() - 0.5).abs().max().item()
     assert diff < 1e-2, f"bias not applied correctly, diff={diff}"

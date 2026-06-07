@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 M0 Coherence Check (VAL-M0-004).
 
@@ -17,13 +19,13 @@ Usage:
         --prompts /root/bench-int8-w4a16/baseline/prompts_coding.jsonl \
         --out /root/bench-int8-w4a16/baseline/coherence_w8a8_tp1.json
 """
+
 from __future__ import annotations
 
 import argparse
 import contextlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -31,6 +33,7 @@ import tempfile
 import time
 from pathlib import Path
 
+import regex as re
 import requests
 
 # ---- repetition heuristic ----
@@ -96,21 +99,24 @@ def syntax_check(code: str, lang: str) -> tuple[bool, str]:
         if lang == "python":
             r = subprocess.run(
                 [sys.executable, "-m", "py_compile", path],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
         else:
             node = shutil.which("node")
             if node is None:
                 # If node isn't installed, fall back to a permissive check:
                 # require balanced braces and the keyword "function" or "=>".
-                ok = (
-                    code.count("{") == code.count("}")
-                    and ("function" in code or "=>" in code)
+                ok = code.count("{") == code.count("}") and (
+                    "function" in code or "=>" in code
                 )
                 return ok, "node-not-installed; permissive check"
             r = subprocess.run(
                 [node, "--check", path],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
         ok = r.returncode == 0
         msg = r.stderr.strip() if not ok else "ok"
@@ -122,8 +128,9 @@ def syntax_check(code: str, lang: str) -> tuple[bool, str]:
             os.unlink(path)
 
 
-def chat_complete(base_url: str, model: str, prompt: str, max_tokens: int = 512,
-                  timeout: int = 120) -> str:
+def chat_complete(
+    base_url: str, model: str, prompt: str, max_tokens: int = 512, timeout: int = 120
+) -> str:
     """Send a single chat completion request; returns the text content."""
     url = base_url.rstrip("/") + "/chat/completions"
     payload = {
@@ -159,14 +166,19 @@ def main() -> int:
     for p in prompts:
         t0 = time.time()
         try:
-            text = chat_complete(args.base_url, args.model, p["prompt"],
-                                 args.max_tokens)
+            text = chat_complete(
+                args.base_url, args.model, p["prompt"], args.max_tokens
+            )
         except Exception as e:
-            results.append({
-                "id": p["id"], "lang": p["lang"], "ok": False,
-                "error": f"{type(e).__name__}: {e}",
-                "elapsed_s": round(time.time() - t0, 2),
-            })
+            results.append(
+                {
+                    "id": p["id"],
+                    "lang": p["lang"],
+                    "ok": False,
+                    "error": f"{type(e).__name__}: {e}",
+                    "elapsed_s": round(time.time() - t0, 2),
+                }
+            )
             nonempty_fail += 1
             continue
         elapsed = round(time.time() - t0, 2)
@@ -186,18 +198,21 @@ def main() -> int:
         if ok:
             syntax_pass += 1
 
-        results.append({
-            "id": p["id"], "lang": p["lang"],
-            "len_chars": len(text),
-            "len_tokens_approx": len(toks),
-            "ngram20_coverage": round(coverage, 3),
-            "repeated_ngram": repeated,
-            "nonempty": nonempty,
-            "syntax_ok": ok,
-            "syntax_msg": msg,
-            "elapsed_s": elapsed,
-            "preview": text[:300],
-        })
+        results.append(
+            {
+                "id": p["id"],
+                "lang": p["lang"],
+                "len_chars": len(text),
+                "len_tokens_approx": len(toks),
+                "ngram20_coverage": round(coverage, 3),
+                "repeated_ngram": repeated,
+                "nonempty": nonempty,
+                "syntax_ok": ok,
+                "syntax_msg": msg,
+                "elapsed_s": elapsed,
+                "preview": text[:300],
+            }
+        )
 
     summary = {
         "label": args.label,
@@ -208,9 +223,7 @@ def main() -> int:
         "repetition_fail": repetition_fail,
         "nonempty_fail": nonempty_fail,
         "passes_gate": (
-            nonempty_fail == 0
-            and repetition_fail == 0
-            and syntax_pass >= 8
+            nonempty_fail == 0 and repetition_fail == 0 and syntax_pass >= 8
         ),
         "results": results,
     }
@@ -219,9 +232,11 @@ def main() -> int:
     with open(args.out, "w") as f:
         json.dump(summary, f, indent=2)
 
-    print(f"[m0_coherence] {args.label} -> syntax={syntax_pass}/{len(prompts)} "
-          f"repetition_fail={repetition_fail} nonempty_fail={nonempty_fail} "
-          f"gate={'PASS' if summary['passes_gate'] else 'FAIL'}")
+    print(
+        f"[m0_coherence] {args.label} -> syntax={syntax_pass}/{len(prompts)} "
+        f"repetition_fail={repetition_fail} nonempty_fail={nonempty_fail} "
+        f"gate={'PASS' if summary['passes_gate'] else 'FAIL'}"
+    )
     return 0 if summary["passes_gate"] else 1
 
 

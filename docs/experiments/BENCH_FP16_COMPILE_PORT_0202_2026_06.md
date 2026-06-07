@@ -14,7 +14,7 @@ torch.compile (`mode=3`) aborted engine init with:
 Traced to a **gfx908-specific** producer added in the 0.20.2 tree (absent in
 0.19.2), called inside the now-compiled MoE forward:
 
-```
+```text
 qwen2_moe.py:129  Qwen2MoeMLP.forward
   → try_stash_fused_silu_quant_int8(gate_up, self.down_proj)
     → fused_silu_quant_int8.py:252  if torch.cuda.is_current_stream_capturing():  ← Dynamo can't trace
@@ -36,6 +36,7 @@ if torch.compiler.is_compiling():
 ```
 
 Why this is correct and minimal:
+
 - `torch.compiler.is_compiling()` **is** Dynamo-traceable and constant-folds to
   `True` during capture, so it short-circuits **before** the untraceable
   `is_current_stream_capturing()` call.
@@ -95,10 +96,12 @@ This makes the deploy recommendation **concurrency-gated**, not global.
    MoE model is loadable — ties into the W8A16 capacity work.
 
 ## Files changed
+
 - `vllm/model_executor/kernels/quantization/fused_silu_quant_int8.py` — added
   `torch.compiler.is_compiling()` guard (1 line + explanatory comment).
 
 ## Reproduction
+
 ```bash
 # fix is in the fuzzy-hornets 0.20.2 worktree
 /root/fp16-bench/run_compile_ab_0202.sh

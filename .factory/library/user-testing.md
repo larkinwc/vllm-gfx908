@@ -10,13 +10,15 @@
 ### Testing Approach
 
 All validation is CLI/API-based:
+
 1. Start vLLM with TQ backend (launch script)
-2. Wait for health check (curl -sf http://localhost:8000/health)
+2. Wait for health check (curl -sf <http://localhost:8000/health>)
 3. Send requests via curl or python benchmark scripts
 4. Collect results from JSON output files and server logs
 5. Stop server, compare results
 
 ### Key Test Scripts (from previous mission, reusable)
+
 - `/root/benchmark-scripts/run_synthetic_bench.sh` -- vllm bench serve wrapper
 - `/root/benchmark-scripts/coding_agent_bench.py` -- concurrent coding workload
 - `/root/benchmark-scripts/run_sustained_load_test.py` -- sustained load test
@@ -35,6 +37,7 @@ All validation is CLI/API-based:
 This section covers how to safely test vLLM API endpoints on this machine.
 
 ### Pre-flight Checks
+
 - Always kill any existing vLLM processes before starting a new test run:
   ```bash
   pkill -9 -f 'vllm.entrypoints' 2>/dev/null; pkill -9 -f 'VLLM::' 2>/dev/null; sleep 5
@@ -48,17 +51,20 @@ This section covers how to safely test vLLM API endpoints on this machine.
 ### Launch Commands
 
 **Eager mode (capture_only):**
+
 ```bash
 # Use the launch script directly
 /root/benchmark-scripts/launch-tq-backend.sh capture_only &
 ```
 
 **Graph mode (FULL_DECODE_ONLY):**
+
 ```bash
 /root/benchmark-scripts/launch-tq-graph-mode.sh capture_only &
 ```
 
 **Baseline (no TQ backend, for comparison):**
+
 ```bash
 export LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib
 export ROCM_PATH=/opt/rocm/core-7.12
@@ -78,6 +84,7 @@ export TORCH_COMPILE_DISABLE=1
 ```
 
 ### Health Check
+
 ```bash
 # Wait up to 120s
 for i in $(seq 1 60); do
@@ -87,11 +94,13 @@ done
 ```
 
 ### Stop Server
+
 ```bash
 pkill -9 -f 'vllm.entrypoints' 2>/dev/null; pkill -9 -f 'VLLM::' 2>/dev/null; sleep 5
 ```
 
 ### Known Quirks
+
 - **Startup time:** ~65-80s for eager mode, ~100-120s for graph mode
 - **GPU state after kill:** Sometimes GPU takes 5-10s to release memory after process kill
 - **hipErrorLaunchFailure:** If inference fails with this error, GPU is in bad state from a crash. Kill all vLLM processes, wait 10s, try again.
@@ -99,11 +108,13 @@ pkill -9 -f 'vllm.entrypoints' 2>/dev/null; pkill -9 -f 'VLLM::' 2>/dev/null; sl
 - **Server log location:** Capture server output by redirecting stdout to a file when backgrounding.
 
 ### Shared State
+
 - All tests share the same GPU (no isolation possible)
 - Only ONE validator may run at a time
 - Log file for server: redirect to /tmp/vllm_server_$(date +%s).log when starting
 
 ### Making API Requests
+
 ```bash
 # Simple completion request
 curl -s http://localhost:8000/v1/completions \

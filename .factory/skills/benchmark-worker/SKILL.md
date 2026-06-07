@@ -10,6 +10,7 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 ## When to Use This Skill
 
 Features that involve:
+
 - Running synthetic and coding agent benchmarks
 - Comparing TQ backend performance vs baseline/optimized configurations
 - Measuring VRAM usage and compression ratios
@@ -25,24 +26,28 @@ None.
 ### Step 1: Read Context
 
 Read these files:
+
 - `.factory/library/architecture.md` -- system architecture
 - `.factory/library/environment.md` -- paths, previous baseline results
 - `AGENTS.md` -- boundaries, server management
 - `.factory/services.yaml` -- how to start/stop vLLM
 
 Also read previous benchmark results for comparison baselines:
+
 - `/root/benchmark-results/final-report.json` -- previous mission's final report
 - `/root/benchmark-results/baseline-report.json` -- original baselines
 
 ### Step 2: Plan Benchmark Matrix
 
 Define the configurations to test:
+
 - **Baseline optimized**: FULL_DECODE_ONLY + prefix caching (reference from previous mission)
 - **TQ capture_only**: TQ backend in capture_only mode (overhead measurement)
 - **TQ hybrid**: TQ backend in hybrid mode (actual TQ decode)
 - Each at c=1, c=2, c=4 concurrent users
 
 For each configuration, measure:
+
 - Throughput (tok/s) via vllm bench serve
 - TPOT (time per output token)
 - TTFT (time to first token)
@@ -51,6 +56,7 @@ For each configuration, measure:
 ### Step 3: Run Benchmarks
 
 For each configuration:
+
 1. Stop any running vLLM instance
 2. Start vLLM with the target configuration
 3. Wait for health check
@@ -64,6 +70,7 @@ For each configuration:
 ### Step 4: Create Comparison Report
 
 Create a structured report comparing all configurations:
+
 - Save as `/root/benchmark-results/tq-comparison-report.json` (machine-readable)
 - Include percentage changes vs baseline optimized
 - Include VRAM comparison
@@ -72,6 +79,7 @@ Create a structured report comparing all configurations:
 ### Step 5: Write Production Recommendation
 
 Based on benchmark evidence, write a clear recommendation:
+
 - Should TQ be enabled in production for Qwen3.5-9B on MI100?
 - If yes: create a production launch script with TQ
 - If no: explain why with data (e.g., overhead exceeds savings, quality regression)

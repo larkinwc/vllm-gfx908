@@ -9,15 +9,18 @@
 ## What Was Built
 
 ### Backend Files
+
 - `/opt/turboquant/turboquant/backends/__init__.py` - Package init exposing TurboQuantRocmBackend
 - `/opt/turboquant/turboquant/backends/vllm_rocm.py` - Main implementation
 
 ### TurboQuantRocmBackend
+
 - Extends `RocmAttentionBackend` from `vllm.v1.attention.backends.rocm_attn`
 - `get_name()` returns "CUSTOM" to map to `AttentionBackendEnum.CUSTOM`
 - All other methods inherited from parent (kv_cache_shape, head_sizes, etc.)
 
 ### TurboQuantRocmImpl
+
 - Extends `RocmAttentionImpl`
 - Per-layer TQ state (CompressedKVStore, KVCaptureEngine)
 - Mode controlled by `TURBOQUANT_MODE` env var: `capture_only` or `hybrid`
@@ -25,11 +28,13 @@
 - `forward()`: delegates to super() in capture_only mode
 
 ### Launch Script
+
 - `/root/benchmark-scripts/launch-tq-backend.sh`
 - Uses sitecustomize.py to auto-register backend in all worker processes
 - Usage: `./launch-tq-backend.sh [capture_only|hybrid]`
 
 ### Test Scripts
+
 - `/root/benchmark-scripts/test_tq_backend_import.py` - Import validation
 - `/root/benchmark-scripts/test_tq_backend_registration.py` - Registration validation
 - `/root/benchmark-scripts/test_tq_server_functional.py` - Server startup test
@@ -37,19 +42,25 @@
 ## Key Findings
 
 ### Multiprocessing Registration
+
 vLLM v0.18.1 uses multiprocessing with spawn mode. The backend registration must happen in ALL worker processes. Solution:
+
 1. Create a `sitecustomize.py` that auto-registers the backend
 2. Set `PYTHONPATH` to include the directory with sitecustomize.py
 3. The sitecustomize checks for `TURBOQUANT_MODE` env var before registering
 
 ### Backend Name
+
 `get_name()` must return "CUSTOM" (not a custom name like "TURBOQUANT_ROCM") because vLLM's Attention layer does:
+
 ```python
 self.backend = AttentionBackendEnum[self.attn_backend.get_name()]
 ```
+
 This looks up the enum by name, and only "CUSTOM" exists as the placeholder.
 
 ### Qwen3.5-9B Architecture
+
 - 32 layers total: 24 linear_attention (GDN) + 8 full_attention
 - Full-attention layers at indices 3, 7, 11, 15, 19, 23, 27, 31
 - head_dim=256, num_kv_heads=4 for full-attention layers

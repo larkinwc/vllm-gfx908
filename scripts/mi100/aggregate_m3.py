@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Aggregate M3 grid results into a markdown table.
 
 Compares:
@@ -11,6 +12,7 @@ Outputs a table per quant scheme + pareto gate verdict.
 Usage:
     /opt/vllm-env/bin/python3 scripts/mi100/aggregate_m3.py > BENCH_INT8_W4A16_M3.md
 """
+
 from __future__ import annotations
 
 import json
@@ -31,23 +33,23 @@ W4A16_CELLS = [
 ]
 
 ROOTS_W8A8 = {
-    "M1rb":      Path("/root/bench-int8-w4a16/m1-rebaseline"),
-    "M3-auto":   Path("/root/bench-int8-w4a16/m3/w8a8/autotune"),
-    "M3-heur":   Path("/root/bench-int8-w4a16/m3/w8a8/heuristic"),
+    "M1rb": Path("/root/bench-int8-w4a16/m1-rebaseline"),
+    "M3-auto": Path("/root/bench-int8-w4a16/m3/w8a8/autotune"),
+    "M3-heur": Path("/root/bench-int8-w4a16/m3/w8a8/heuristic"),
 }
 ROOTS_W4A16 = {
-    "M1":         Path("/root/bench-int8-w4a16/baseline"),
-    "M3-mi100":   Path("/root/bench-int8-w4a16/m3/w4a16/mi100"),
+    "M1": Path("/root/bench-int8-w4a16/baseline"),
+    "M3-mi100": Path("/root/bench-int8-w4a16/m3/w4a16/mi100"),
     "M3-generic": Path("/root/bench-int8-w4a16/m3/w4a16/generic"),
 }
 
 METRICS = [
-    ("output_throughput_toks_s", "tput",     "higher_better"),
+    ("output_throughput_toks_s", "tput", "higher_better"),
     ("request_throughput_req_s", "req_tput", "higher_better"),
-    ("mean_ttft_ms",             "mean_ttft","lower_better"),
-    ("p99_ttft_ms",              "p99_ttft", "lower_better"),
-    ("mean_tpot_ms",             "mean_tpot","lower_better"),
-    ("p99_tpot_ms",              "p99_tpot", "lower_better"),
+    ("mean_ttft_ms", "mean_ttft", "lower_better"),
+    ("p99_ttft_ms", "p99_ttft", "lower_better"),
+    ("mean_tpot_ms", "mean_tpot", "lower_better"),
+    ("p99_tpot_ms", "p99_tpot", "lower_better"),
 ]
 
 
@@ -73,13 +75,11 @@ def fmt_delta(d: float, direction: str, threshold: float = 3.0) -> str:
         return "—"
     sign = "+" if d > 0 else ""
     s = f"{sign}{d:.2f}%"
-    is_improvement = (
-        (direction == "higher_better" and d >= threshold) or
-        (direction == "lower_better" and d <= -threshold)
+    is_improvement = (direction == "higher_better" and d >= threshold) or (
+        direction == "lower_better" and d <= -threshold
     )
-    is_regression = (
-        (direction == "higher_better" and d <= -1.0) or
-        (direction == "lower_better" and d >= 1.0)
+    is_regression = (direction == "higher_better" and d <= -1.0) or (
+        direction == "lower_better" and d >= 1.0
     )
     if is_improvement:
         return f"**{s}**"
@@ -103,14 +103,11 @@ def write_w8a8(out: list[str]) -> tuple[int, int]:
         "| Cell | Workload | Metric | M1-rb | M3-heur | M3-auto | "
         "Δ heur→auto | Δ M1rb→auto (**gate**) |"
     )
-    out.append(
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |"
-    )
+    out.append("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |")
     n_pareto = 0
     n_regression = 0
     for model, tp, c, wl in W8A8_CELLS:
-        cells = {k: load_cell(r, model, tp, c, wl)
-                 for k, r in ROOTS_W8A8.items()}
+        cells = {k: load_cell(r, model, tp, c, wl) for k, r in ROOTS_W8A8.items()}
         if any(v is None for v in cells.values()):
             continue
         cell_id = f"{model}_tp{tp}_c{c}"
@@ -126,13 +123,11 @@ def write_w8a8(out: list[str]) -> tuple[int, int]:
                 f"{fmt_delta(d_h_a, direction)} | "
                 f"{fmt_delta(d_m1rb_auto, direction)} |"
             )
-            is_imp = (
-                (direction == "higher_better" and d_m1rb_auto >= 3.0) or
-                (direction == "lower_better" and d_m1rb_auto <= -3.0)
+            is_imp = (direction == "higher_better" and d_m1rb_auto >= 3.0) or (
+                direction == "lower_better" and d_m1rb_auto <= -3.0
             )
-            is_reg5 = (
-                (direction == "higher_better" and d_m1rb_auto <= -5.0) or
-                (direction == "lower_better" and d_m1rb_auto >= 5.0)
+            is_reg5 = (direction == "higher_better" and d_m1rb_auto <= -5.0) or (
+                direction == "lower_better" and d_m1rb_auto >= 5.0
             )
             if is_imp:
                 n_pareto += 1
@@ -159,13 +154,10 @@ def write_w4a16(out: list[str]) -> int:
         "| Cell | Workload | Metric | M1 | M3-generic | M3-mi100 | "
         "Δ generic→mi100 | Δ M1→mi100 |"
     )
-    out.append(
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |"
-    )
+    out.append("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |")
     n_pareto = 0
     for model, tp, c, wl in W4A16_CELLS:
-        cells = {k: load_cell(r, model, tp, c, wl)
-                 for k, r in ROOTS_W4A16.items()}
+        cells = {k: load_cell(r, model, tp, c, wl) for k, r in ROOTS_W4A16.items()}
         if any(v is None for v in cells.values()):
             continue
         cell_id = f"{model}_tp{tp}_c{c}"
@@ -181,16 +173,13 @@ def write_w4a16(out: list[str]) -> int:
                 f"{fmt_delta(d_g_m, direction)} | "
                 f"{fmt_delta(d_m1_m, direction)} |"
             )
-            is_imp = (
-                (direction == "higher_better" and d_g_m >= 3.0) or
-                (direction == "lower_better" and d_g_m <= -3.0)
+            is_imp = (direction == "higher_better" and d_g_m >= 3.0) or (
+                direction == "lower_better" and d_g_m <= -3.0
             )
             if is_imp:
                 n_pareto += 1
     out.append("")
-    out.append(
-        f"**Pareto bar (≥3% gain generic→mi100):** {n_pareto} metric(s)"
-    )
+    out.append(f"**Pareto bar (≥3% gain generic→mi100):** {n_pareto} metric(s)")
     out.append("")
     return n_pareto
 
@@ -201,14 +190,16 @@ def write_perplexity(out: list[str]) -> None:
     out.append("| Run | Perplexity | Δ vs reference |")
     out.append("| --- | ---: | ---: |")
     files = [
-        ("M1-rebaseline (W8A8 reference)",
-         Path("/root/bench-int8-w4a16/m1-rebaseline/ppl_w8a8_m1rb.json")),
-        ("M3-autotune W8A8",
-         Path("/root/bench-int8-w4a16/m3/ppl_w8a8_m3.json")),
-        ("M0 baseline (W4A16 reference)",
-         Path("/root/bench-int8-w4a16/baseline/ppl_w4a16.json")),
-        ("M3-mi100 W4A16",
-         Path("/root/bench-int8-w4a16/m3/ppl_w4a16_m3.json")),
+        (
+            "M1-rebaseline (W8A8 reference)",
+            Path("/root/bench-int8-w4a16/m1-rebaseline/ppl_w8a8_m1rb.json"),
+        ),
+        ("M3-autotune W8A8", Path("/root/bench-int8-w4a16/m3/ppl_w8a8_m3.json")),
+        (
+            "M0 baseline (W4A16 reference)",
+            Path("/root/bench-int8-w4a16/baseline/ppl_w4a16.json"),
+        ),
+        ("M3-mi100 W4A16", Path("/root/bench-int8-w4a16/m3/ppl_w4a16_m3.json")),
     ]
     ref_w8a8 = None
     ref_w4a16 = None
@@ -263,8 +254,7 @@ def main() -> int:
     out.append("")
     out.append("```")
     out.append(
-        "# Autotune configs already in"
-        " vllm/model_executor/kernels/configs/gfx908/"
+        "# Autotune configs already in vllm/model_executor/kernels/configs/gfx908/"
     )
     out.append("scripts/mi100/run_grid.sh m3-w8a8-autotune w8a8_")
     out.append("scripts/mi100/run_grid.sh m3-w8a8-heuristic w8a8_")
@@ -294,9 +284,7 @@ def main() -> int:
         f"- W8A8 M3-autotune-vs-M1rb: {n_pareto_w8a8} metric(s) ≥ 3% gain; "
         f"{n_reg_w8a8} metric(s) regress > 5%."
     )
-    out.append(
-        f"- W4A16 mi100-vs-generic: {n_pareto_w4a16} metric(s) ≥ 3% gain."
-    )
+    out.append(f"- W4A16 mi100-vs-generic: {n_pareto_w4a16} metric(s) ≥ 3% gain.")
     out.append("")
     out.append("## Files")
     out.append("")
@@ -316,9 +304,7 @@ def main() -> int:
         "- W4A16 generic cells: "
         "`/root/bench-int8-w4a16/m3/w4a16/generic/{synthetic,coding}/`"
     )
-    out.append(
-        "- Pareto exceptions: `/root/bench-int8-w4a16/m3/pareto_exceptions.md`"
-    )
+    out.append("- Pareto exceptions: `/root/bench-int8-w4a16/m3/pareto_exceptions.md`")
     out.append("")
 
     print("\n".join(out))

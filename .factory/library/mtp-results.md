@@ -10,7 +10,7 @@
 
 MTP speculative decoding crashes during graph capture/warmup on MI100:
 
-```
+```text
 RuntimeError: cancelled
 ```
 
@@ -41,6 +41,7 @@ Higher speculation depths show rapidly diminishing acceptance rates, and even n=
 ### 4. Stability
 
 MTP with eager mode is stable:
+
 - 52/52 requests completed at 4 concurrent users
 - VRAM at 90.3% (within 97% limit)
 - No crashes or errors during operation
@@ -61,10 +62,10 @@ MTP with eager mode is stable:
 - Launch script: `/root/benchmark-scripts/launch-mtp.sh`
 - Results: `/root/benchmark-results/mtp_results.json`
 - Benchmark outputs:
-  - `/root/benchmark-results/mtp_eager_n1_c1.json`
-  - `/root/benchmark-results/mtp_eager_n2_c1.json`
-  - `/root/benchmark-results/mtp_eager_n3_c1.json`
-  - `/root/benchmark-results/mtp_eager_n1_stability_c4.json`
+    - `/root/benchmark-results/mtp_eager_n1_c1.json`
+    - `/root/benchmark-results/mtp_eager_n2_c1.json`
+    - `/root/benchmark-results/mtp_eager_n3_c1.json`
+    - `/root/benchmark-results/mtp_eager_n1_stability_c4.json`
 - Server logs:
-  - `/root/benchmark-results/server_mtp_graph_n1_20260329_135239.log` (failed graph mode attempt)
-  - `/root/benchmark-results/server_mtp_eager_n1_20260329_140933.log` (working eager mode)
+    - `/root/benchmark-results/server_mtp_graph_n1_20260329_135239.log` (failed graph mode attempt)
+    - `/root/benchmark-results/server_mtp_eager_n1_20260329_140933.log` (working eager mode)

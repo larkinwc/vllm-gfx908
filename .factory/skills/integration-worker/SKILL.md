@@ -10,6 +10,7 @@ NOTE: Startup and cleanup are handled by `worker-base`. This skill defines the W
 ## When to Use This Skill
 
 Features that involve:
+
 - Creating the TurboQuantRocmBackend and TurboQuantRocmImpl classes
 - Registering the backend with vLLM's registry API
 - Creating launch scripts that set up and start vLLM with the TQ backend
@@ -26,6 +27,7 @@ None.
 ### Step 1: Read Context
 
 Read these files before starting implementation:
+
 - `.factory/library/architecture.md` -- system architecture
 - `.factory/library/environment.md` -- env vars, paths
 - `AGENTS.md` -- boundaries, critical technical context
@@ -34,6 +36,7 @@ Read these files before starting implementation:
 - `/opt/turboquant/turboquant/store.py`, `capture.py`, `quantizer.py` -- core TQ components
 
 Also read vLLM's backend interface:
+
 - The vLLM worktree's `vllm/v1/attention/backends/rocm_attn.py` -- RocmAttentionBackend and RocmAttentionImpl to extend
 - `vllm/v1/attention/backends/registry.py` -- register_backend API
 - `vllm/v1/attention/backend.py` -- AttentionBackend base class
@@ -41,6 +44,7 @@ Also read vLLM's backend interface:
 ### Step 2: Write Tests First
 
 Before implementing the backend, write test scripts that will validate it:
+
 - Import test: `turboquant.backends.vllm_rocm` imports cleanly
 - Registration test: `register_backend()` succeeds, CUSTOM resolves to TQ backend
 - Functional test: server starts, health check passes, requests return valid responses
@@ -55,20 +59,23 @@ Run each test to confirm it FAILS before implementation (since the backend doesn
 Create `/opt/turboquant/turboquant/backends/__init__.py` and `/opt/turboquant/turboquant/backends/vllm_rocm.py`.
 
 **TurboQuantRocmBackend** must:
+
 - Extend `RocmAttentionBackend` from `vllm.v1.attention.backends.rocm_attn`
 - Override `get_name()` to return "TURBOQUANT_ROCM"
 - Override `get_impl_cls()` to return `TurboQuantRocmImpl`
 - Keep all other class methods delegating to super (kv_cache_shape, head_sizes, etc.)
 
 **TurboQuantRocmImpl** must:
+
 - Extend `RocmAttentionImpl`
 - In `__init__`: create per-layer TQ state (CompressedKVStore, KVCaptureEngine)
 - Override `do_kv_cache_update()`: call super() for standard paged cache, then capture K/V into TQ store
 - Override `forward()`:
-  - In capture_only mode: always delegate to super().forward()
-  - In hybrid mode: use TQ hybrid decode for decode tokens (when compressed store has enough history), fall back to super() for prefill
+    - In capture_only mode: always delegate to super().forward()
+    - In hybrid mode: use TQ hybrid decode for decode tokens (when compressed store has enough history), fall back to super() for prefill
 
 **Critical implementation details:**
+
 - Layer index tracking: use a class-level counter in `__init__` (increment per instance)
 - Mode control: use environment variable `TURBOQUANT_MODE` (capture_only | hybrid) read at init time
 - Head dim for Qwen3.5-9B: 256 (from `self.head_size` in RocmAttentionImpl)
@@ -78,12 +85,14 @@ Create `/opt/turboquant/turboquant/backends/__init__.py` and `/opt/turboquant/tu
 ### Step 4: Create Launch Script
 
 Create `/root/benchmark-scripts/launch-tq-backend.sh` that:
+
 1. Registers the TQ backend before starting vLLM
 2. Starts vLLM with `--attention-backend CUSTOM` (or equivalent)
 3. Configures TQ mode via environment variable
 4. Handles all MI100-specific settings (TORCH_COMPILE_DISABLE=1, etc.)
 
 The launch script should be a Python wrapper that:
+
 ```python
 from vllm.v1.attention.backends.registry import register_backend, AttentionBackendEnum
 register_backend(AttentionBackendEnum.CUSTOM, "turboquant.backends.vllm_rocm.TurboQuantRocmBackend")

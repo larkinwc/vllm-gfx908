@@ -175,14 +175,14 @@ def ref_paged_attn(
 # Decode-specific test cases: query_len=1, varying KV lengths
 DECODE_SEQ_LENS = [
     # (query_len, kv_len) tuples
-    [(1, 128)],                               # Short sequence
-    [(1, 512)],                               # Medium sequence
-    [(1, 2048)],                              # Long sequence
-    [(1, 8192)],                              # Very long sequence
-    [(1, 16384)],                             # Extra long sequence
-    [(1, 256), (1, 1024), (1, 4096)],         # Mixed batch
-    [(1, 128)] * 4,                           # Small batch, short seqs
-    [(1, 8192)] * 2,                          # Small batch, long seqs
+    [(1, 128)],  # Short sequence
+    [(1, 512)],  # Medium sequence
+    [(1, 2048)],  # Long sequence
+    [(1, 8192)],  # Very long sequence
+    [(1, 16384)],  # Extra long sequence
+    [(1, 256), (1, 1024), (1, 4096)],  # Mixed batch
+    [(1, 128)] * 4,  # Small batch, short seqs
+    [(1, 8192)] * 2,  # Small batch, long seqs
 ]
 
 NUM_HEADS = [(4, 4), (8, 2)]
@@ -232,9 +232,9 @@ def test_flash_decoding_splitk_correctness(
         num_blocks, block_size, num_kv_heads, head_size, dtype=dtype
     )
     value_cache = torch.randn_like(key_cache)
-    cu_query_lens = torch.tensor(
-        [0] + query_lens, dtype=torch.int32
-    ).cumsum(dim=0, dtype=torch.int32)
+    cu_query_lens = torch.tensor([0] + query_lens, dtype=torch.int32).cumsum(
+        dim=0, dtype=torch.int32
+    )
     kv_lens_tensor = torch.tensor(kv_lens, dtype=torch.int32)
 
     max_num_blocks_per_seq = (max_kv_len + block_size - 1) // block_size
@@ -297,9 +297,10 @@ def test_flash_decoding_splitk_correctness(
     )
 
     atol, rtol = 1.5e-2, 1e-2
-    torch.testing.assert_close(
-        output, ref_output, atol=atol, rtol=rtol
-    ), f"max diff: {torch.max(torch.abs(output - ref_output))}"
+    (
+        torch.testing.assert_close(output, ref_output, atol=atol, rtol=rtol),
+        f"max diff: {torch.max(torch.abs(output - ref_output))}",
+    )
 
 
 @pytest.mark.parametrize(
@@ -345,9 +346,9 @@ def test_flash_decoding_adaptive_vs_fixed(
         num_blocks, block_size, num_kv_heads, head_size, dtype=dtype
     )
     value_cache = torch.randn_like(key_cache)
-    cu_query_lens = torch.tensor(
-        [0] + query_lens, dtype=torch.int32
-    ).cumsum(dim=0, dtype=torch.int32)
+    cu_query_lens = torch.tensor([0] + query_lens, dtype=torch.int32).cumsum(
+        dim=0, dtype=torch.int32
+    )
     kv_lens_tensor = torch.tensor(kv_lens, dtype=torch.int32)
     max_num_blocks_per_seq = (max_kv_len + block_size - 1) // block_size
     block_tables = torch.randint(
@@ -442,9 +443,10 @@ def test_flash_decoding_adaptive_vs_fixed(
     )
 
     atol, rtol = 1.5e-2, 1e-2
-    torch.testing.assert_close(
-        output_fixed, output_adaptive, atol=atol, rtol=rtol
-    ), (
-        f"Fixed vs adaptive mismatch (adaptive_splits={adaptive_splits}): "
-        f"max diff: {torch.max(torch.abs(output_fixed - output_adaptive))}"
+    (
+        torch.testing.assert_close(output_fixed, output_adaptive, atol=atol, rtol=rtol),
+        (
+            f"Fixed vs adaptive mismatch (adaptive_splits={adaptive_splits}): "
+            f"max diff: {torch.max(torch.abs(output_fixed - output_adaptive))}"
+        ),
     )

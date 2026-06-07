@@ -227,9 +227,7 @@ class HFConfigParser(ConfigParserBase):
             # (e.g. minimax-m2). Load config.json from the GGUF directory
             # directly; vLLM has its own GGUF loader that reads tensors.
             if "is not supported yet" in str(e) and "gguf_file" in kwargs:
-                gguf_kwargs = {
-                    k: v for k, v in kwargs.items() if k != "gguf_file"
-                }
+                gguf_kwargs = {k: v for k, v in kwargs.items() if k != "gguf_file"}
                 config_dict, _ = PretrainedConfig.get_config_dict(
                     model,
                     revision=revision,
@@ -318,9 +316,7 @@ class HFConfigParser(ConfigParserBase):
                     # architectures (e.g. minimax-m2). Fall back to loading
                     # config.json from the GGUF directory; vLLM has its own
                     # GGUF loader that reads tensors from the .gguf file.
-                    gguf_kwargs = {
-                        k: v for k, v in kwargs.items() if k != "gguf_file"
-                    }
+                    gguf_kwargs = {k: v for k, v in kwargs.items() if k != "gguf_file"}
                     config = AutoConfig.from_pretrained(
                         model,
                         trust_remote_code=trust_remote_code,
@@ -701,9 +697,7 @@ def maybe_override_with_speculators(
         # (e.g. minimax-m2). Skip speculator detection in that case;
         # vLLM's own GGUF loader handles the model separately.
         if "is not supported yet" in str(e) and gguf_model_repo is not None:
-            logger.info(
-                "Skipping speculator detection for GGUF model: %s", e
-            )
+            logger.info("Skipping speculator detection for GGUF model: %s", e)
             return model, tokenizer, vllm_speculative_config
         raise
     speculators_config = config_dict.get("speculators_config")

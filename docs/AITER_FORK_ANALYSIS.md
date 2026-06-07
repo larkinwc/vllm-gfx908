@@ -11,14 +11,15 @@ Evaluation of forking [ROCm/aiter](https://github.com/ROCm/aiter) to provide fus
 
 AITER (AI Tensor Engine for ROCm) is AMD's centralized high-performance AI operator library. It provides fused kernels for attention, GEMM, MoE, RMSNorm, RoPE, quantization, and communication primitives. vLLM has deep integration with AITER via the `VLLM_ROCM_USE_AITER=1` environment variable and the `rocm_aiter_ops` abstraction layer.
 
-**Repository:** https://github.com/ROCm/aiter (MIT license, 397 stars, 229 contributors, ~1590 commits)
+**Repository:** <https://github.com/ROCm/aiter> (MIT license, 397 stars, 229 contributors, ~1590 commits)
 
 ## Current Status
 
 AITER is **not available on MI100 (gfx908)**. The package is developed and tested exclusively on gfx942 (MI300X) and gfx950 (MI350). Even gfx90a (MI250) has build failures due to FP8 kernel dependencies ([issue #179](https://github.com/ROCm/aiter/issues/179)).
 
 When `VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION=1` is set in our fork, vLLM crashes with:
-```
+
+```text
 ModuleNotFoundError: No module named 'aiter'
 ```
 

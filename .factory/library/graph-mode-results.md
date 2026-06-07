@@ -104,7 +104,7 @@ Additional optimizations enabled on top of graph mode:
 - Aggregate decode throughput at c4: 276.22 tok/s (wall clock)
 - Avg TTFT at c4: 287.78 ms, Avg TPOT: 11.4 ms
 
-## Files
+## Files (Config-Tuned Mode)
 
 - Launch script: `/root/benchmark-scripts/launch-config-tuned.sh`
 - Prefix caching test: `/root/benchmark-results/prefix_caching_test.json`

@@ -21,6 +21,7 @@ This module is intentionally small: the per-shape decision lives in
 ``mi100_hipblaslt_scaled_mm``. The Triton kernel remains the fallback
 for everything else (and for the ``VLLM_DISABLE_HIPBLASLT=1`` override).
 """
+
 from __future__ import annotations
 
 import json

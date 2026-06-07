@@ -1,6 +1,7 @@
 # Research: FP16-path optimizations + weight-only quant that fits the FP16 path (gfx908/MI100)
 
 Companion to `BENCH_FP16_VS_QUANT_2026_06.md`. Two questions:
+
 1. What can still speed up the **FP16 decode path** on gfx908?
 2. What quant format keeps the **fast FP16 compute path** while shrinking weights so we can fit **larger models**?
 
@@ -36,6 +37,7 @@ Ranked by expected payoff on gfx908. "Shipping" = already in our production FP16
 config (`/root/launch-vllm-optimized.sh`).
 
 ### 1.1 torch.compile + PIECEWISE graphs — **highest-upside, contested**
+
 - **Status:** our `rocm.py` *disables* torch.compile and forces
   `FULL_DECODE_ONLY` on MI100 (`vllm/platforms/rocm.py:745-799`), citing a
   −9.7% c=8 regression on REAP-172B-AWQ and Inductor fusions being unavailable
@@ -53,6 +55,7 @@ config (`/root/launch-vllm-optimized.sh`).
   experiment with the biggest potential upside; gated behind an existing flag.
 
 ### 1.2 AITER Triton RoPE/attention — **untested in our stack, shipping in community's**
+
 - **Status:** `VLLM_ROCM_USE_AITER` is read by our `rocm.py` but the FP16 launch
   script does **not** set it. Community runs `VLLM_ROCM_USE_AITER=1` by default
   on gfx908 (Triton RoPE + attention; CK/FP8/UA auto-disabled).
@@ -63,11 +66,13 @@ config (`/root/launch-vllm-optimized.sh`).
   only. Low risk; measure decode delta.
 
 ### 1.3 Attention backend explicit pin (`TRITON_ATTN`)
+
 - Community explicitly pins `--attention-backend TRITON_ATTN` as the stable
   gfx908 choice. We rely on auto-selection. Worth pinning for reproducibility +
   to avoid any UA/CK auto-dispatch surprise. Near-zero risk.
 
 ### 1.4 Already shipping (no further action, documented for completeness)
+
 - Skinny GEMM (`__gfx908__` guard) — biggest FP16 win after CUDA graphs.
 - Adaptive Flash-Decoding split-K — sweep already confirmed optimal
   (`BENCH_HBM_FA_TUNING.md`).
@@ -75,6 +80,7 @@ config (`/root/launch-vllm-optimized.sh`).
 - Triton tile tuning, block-size 32, custom all-reduce + FULL_DECODE_ONLY graph.
 
 ### 1.5 Low-yield / proven-negative (do not re-attempt)
+
 - **Marlin-style repack:** verified **−28%** on gfx908 — no `cp.async`, decode is
   issue-bound (`BENCH_W4A16_MARLIN_REPACK.md`). Settled.
 - **Hand-ISA GEMM:** declined, HBM/issue-bound ceiling (`BENCH_M5_ISA.md`).
@@ -111,6 +117,7 @@ and 8-bit"** as their primary recommendation, with curated GPTQ providers
 
 **The biggest unexploited lever for "larger models that keep quality" is
 8-bit weight-only (W8A16 / INT8-weight GPTQ)**, which we have **not** benched:
+
 - ~2× capacity vs FP16 (10–11 GB) at near-FP16 quality (8-bit >> 4-bit fidelity).
 - Community reports **Qwen3.6-35B-A3B GPTQ-8bit** as a top performer on 4×MI100
   (1365 tok/s aggregate). Our largest tested is 9B.
@@ -130,6 +137,7 @@ same 4×MI100 hardware — these are the concrete "larger model" targets quant
 unlocks for us, and both keep the FP16 activation path.
 
 ### 2.4 MoE tuning is required for these larger models
+
 The community's `Model_Reports` note that the big wins come with **per-model
 fused-MoE configs** (e.g. `int8_w8a16` E=256/N=128 tune for 35B-8bit;
 `int4_w4a16` E=256/N=256 for 122B-4bit). We already merged gfx908 fused-MoE

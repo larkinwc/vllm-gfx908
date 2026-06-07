@@ -255,13 +255,19 @@ def triton_w4a16_gemm(
     # disabled-via-env case falls back to the generic Triton path below.
     if current_platform.is_rocm() and not _mi100_w4a16_disabled():
         from vllm.platforms.rocm import on_mi100
+
         if on_mi100() and group_size in (32, 128):
             from vllm.model_executor.kernels.linear.scaled_mm.mi100_w4a16 import (
                 mi100_w4a16_gemm as _mi100_w4a16_gemm,
             )
+
             return _mi100_w4a16_gemm(
-                a=a, b_q=b_q, scales=scales,
-                qzeros=qzeros, group_size=group_size, zp_bias=zp_bias,
+                a=a,
+                b_q=b_q,
+                scales=scales,
+                qzeros=qzeros,
+                group_size=group_size,
+                zp_bias=zp_bias,
             )
 
     c = torch.empty((M, N), dtype=a.dtype, device=a.device)
@@ -505,6 +511,7 @@ class TritonW4A16LinearKernel(MPLinearKernel):
         if not current_platform.is_rocm():
             return
         from vllm.platforms.rocm import on_mi100
+
         if not on_mi100():
             return
 
@@ -522,8 +529,11 @@ class TritonW4A16LinearKernel(MPLinearKernel):
         )
 
         packed = marlin_repack_w4a16(
-            b_q=w_q, scales=w_s, qzeros=w_zp,
-            group_size=group_size, zp_bias=zp_bias,
+            b_q=w_q,
+            scales=w_s,
+            qzeros=w_zp,
+            group_size=group_size,
+            zp_bias=zp_bias,
         )
         setattr(layer, _MARLIN_QWEIGHT_ATTR, packed.qweight)
         setattr(layer, _MARLIN_SCALE_ATTR, packed.scale)
@@ -560,12 +570,14 @@ class TritonW4A16LinearKernel(MPLinearKernel):
         )
         if use_marlin:
             from vllm.platforms.rocm import on_mi100
+
             use_marlin = on_mi100()
 
         if use_marlin:
             from vllm.model_executor.kernels.linear.scaled_mm.mi100_w4a16_marlin import (  # noqa: E501
                 mi100_w4a16_marlin_gemm,
             )
+
             output = mi100_w4a16_marlin_gemm(
                 x_2d,
                 marlin_qweight,

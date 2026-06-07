@@ -34,8 +34,8 @@ Cost drops from `O(N·D²)` (the GEMM) to `O(N·D)`, with `O(D)` params instead 
   kernel (pure elementwise strided loads, **no warp shuffles → wave64-safe**).
   Bit-identical to the dense GEMM (`fusedVsGemmMaxDiff = 0.00`).
 - New presets in `config.py` / `cache.py` / backend `supported_kv_cache_dtypes`:
-  - K-only: `turboquant_{planar,iso}{3,4}_nc`
-  - symmetric K+V: `turboquant_{planar,iso}3_sym_nc`
+    - K-only: `turboquant_{planar,iso}{3,4}_nc`
+    - symmetric K+V: `turboquant_{planar,iso}3_sym_nc`
 - Symmetric V: value plane rotated at store; decode accumulates in rotated space
   and inverse-rotates the final `[B,Hq,D]` output once (valid because attention
   is a linear softmax-weighted sum and the rotation is token-independent:

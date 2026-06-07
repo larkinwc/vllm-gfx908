@@ -238,9 +238,9 @@ current `vllm/_rocm_C.abi3.so` contains zero `v_smfmac_*` and zero
 ## Evidence pointers
 
 - M1 omniperf-equivalent roofline:
-  - `/root/bench-int8-w4a16/baseline/profile/omniperf/omniperf_summary_w8a8.json`
-  - `/root/bench-int8-w4a16/baseline/profile/omniperf/omniperf_summary_w4a16.json`
-  - `/root/bench-int8-w4a16/baseline/profile/omniperf/pmc_1/`, `pmc_2/`
+    - `/root/bench-int8-w4a16/baseline/profile/omniperf/omniperf_summary_w8a8.json`
+    - `/root/bench-int8-w4a16/baseline/profile/omniperf/omniperf_summary_w4a16.json`
+    - `/root/bench-int8-w4a16/baseline/profile/omniperf/pmc_1/`, `pmc_2/`
 - M1 hot-shape catalog: `/root/bench-int8-w4a16/baseline/hot_shapes.json`
 - M4 four-way grid + per-cell exceptions: `BENCH_M4_CK.md`
 - M4 result JSONs: `/root/bench-int8-w4a16/m4/w8a8/{ck,noCk}/{synthetic,coding}/`

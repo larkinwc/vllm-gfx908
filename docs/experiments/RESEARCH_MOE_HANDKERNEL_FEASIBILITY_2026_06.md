@@ -17,7 +17,8 @@ diagnostic half) and makes a go/no-go call **before** writing a kernel.
 
 ## Important context vs #57/#58
 
-#57's win was **gfx900 (Vega10), which has NO MFMA**: `tl.dot` at M=1 lowered to
+\#57's win was **gfx900 (Vega10), which has NO MFMA**: `tl.dot` at M=1 lowered to
+
 a padded FP32 GEMM, so a hand GEMV (no `tl.dot`) was 2–3× faster. **Our gfx908
 (MI100/CDNA1) HAS MFMA**, so that exact win does not transfer. The question is
 whether a *different* structural problem exists on gfx908.
@@ -78,6 +79,7 @@ occupancy, could plausibly approach roofline.
 ## Step 9 (done upfront) — end-to-end ceiling
 
 Honest accounting against the measured decode budget:
+
 - 48 MoE layers × ~90 us = **~4,320 us** of the **18,464 us** TPOT = **~23%** of
   decode is the MoE fused path.
 - The int4 GEMM specifically: 48 × ~57 us = ~2,740 us = **~15% of decode**.
@@ -94,11 +96,12 @@ series with real structural headroom (unlike tile-tuning, which was ±2%). But
 the difficulty and risks are substantial and must be stated:
 
 Risks / hard parts:
+
 1. **MFMA changes the game vs #57.** The win here is occupancy + split-K, not
    "avoid tl.dot." A naive GEMV may *lose* to the existing MFMA-capable kernel;
    the hand kernel must out-occupy it, which is subtle on CDNA1.
 2. **Correctness surface is large.** Must match the exact AWQ/gptq int4 packing
-   + group-scale + reverse-order unpack, top-k routing, and silu fusion, then
+   - group-scale + reverse-order unpack, top-k routing, and silu fusion, then
    pass rel-err ≤1e-3 vs the in-tree kernel (#58 step 4).
 3. **Integration gate.** Must dispatch only on gfx908 + M≤~8 + this expert shape,
    falling back everywhere else (#58 step 8), and the microbench win must survive
@@ -109,6 +112,7 @@ Risks / hard parts:
    eventual config sweep.
 
 Recommended next steps if pursued (in #58 order):
+
 1. Standalone Triton int4 MoE-GEMV microbench at the real shape; establish
    correctness vs `fused_moe_kernel_gptq_awq` first.
 2. Structural iteration: split-K across CUs for the M=1 active-expert GEMVs;
@@ -118,6 +122,7 @@ Recommended next steps if pursued (in #58 order):
    and re-run the decode A/B.
 
 ## Reproduction
+
 - rocprof breakdown: `rocprofv3 --kernel-trace` on `/tmp/moe_prof.py` (real
   shape), parsed for per-kernel duration + launch geometry.
 - E-scaling + occupancy probes: inline scripts in the session log (CUDA-graph

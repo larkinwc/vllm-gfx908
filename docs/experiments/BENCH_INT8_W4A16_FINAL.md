@@ -5,11 +5,11 @@ Aggregates milestones M0–M5 into a single grid with per-(cell × metric) winne
 production recommendations, full quality-gate evidence, and per-cell reproducible
 launch scripts.
 
-Cross-links: 
-[BENCH_INT8_W4A16_BASELINE.md](BENCH_INT8_W4A16_BASELINE.md) (M0+M1), 
-[BENCH_INT8_W4A16_M2.md](BENCH_INT8_W4A16_M2.md) (TensileLite three-way), 
-[BENCH_INT8_W4A16_M3.md](BENCH_INT8_W4A16_M3.md) (Triton W8A8 + W4A16), 
-[BENCH_M4_CK.md](BENCH_M4_CK.md) (Composable Kernel W8A8 + W4A16-negative), 
+Cross-links:
+[BENCH_INT8_W4A16_BASELINE.md](BENCH_INT8_W4A16_BASELINE.md) (M0+M1),
+[BENCH_INT8_W4A16_M2.md](BENCH_INT8_W4A16_M2.md) (TensileLite three-way),
+[BENCH_INT8_W4A16_M3.md](BENCH_INT8_W4A16_M3.md) (Triton W8A8 + W4A16),
+[BENCH_M4_CK.md](BENCH_M4_CK.md) (Composable Kernel W8A8 + W4A16-negative),
 [BENCH_M5_ISA.md](BENCH_M5_ISA.md) (Hand-ISA negative result).
 
 ## Hardware / software manifest
@@ -67,11 +67,11 @@ Long-Context needle-in-haystack @ 32 k:
 
 - Result: **5/5**, gate ✅ PASS (5/5 required by VAL-FINAL-004)
 - Depths probed: 10%, 30%, 50%, 70%, 90%
-  - `Magic apple count` @ depth 10%: expected `47823` → ✅
-  - `Crimson tower height` @ depth 30%: expected `9216 meters` → ✅
-  - `Lunar passcode` @ depth 50%: expected `MOON-7741-XQ` → ✅
-  - `Coral fish species` @ depth 70%: expected `1582` → ✅
-  - `Captain's birthday` @ depth 90%: expected `March 22, 1873` → ✅
+    - `Magic apple count` @ depth 10%: expected `47823` → ✅
+    - `Crimson tower height` @ depth 30%: expected `9216 meters` → ✅
+    - `Lunar passcode` @ depth 50%: expected `MOON-7741-XQ` → ✅
+    - `Coral fish species` @ depth 70%: expected `1582` → ✅
+    - `Captain's birthday` @ depth 90%: expected `March 22, 1873` → ✅
 - Evidence: `/root/bench-int8-w4a16/final/m6_needle32k.json`.
 
 ## Full Pareto grid

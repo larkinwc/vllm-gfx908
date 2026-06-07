@@ -15,6 +15,7 @@ predicates used in ``scripts/mi100/autotune_sweep.py`` and writes the
 extra fields into each config JSON without re-running the costly bench
 loop.
 """
+
 from __future__ import annotations
 
 import json
@@ -34,13 +35,16 @@ CONFIG_DIR = REPO / "vllm/model_executor/kernels/configs/gfx908"
 
 W8A8_HARD = ("lds_overflow", "nonkdim32_needs_>=32_tiles")
 W4A16_HARD = (
-    "block_k_gt_group", "block_n_not_multiple_of_8",
-    "lds_overflow", "nonkdim32_needs_>=32_tiles",
+    "block_k_gt_group",
+    "block_n_not_multiple_of_8",
+    "lds_overflow",
+    "nonkdim32_needs_>=32_tiles",
 )
 
 
-def _legal_for_shape(kernel: str, M: int, N: int, K: int,
-                     group_size: int | None) -> tuple[int, int, int]:
+def _legal_for_shape(
+    kernel: str, M: int, N: int, K: int, group_size: int | None
+) -> tuple[int, int, int]:
     cart_total = 0
     legal = 0
     eliminated_hard = 0
@@ -76,9 +80,7 @@ def main() -> int:
         gs = shape.get("group_size")
         if not (kernel and M and N and K):
             continue
-        cart_total, legal, hard_eliminated = _legal_for_shape(
-            kernel, M, N, K, gs
-        )
+        cart_total, legal, hard_eliminated = _legal_for_shape(kernel, M, N, K, gs)
         evaluated = blob.get("autotune_runs_evaluated", 0)
         legal_pct = (evaluated / legal * 100.0) if legal else 0.0
         blob["autotune_cartesian_total"] = cart_total

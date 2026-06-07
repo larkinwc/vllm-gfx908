@@ -2,8 +2,8 @@
 #include "rocm/ops.h"
 
 #ifdef VLLM_BUILD_CK
-#include "quantization/w8a8/int8/ck/ck_int8_gemm.h"
-#include "quantization/gptq/ck/ck_w4a16_gemm.h"
+  #include "quantization/w8a8/int8/ck/ck_int8_gemm.h"
+  #include "quantization/gptq/ck/ck_w4a16_gemm.h"
 #endif
 
 // Note on op signatures:
@@ -96,8 +96,7 @@ TORCH_LIBRARY_EXPAND(TORCH_EXTENSION_NAME, rocm_ops) {
   rocm_ops.def(
       "ck_w4a16_gemm(Tensor a, Tensor b, Tensor scales, Tensor zeros, "
       "int group_size, int tp_rank) -> Tensor");
-  rocm_ops.impl("ck_w4a16_gemm", torch::kCUDA,
-                &vllm::ck_w4a16::ck_w4a16_gemm);
+  rocm_ops.impl("ck_w4a16_gemm", torch::kCUDA, &vllm::ck_w4a16::ck_w4a16_gemm);
 
   rocm_ops.def(
       "ck_w4a16_gemm_supports(int M, int N, int K, int group_size, "

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 Generate per-shape TensileLite tuning YAMLs for gfx908 INT8 W8A8 GEMMs.
 
@@ -19,6 +20,7 @@ The YAML emitted here matches that contraction. Per-host gotchas:
     v_mfma_i32_32x32x8i8. We tune over a small grid of MT/DepthU
     combinations targeting the W8A8 hot shapes.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -120,13 +122,13 @@ LibraryClient:
 # Macro tile = MFMA_M * ThreadTileM * WGM (etc).
 MATRIX_INSTRUCTIONS = [
     # mfma 16x16x16i8 — flexible, smaller waves, good for skinny prefill.
-    [16, 16, 16, 1, 1, 1, 1, 4, 1],   # MT 64 x 64
-    [16, 16, 16, 1, 1, 2, 2, 4, 1],   # MT 128 x 128
-    [16, 16, 16, 1, 1, 1, 2, 4, 1],   # MT 64 x 128
-    [16, 16, 16, 1, 1, 2, 1, 4, 1],   # MT 128 x 64
+    [16, 16, 16, 1, 1, 1, 1, 4, 1],  # MT 64 x 64
+    [16, 16, 16, 1, 1, 2, 2, 4, 1],  # MT 128 x 128
+    [16, 16, 16, 1, 1, 1, 2, 4, 1],  # MT 64 x 128
+    [16, 16, 16, 1, 1, 2, 1, 4, 1],  # MT 128 x 64
     # mfma 32x32x8i8 — bigger MFMA, fewer waves; good for fat M shapes.
-    [32, 32, 8, 1, 1, 1, 1, 2, 1],    # MT 64 x 64
-    [32, 32, 8, 1, 1, 2, 2, 2, 1],    # MT 128 x 128
+    [32, 32, 8, 1, 1, 1, 1, 2, 1],  # MT 64 x 64
+    [32, 32, 8, 1, 1, 2, 2, 2, 1],  # MT 128 x 128
 ]
 
 
@@ -139,10 +141,15 @@ def render_matrix_instr_block() -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--shapes-json", type=Path, required=True,
-                    help="Manifest from select_w8a8_tuning_shapes.py")
-    ap.add_argument("--out-dir", type=Path, required=True,
-                    help="Where to write per-shape YAMLs.")
+    ap.add_argument(
+        "--shapes-json",
+        type=Path,
+        required=True,
+        help="Manifest from select_w8a8_tuning_shapes.py",
+    )
+    ap.add_argument(
+        "--out-dir", type=Path, required=True, help="Where to write per-shape YAMLs."
+    )
     args = ap.parse_args()
 
     manifest = json.loads(args.shapes_json.read_text())
@@ -154,15 +161,19 @@ def main() -> int:
     for s in shapes:
         M, N, K = int(s["M"]), int(s["N"]), int(s["K"])
         out = args.out_dir / f"tune_M{M}_N{N}_K{K}.yaml"
-        out.write_text(TUNING_YAML_TMPL.format(
-            M=M, N=N, K=K, matrix_instr_block=matrix_block,
-        ))
+        out.write_text(
+            TUNING_YAML_TMPL.format(
+                M=M,
+                N=N,
+                K=K,
+                matrix_instr_block=matrix_block,
+            )
+        )
         written.append(str(out))
         print(f"wrote {out}")
 
     index = args.out_dir / "INDEX.json"
-    index.write_text(json.dumps({"yamls": written,
-                                 "shapes": shapes}, indent=2))
+    index.write_text(json.dumps({"yamls": written, "shapes": shapes}, indent=2))
     print(f"index: {index}")
     return 0
 

@@ -1254,9 +1254,11 @@ def multi_thread_pt_weights_iterator(
             del state
 
 
-def _get_gguf_shard_files(gguf_file: str) -> list[str]:
+def _get_gguf_shard_files(gguf_file: str | Path) -> list[str]:
     """Get all shard files for a split GGUF, or just [gguf_file] if not split."""
     import glob as _glob
+
+    gguf_file = str(gguf_file)
     basename = os.path.basename(gguf_file)
     # Match pattern like *-00001-of-00003.gguf
     m = re.search(r"-\d+-of-(\d+)\.gguf$", basename)
@@ -1265,9 +1267,7 @@ def _get_gguf_shard_files(gguf_file: str) -> list[str]:
         # Build glob pattern to find all shards
         prefix = re.sub(r"-\d+-of-\d+\.gguf$", "", basename)
         parent = os.path.dirname(gguf_file)
-        shard_files = sorted(
-            _glob.glob(os.path.join(parent, f"{prefix}-*-of-*.gguf"))
-        )
+        shard_files = sorted(_glob.glob(os.path.join(parent, f"{prefix}-*-of-*.gguf")))
         if len(shard_files) == n_shards:
             return shard_files
     return [gguf_file]
@@ -1294,11 +1294,13 @@ def get_gguf_weight_type_map(
     result: dict[str, str] = {}
     for shard in _get_gguf_shard_files(gguf_file):
         reader = gguf.GGUFReader(shard)
-        result.update({
-            gguf_to_hf_name_map[tensor.name]: tensor.tensor_type.name
-            for tensor in reader.tensors
-            if tensor.name in gguf_to_hf_name_map
-        })
+        result.update(
+            {
+                gguf_to_hf_name_map[tensor.name]: tensor.tensor_type.name
+                for tensor in reader.tensors
+                if tensor.name in gguf_to_hf_name_map
+            }
+        )
     return result
 
 

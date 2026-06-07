@@ -182,13 +182,12 @@ def get_block_size(dtype: torch.dtype) -> int:
         return 32
     if current_platform.is_rocm():
         from vllm.platforms.rocm import on_mi100
+
         if on_mi100():
             # MI100 has 64KB LDS per CU. With head_dim=256, block=128
             # requires 128*256*2=64KB for Q alone, exceeding LDS budget.
             return 64
-    if current_platform.is_cuda_alike() and current_platform.has_device_capability(
-        80
-    ):
+    if current_platform.is_cuda_alike() and current_platform.has_device_capability(80):
         return 128
     return 64
 

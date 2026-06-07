@@ -29,7 +29,7 @@ These settings are required for multi-GPU PCIe passthrough and large BAR support
 
 Edit `/etc/default/grub`:
 
-```
+```text
 GRUB_CMDLINE_LINUX_DEFAULT="quiet iommu=pt"
 ```
 
@@ -280,7 +280,7 @@ print('Platform:', type(current_platform).__name__)
 
 Expected output:
 
-```
+```text
 vLLM: 0.18.1.dev4+...
 _rocm_C: OK
 Platform: RocmPlatform
@@ -299,6 +299,7 @@ huggingface-cli download Qwen/Qwen3.5-27B-AWQ-BF16-INT4 \
 ## 11. Launch vLLM
 
 MI100 auto-detection (`rocm.py`) handles most settings automatically:
+
 - torch.compile disabled (Inductor fusions unavailable on ROCm)
 - FULL_DECODE_ONLY CUDA graphs (PIECEWISE hangs at TP>1)
 - Custom all-reduce via XGMI enabled (validated on PyTorch 2.11+rocm7.2)

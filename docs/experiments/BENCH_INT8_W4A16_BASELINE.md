@@ -49,6 +49,7 @@ artifacts. The prior-round W8A8 GatedDeltaNet failure mode (gibberish output)
 **is NOT reproduced** by these RedHatAI / apolo13x artifacts.
 
 The Δ values (+1.37 %, +2.91 %) are within published norms for INT8 channel
+
 + INT4 group-128 PTQ. They merely exceed the contract's strict +1 % gate.
 
 Mission paused at M0; orchestrator returned the decision to the user for a
@@ -64,25 +65,25 @@ Per VAL-BASE-001 .. VAL-BASE-009 the M1 worker locked the canonical harness, ran
 
 ### Harness manifest summary
 
-- Locked harness:        `/root/bench-int8-w4a16/baseline/run_baseline.sh`
-- vLLM commit:           `8bcd4bdf4dcb8625274688bf2477f413ea0a2f06`
-- vLLM version:          0.20.2rc1.dev93+g85994b2e3
-- ROCm:                  7.12
-- torch:                 2.11.0+rocm7.2
-- pytorch-triton-rocm:   3.5.1
-- block-size:            32
-- max-model-len:         32768
-- num-prompts per cell:  200
-- seed:                  42
-- cudagraph_mode:        FULL_DECODE_ONLY
-- prefix caching:        True
-- dataset SHA256:        `db138a30917dc972fab0ca70ddf74601...`
-- host:                  `aimeme-MU72-SU0-00`
-- timestamp (last write):`2026-05-08T00:39:59Z`
++ Locked harness:        `/root/bench-int8-w4a16/baseline/run_baseline.sh`
++ vLLM commit:           `8bcd4bdf4dcb8625274688bf2477f413ea0a2f06`
++ vLLM version:          0.20.2rc1.dev93+g85994b2e3
++ ROCm:                  7.12
++ torch:                 2.11.0+rocm7.2
++ pytorch-triton-rocm:   3.5.1
++ block-size:            32
++ max-model-len:         32768
++ num-prompts per cell:  200
++ seed:                  42
++ cudagraph_mode:        FULL_DECODE_ONLY
++ prefix caching:        True
++ dataset SHA256:        `db138a30917dc972fab0ca70ddf74601...`
++ host:                  `aimeme-MU72-SU0-00`
++ timestamp (last write):`2026-05-08T00:39:59Z`
 
 Required env vars (per AGENTS.md, applied uniformly):
 
-```
+```text
 LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib
 ROCM_PATH=/opt/rocm/core-7.12
 PATH=/opt/rocm/core-7.12/bin:/root/.factory/bin:/root/.cargo/bin:/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin
@@ -134,11 +135,11 @@ Throughput is total output tok/s across all in-flight requests. TTFT and TPOT pe
 | w4a16 | 4 | 4 | synthetic | 193.99 | 0.758 | 197.0 | 249.8 | 19.91 | 20.10 |
 | w4a16 | 4 | 4 | coding | 161.98 | 0.707 | 122.3 | 212.4 | 23.42 | 29.15 |
 
-# Top 12 GEMM Shapes (M1 Baseline)
+## Top 12 GEMM Shapes (M1 Baseline)
 
-- Traces analyzed: 2
-- Grand GPU busy time: 29263.74 ms
-- Top-12 cumulative coverage: **80.51%**
++ Traces analyzed: 2
++ Grand GPU busy time: 29263.74 ms
++ Top-12 cumulative coverage: **80.51%**
 
 | Rank | %busy | Total ms | Calls | Shape | Kernel |
 |------|-------|----------|-------|-------|--------|
@@ -181,37 +182,3 @@ _omniperf is not installed in the mission environment; this summary was produced
 |------:|------------|------:|----------:|------------------:|----------:|----------------------------:|--------------:|
 | w8a8 | `scaled_mm_kernel` | 47200 | 11983.78 | 258.98 | **21.08%** | 0.337 | 0.183% |
 | w4a16 | `triton_w4a16_gemm_kernel` | 23600 | 9830.51 | 395.42 | **32.18%** | — | — |
-
-Both hot kernels are clearly **memory-bandwidth bound** (HBM utilization ~21-32% of peak; the VALU compute proxy is far below 1% of peak compute, even after accounting for VALU underestimating MFMA throughput). This corroborates the M2/M3 playbook: dominant wins come from reducing weight bytes (W4A16 saves 75% of weight bandwidth vs FP16, W8A8 saves 50%) and from fusing dequant + GEMM into a single pass.
-
-
-## Per-trace busy summary
-
-| Cell | n_kernels | n_records | busy_ms |
-|------|-----------|-----------|---------|
-| w4a16_tp1_c1_synthetic/rocprof_w4a16_tp1_c1_synthetic_kernel_trace | 112 | 326320 | 16930.69 |
-| w8a8_tp1_c1_synthetic/rocprof_w8a8_tp1_c1_synthetic_kernel_trace | 107 | 349048 | 12333.05 |
-
-### Hot Shapes
-
-Top 1-2 GEMM kernels per regime per quant scheme, ranked by total wall-clock within the rocprofv3 capture window.
-
-| Regime | Quant | Rank | %busy | Total ms | Calls | Shape | Kernel |
-|--------|------:|-----:|------:|---------:|------:|-------|--------|
-| tp1c1 | w8a8 | 1 | 64.46% | 6188.51 | 23600 |  | `scaled_mm_kernel` |
-| tp1c1 | w8a8 | 2 | 9.38% | 900.53 | 332 |  | `Cijk_Alik_Bljk_HHS_BH_MT128x192x32_MI32x32x8x1_SN_1LDSB1_APM1_ABV0_ACED0_AF0EM8_` |
-| tp1c1 | w4a16 | 1 | 75.74% | 10671.57 | 23600 |  | `triton_w4a16_gemm_kernel` |
-| tp1c1 | w4a16 | 2 | 6.42% | 905.02 | 332 |  | `Cijk_Alik_Bljk_HHS_BH_MT128x192x32_MI32x32x8x1_SN_1LDSB1_APM1_ABV0_ACED0_AF0EM8_` |
-
-### Roofline placement (rocprofv3 PMC; omniperf-equivalent)
-
-_omniperf is not installed in the mission environment; this summary was produced by aggregating rocprofv3 PMC counters (SQ_*, TCP_TCC_*) over the dominant hot kernel of each quant scheme. Peaks: gfx908 FP16/INT8 MFMA = 184.6 TFLOPs, HBM2 = 1228.8 GB/s._
-
-| Quant | Hot kernel | Calls | Kernel ms | Achieved HBM GB/s | %HBM peak | Achieved VALU TFLOPs (proxy) | %compute peak |
-|------:|------------|------:|----------:|------------------:|----------:|----------------------------:|--------------:|
-| w8a8 | `scaled_mm_kernel` | 47200 | 11983.78 | 258.98 | **21.08%** | 0.337 | 0.183% |
-| w4a16 | `triton_w4a16_gemm_kernel` | 23600 | 9830.51 | 395.42 | **32.18%** | — | — |
-
-Both hot kernels are clearly **memory-bandwidth bound** (HBM utilization ~21-32% of peak; the VALU compute proxy is far below 1% of peak compute, even after accounting for VALU underestimating MFMA throughput). This corroborates the M2/M3 playbook: dominant wins come from reducing weight bytes (W4A16 saves 75% of weight bandwidth vs FP16, W8A8 saves 50%) and from fusing dequant + GEMM into a single pass.
-
-

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 Aggregate rocprofv3 counter_collection.csv into omniperf-equivalent
 roofline numbers for the given hot kernel.
@@ -17,6 +18,7 @@ Peaks (gfx908 / MI100):
   * FP16/INT8 MFMA peak: 184.6 TFLOPS / 184.6 TOPS
   * HBM2 peak: 1228.8 GB/s
 """
+
 from __future__ import annotations
 
 import argparse
@@ -65,10 +67,17 @@ def aggregate(csv_path: Path, kernel_substring: str) -> dict:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--counter-csv", action="append", required=True,
-                    help="path to counter_collection.csv (may repeat)")
-    ap.add_argument("--kernel-substring", required=True,
-                    help="substring of kernel name to filter on, e.g. scaled_mm_kernel")
+    ap.add_argument(
+        "--counter-csv",
+        action="append",
+        required=True,
+        help="path to counter_collection.csv (may repeat)",
+    )
+    ap.add_argument(
+        "--kernel-substring",
+        required=True,
+        help="substring of kernel name to filter on, e.g. scaled_mm_kernel",
+    )
     ap.add_argument("--quant", required=True)
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
@@ -119,9 +128,7 @@ def main():
         ),
         "achieved_HBM_GB_s": ach_hbm,
         "peak_HBM_GB_s_gfx908": PEAK_HBM_GB_S,
-        "percent_of_peak_hbm": (
-            100.0 * ach_hbm / PEAK_HBM_GB_S if ach_hbm else None
-        ),
+        "percent_of_peak_hbm": (100.0 * ach_hbm / PEAK_HBM_GB_S if ach_hbm else None),
         "raw_counters": dict(merged_counters),
         "input_files": list(args.counter_csv),
         "note": (

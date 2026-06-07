@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 Aggregate W8A8 cells across three grids:
   * M1 baseline (May-7)
@@ -18,6 +19,7 @@ Emits a markdown table with the canonical metrics per cell, plus deltas:
 This is the comparison the m2-rebaseline-and-fill-grid feature
 requires (see mission features.json).
 """
+
 from __future__ import annotations
 
 import json
@@ -32,18 +34,18 @@ CELLS = [
 ]
 
 ROOTS = {
-    "M1":  Path("/root/bench-int8-w4a16/baseline"),
+    "M1": Path("/root/bench-int8-w4a16/baseline"),
     "M1r": Path("/root/bench-int8-w4a16/m1-rebaseline"),
-    "M2":  Path("/root/bench-int8-w4a16/m2"),
+    "M2": Path("/root/bench-int8-w4a16/m2"),
 }
 
 METRICS = [
-    ("output_throughput_toks_s", "tput",     "higher_better"),
+    ("output_throughput_toks_s", "tput", "higher_better"),
     ("request_throughput_req_s", "req_tput", "higher_better"),
-    ("mean_ttft_ms",             "mean_ttft","lower_better"),
-    ("p99_ttft_ms",              "p99_ttft", "lower_better"),
-    ("mean_tpot_ms",             "mean_tpot","lower_better"),
-    ("p99_tpot_ms",              "p99_tpot", "lower_better"),
+    ("mean_ttft_ms", "mean_ttft", "lower_better"),
+    ("p99_ttft_ms", "p99_ttft", "lower_better"),
+    ("mean_tpot_ms", "mean_tpot", "lower_better"),
+    ("p99_tpot_ms", "p99_tpot", "lower_better"),
 ]
 
 
@@ -67,13 +69,11 @@ def fmt_delta(d: float, direction: str, threshold: float = 3.0) -> str:
         return "—"
     sign = "+" if d > 0 else ""
     s = f"{sign}{d:.2f}%"
-    is_improvement = (
-        (direction == "higher_better" and d >= threshold) or
-        (direction == "lower_better" and d <= -threshold)
+    is_improvement = (direction == "higher_better" and d >= threshold) or (
+        direction == "lower_better" and d <= -threshold
     )
-    is_regression = (
-        (direction == "higher_better" and d <= -1.0) or
-        (direction == "lower_better" and d >= 1.0)
+    is_regression = (direction == "higher_better" and d <= -1.0) or (
+        direction == "lower_better" and d >= 1.0
     )
     if is_improvement:
         return f"**{s}**"
@@ -94,14 +94,18 @@ def main() -> int:
     out.append("> the merged TensileLite logic; M1-rebaseline does NOT (so")
     out.append("> hipBLASLt uses its prebuilt I8I8 default kernel).")
     out.append("")
-    out.append("Markup: **bold** = Pareto improvement ≥ 3% on this metric, "
-               "_italic_ = regression > 1%.")
+    out.append(
+        "Markup: **bold** = Pareto improvement ≥ 3% on this metric, "
+        "_italic_ = regression > 1%."
+    )
     out.append("")
     out.append("## Per-cell results (W8A8)")
     out.append("")
-    out.append("| Cell | Workload | Metric | M1 (May-7) | M1-rebaseline | M2 | "
-               "Δ M1→M2 | Δ M1→M1rb (lib-swap) | "
-               "Δ M1rb→M2 (**tuning**) |")
+    out.append(
+        "| Cell | Workload | Metric | M1 (May-7) | M1-rebaseline | M2 | "
+        "Δ M1→M2 | Δ M1→M1rb (lib-swap) | "
+        "Δ M1rb→M2 (**tuning**) |"
+    )
     out.append("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |")
 
     summary: list[dict] = []
@@ -110,8 +114,9 @@ def main() -> int:
         cells = {k: load_cell(r, model, tp, c, wl) for k, r in ROOTS.items()}
         if any(v is None for v in cells.values()):
             missing = [k for k, v in cells.items() if v is None]
-            print(f"  [warn] {model}_tp{tp}_c{c}_{wl}: missing {missing}",
-                  file=sys.stderr)
+            print(
+                f"  [warn] {model}_tp{tp}_c{c}_{wl}: missing {missing}", file=sys.stderr
+            )
             continue
         cell_id = f"{model}_tp{tp}_c{c}"
         for key, label, direction in METRICS:
@@ -131,29 +136,36 @@ def main() -> int:
                 f"{fmt_delta(d_m1_m1r, direction)} | "
                 f"{fmt_delta(d_m1r_m2, direction)} |"
             )
-            summary.append({
-                "cell": cell_id, "workload": wl, "metric": label,
-                "direction": direction,
-                "M1": m1, "M1r": m1r, "M2": m2,
-                "d_M1_M2": d_m1_m2,
-                "d_M1_M1r": d_m1_m1r,
-                "d_M1r_M2": d_m1r_m2,
-            })
+            summary.append(
+                {
+                    "cell": cell_id,
+                    "workload": wl,
+                    "metric": label,
+                    "direction": direction,
+                    "M1": m1,
+                    "M1r": m1r,
+                    "M2": m2,
+                    "d_M1_M2": d_m1_m2,
+                    "d_M1_M1r": d_m1_m1r,
+                    "d_M1r_M2": d_m1r_m2,
+                }
+            )
 
     out.append("")
     out.append("## Headline analysis: tuning gain (Δ M1rb→M2)")
     out.append("")
-    out.append("Cells where the **tuning** column shows ≥ +3% gain "
-               "(throughput) or ≤ -3% latency reduction:")
+    out.append(
+        "Cells where the **tuning** column shows ≥ +3% gain "
+        "(throughput) or ≤ -3% latency reduction:"
+    )
     out.append("")
     out.append("| Cell | Workload | Metric | M1rb | M2 | Δ M1rb→M2 |")
     out.append("| --- | --- | --- | ---: | ---: | ---: |")
     n_pareto = 0
     for r in summary:
         d = r["d_M1r_M2"]
-        is_improvement = (
-            (r["direction"] == "higher_better" and d >= 3.0) or
-            (r["direction"] == "lower_better" and d <= -3.0)
+        is_improvement = (r["direction"] == "higher_better" and d >= 3.0) or (
+            r["direction"] == "lower_better" and d <= -3.0
         )
         if is_improvement:
             n_pareto += 1
@@ -171,13 +183,13 @@ def main() -> int:
     # Identify prefill-dominated cells
     out.append("## Prefill-dominated improvement check (gate)")
     out.append("")
-    out.append("Mission gate: at least one **prefill-dominated** cell improves ≥ 3% "
-               "in the M2-vs-M1-rebaselined column. Prefill dominance is highest "
-               "on TP=1 c≥2 synthetic (large M batches) and on TP=4 c=4 synthetic.")
+    out.append(
+        "Mission gate: at least one **prefill-dominated** cell improves ≥ 3% "
+        "in the M2-vs-M1-rebaselined column. Prefill dominance is highest "
+        "on TP=1 c≥2 synthetic (large M batches) and on TP=4 c=4 synthetic."
+    )
     out.append("")
-    prefill_cells = {
-        "w8a8_tp1_c2", "w8a8_tp1_c4", "w8a8_tp4_c4"
-    }
+    prefill_cells = {"w8a8_tp1_c2", "w8a8_tp1_c4", "w8a8_tp4_c4"}
     prefill_metrics = {"mean_ttft", "p99_ttft"}
     prefill_pass = []
     for r in summary:
@@ -202,11 +214,15 @@ def main() -> int:
         out.append("| — | — | — | — | — | (no prefill-dominated cell ≥ 3%) |")
     out.append("")
     if prefill_pass:
-        out.append(f"**GATE PASS:** {len(prefill_pass)} prefill-dominated metric(s) "
-                   "improved ≥ 3% in M2 vs M1-rebaselined.")
+        out.append(
+            f"**GATE PASS:** {len(prefill_pass)} prefill-dominated metric(s) "
+            "improved ≥ 3% in M2 vs M1-rebaselined."
+        )
     else:
-        out.append("**GATE FAIL:** no prefill-dominated metric improved ≥ 3% "
-                   "in M2 vs M1-rebaselined.")
+        out.append(
+            "**GATE FAIL:** no prefill-dominated metric improved ≥ 3% "
+            "in M2 vs M1-rebaselined."
+        )
     out.append("")
 
     print("\n".join(out))

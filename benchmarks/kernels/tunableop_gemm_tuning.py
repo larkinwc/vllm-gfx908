@@ -1,4 +1,6 @@
 #!/opt/vllm-env/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 TunableOp GEMM Autotuning for MI100 (gfx908)
 
@@ -66,6 +68,7 @@ def check_server_health():
     """Check if vLLM server is running and healthy."""
     try:
         import urllib.request
+
         req = urllib.request.Request(f"{SERVER_URL}/health")
         with urllib.request.urlopen(req, timeout=5) as resp:
             return resp.status == 200
@@ -76,15 +79,18 @@ def check_server_health():
 def send_warmup_request(prompt, max_tokens=256):
     """Send a single request to the vLLM server to exercise GEMM kernels."""
     import urllib.request
-    payload = json.dumps({
-        "model": os.path.basename(DEFAULT_MODEL),
-        "messages": [
-            {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": prompt},
-        ],
-        "max_tokens": max_tokens,
-        "temperature": 0.7,
-    }).encode("utf-8")
+
+    payload = json.dumps(
+        {
+            "model": os.path.basename(DEFAULT_MODEL),
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": 0.7,
+        }
+    ).encode("utf-8")
 
     req = urllib.request.Request(
         f"{SERVER_URL}/v1/chat/completions",
@@ -113,7 +119,7 @@ def record_gemm_shapes(output_dir):
 
     results = []
     for i, prompt in enumerate(WARMUP_PROMPTS):
-        print(f"  [{i+1}/{len(WARMUP_PROMPTS)}] Sending: {prompt[:60]}...")
+        print(f"  [{i + 1}/{len(WARMUP_PROMPTS)}] Sending: {prompt[:60]}...")
         try:
             resp = send_warmup_request(prompt)
             tokens = resp.get("usage", {}).get("completion_tokens", 0)
@@ -127,6 +133,7 @@ def record_gemm_shapes(output_dir):
     print()
     print("  Sending batch of 4 concurrent requests for batched GEMM shapes...")
     import concurrent.futures
+
     batch_prompts = WARMUP_PROMPTS[:4]
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
         futures = [executor.submit(send_warmup_request, p) for p in batch_prompts]
@@ -185,7 +192,7 @@ print(f"Reading untuned GEMMs from: {{input_file}}")
 print(f"Output will be saved to: {{output_file}}")
 
 # For multi-GPU tuning
-num_gpus = torch.cuda.device_count()
+num_gpus = torch.accelerator.device_count()
 print(f"Number of GPUs: {{num_gpus}}")
 
 start = time.time()
@@ -220,10 +227,12 @@ for op, entries in results.items():
         f.write(tune_script)
 
     env = os.environ.copy()
-    env.update({
-        "PYTORCH_TUNABLEOP_ENABLED": "1",
-        "PYTORCH_TUNABLEOP_TUNING": "1",
-    })
+    env.update(
+        {
+            "PYTORCH_TUNABLEOP_ENABLED": "1",
+            "PYTORCH_TUNABLEOP_TUNING": "1",
+        }
+    )
 
     result = subprocess.run(
         [VLLM_PYTHON, script_file],
@@ -243,7 +252,7 @@ def generate_launch_script(output_dir, tunableop_results_file=None):
     if tunableop_results_file is None:
         tunableop_results_file = os.path.join(output_dir, "tunableop_results.csv")
 
-    ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     script = f"""#!/bin/bash
 # launch-vllm-tunableop.sh - vLLM with TunableOp-tuned GEMM kernels for MI100
 #
@@ -420,7 +429,8 @@ def run_full_pipeline(output_dir, skip_server_restart=False):
         subprocess.run(
             "lsof -ti :8000 | xargs kill -9 2>/dev/null; sleep 3; "
             "pkill -9 -f 'VLLM::' 2>/dev/null; sleep 2",
-            shell=True, capture_output=True,
+            shell=True,
+            capture_output=True,
         )
         print("  Done.")
         print()
@@ -443,7 +453,7 @@ def run_full_pipeline(output_dir, skip_server_restart=False):
         print("  Waiting for server health (up to 180s for tuning mode)...")
         for i in range(90):
             if check_server_health():
-                print(f"  Server healthy after {(i+1)*2}s")
+                print(f"  Server healthy after {(i + 1) * 2}s")
                 break
             time.sleep(2)
         else:
@@ -481,7 +491,8 @@ def run_full_pipeline(output_dir, skip_server_restart=False):
             server_proc.kill()
         subprocess.run(
             "pkill -9 -f 'VLLM::' 2>/dev/null; sleep 3",
-            shell=True, capture_output=True,
+            shell=True,
+            capture_output=True,
         )
         print("  Done.")
         print()
@@ -520,7 +531,7 @@ def run_full_pipeline(output_dir, skip_server_restart=False):
         print("  Waiting for server health...")
         for i in range(60):
             if check_server_health():
-                print(f"  Server healthy after {(i+1)*2}s")
+                print(f"  Server healthy after {(i + 1) * 2}s")
                 break
             time.sleep(2)
         else:

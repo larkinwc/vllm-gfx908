@@ -46,6 +46,7 @@ Nibble ordering summary (3 lines):
   - dequant: w_fp[k, n] = q[k, n] * scale[g, n] - zero[g, n], g = k // G.
 ===============================================================================
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -69,8 +70,8 @@ class MarlinRepackedW4A16:
     """
 
     qweight: torch.Tensor  # [K//8, N] int32, K-packed, N-lane-adjacent
-    scale: torch.Tensor    # [K//G, N] scales dtype
-    zero: torch.Tensor     # [K//G, N] scales dtype, pre-fused (zero_raw*scale)
+    scale: torch.Tensor  # [K//G, N] scales dtype
+    zero: torch.Tensor  # [K//G, N] scales dtype, pre-fused (zero_raw*scale)
     group_size: int
     K: int
     N: int
@@ -125,7 +126,7 @@ def unpack_repacked_to_kn(qweight_kb_n: torch.Tensor) -> torch.Tensor:
     shifts = _shifts(qweight_kb_n.device)
     # [K//8, N, 8] nibbles -> [K//8, 8, N] -> [K, N]
     nibbles = (qweight_kb_n.unsqueeze(-1) >> shifts) & 0xF  # [kb, N, 8]
-    nibbles = nibbles.permute(0, 2, 1).contiguous()          # [kb, 8, N]
+    nibbles = nibbles.permute(0, 2, 1).contiguous()  # [kb, 8, N]
     return nibbles.reshape(kb * 8, N)
 
 
@@ -164,9 +165,7 @@ def marlin_repack_w4a16(
             f"marlin_repack_w4a16: unsupported group_size={group_size}; "
             f"supported: {_SUPPORTED_GROUP_SIZES}"
         )
-    assert K % group_size == 0, (
-        f"K={K} not divisible by group_size={group_size}"
-    )
+    assert K % group_size == 0, f"K={K} not divisible by group_size={group_size}"
     assert K % 8 == 0, f"K={K} must be divisible by 8 for K-packing"
 
     num_groups = K // group_size
@@ -177,22 +176,23 @@ def marlin_repack_w4a16(
     has_zp = qzeros is not None
 
     # ---- Weight: unpack N-packing, repack along K ----
-    w_int4_kn = _unpack_int4_along_n(b_q)          # [K, N] int32
-    qweight = _pack_int4_along_k(w_int4_kn)        # [K//8, N] int32
+    w_int4_kn = _unpack_int4_along_n(b_q)  # [K, N] int32
+    qweight = _pack_int4_along_k(w_int4_kn)  # [K//8, N] int32
 
     # ---- Pre-fuse scales / zeros: w_fp = q*scale - (zero_raw*scale) ----
     scale_f32 = scales.to(torch.float32)
-    if has_zp:
+    if qzeros is not None:
         assert qzeros.dtype == torch.int32, "qzeros must be int32"
         assert qzeros.shape == (num_groups, N // 8), (
-            f"qzeros shape mismatch: {qzeros.shape} vs "
-            f"({num_groups}, {N // 8})"
+            f"qzeros shape mismatch: {qzeros.shape} vs ({num_groups}, {N // 8})"
         )
         zero_raw = _unpack_int4_along_n(qzeros).to(torch.float32)  # [K//G, N]
     else:
         zero_raw = torch.full(
-            (num_groups, N), float(zp_bias),
-            dtype=torch.float32, device=scales.device,
+            (num_groups, N),
+            float(zp_bias),
+            dtype=torch.float32,
+            device=scales.device,
         )
 
     zero_fused = (zero_raw * scale_f32).to(scales.dtype).contiguous()
@@ -233,15 +233,28 @@ def marlin_repack_w4a16(
 
 @triton.jit
 def _mi100_w4a16_marlin_gemm_kernel(
-    a_ptr, b_ptr, c_ptr, scales_ptr, zeros_ptr,
-    M, N, K,
-    stride_am, stride_ak,
-    stride_bk, stride_bn,
-    stride_cm, stride_cn,
-    stride_scales_g, stride_scales_n,
-    stride_zeros_g, stride_zeros_n,
+    a_ptr,
+    b_ptr,
+    c_ptr,
+    scales_ptr,
+    zeros_ptr,
+    M,
+    N,
+    K,
+    stride_am,
+    stride_ak,
+    stride_bk,
+    stride_bn,
+    stride_cm,
+    stride_cn,
+    stride_scales_g,
+    stride_scales_n,
+    stride_zeros_g,
+    stride_zeros_n,
     group_size,
-    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
     GROUP_M: tl.constexpr,
 ):
     pid = tl.program_id(0)
@@ -258,18 +271,16 @@ def _mi100_w4a16_marlin_gemm_kernel(
     offs_bn = (pid_n * BLOCK_N + tl.arange(0, BLOCK_N)) % N
     offs_k = tl.arange(0, BLOCK_K)
 
-    a_ptrs = a_ptr + (offs_am[:, None] * stride_am +
-                      offs_k[None, :] * stride_ak)
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
 
     # qweight is [K//8, N] int32, K-packed. Within a BLOCK_K tile the int32 row
     # for local k is ``k // 8`` and the int4 lives at bit offset ``(k % 8)*4``.
     # SHIFT-ONLY extraction: load the packed int32 (reused for its 8 K-rows),
     # then right-shift + mask. No nibble-replication intrinsic; no weight
     # store (only the output is stored).
-    k_pack = offs_k // 8                       # [BLOCK_K] packed-row offset
-    k_shift = (offs_k % 8) * 4                 # [BLOCK_K] nibble bit shift
-    b_ptrs = b_ptr + (k_pack[:, None] * stride_bk +
-                      offs_bn[None, :] * stride_bn)
+    k_pack = offs_k // 8  # [BLOCK_K] packed-row offset
+    k_shift = (offs_k % 8) * 4  # [BLOCK_K] nibble bit shift
+    b_ptrs = b_ptr + (k_pack[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     accumulator = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
 
@@ -284,14 +295,13 @@ def _mi100_w4a16_marlin_gemm_kernel(
 
         # One group per BLOCK_K tile (BLOCK_K divides group_size).
         g = (k * BLOCK_K) // group_size
-        scales = tl.load(scales_ptr + g * stride_scales_g +
-                         offs_bn * stride_scales_n)
-        zeros = tl.load(zeros_ptr + g * stride_zeros_g +
-                        offs_bn * stride_zeros_n)
+        scales = tl.load(scales_ptr + g * stride_scales_g + offs_bn * stride_scales_n)
+        zeros = tl.load(zeros_ptr + g * stride_zeros_g + offs_bn * stride_zeros_n)
 
         # Pre-fused dequant: w_fp = q * scale - zero  (zero == zero_raw*scale).
-        b_fp = b_nibble.to(tl.float32) * scales[None, :].to(tl.float32) - \
-            zeros[None, :].to(tl.float32)
+        b_fp = b_nibble.to(tl.float32) * scales[None, :].to(tl.float32) - zeros[
+            None, :
+        ].to(tl.float32)
 
         accumulator += tl.dot(a.to(tl.float32), b_fp)
 
@@ -313,13 +323,31 @@ def _default_marlin_config(M: int) -> dict:
     ``num_stages`` is kept <= 2 (gfx908 has no async-LDS pipelining).
     """
     if M <= 16:
-        return {"BLOCK_M": 16, "BLOCK_N": 64, "BLOCK_K": 32,
-                "GROUP_M": 8, "num_warps": 4, "num_stages": 2}
+        return {
+            "BLOCK_M": 16,
+            "BLOCK_N": 64,
+            "BLOCK_K": 32,
+            "GROUP_M": 8,
+            "num_warps": 4,
+            "num_stages": 2,
+        }
     if M <= 64:
-        return {"BLOCK_M": 32, "BLOCK_N": 64, "BLOCK_K": 32,
-                "GROUP_M": 8, "num_warps": 4, "num_stages": 2}
-    return {"BLOCK_M": 64, "BLOCK_N": 128, "BLOCK_K": 32,
-            "GROUP_M": 8, "num_warps": 4, "num_stages": 2}
+        return {
+            "BLOCK_M": 32,
+            "BLOCK_N": 64,
+            "BLOCK_K": 32,
+            "GROUP_M": 8,
+            "num_warps": 4,
+            "num_stages": 2,
+        }
+    return {
+        "BLOCK_M": 64,
+        "BLOCK_N": 128,
+        "BLOCK_K": 32,
+        "GROUP_M": 8,
+        "num_warps": 4,
+        "num_stages": 2,
+    }
 
 
 def _select_marlin_config(M: int, N: int, K: int, group_size: int) -> dict:
@@ -330,7 +358,8 @@ def _select_marlin_config(M: int, N: int, K: int, group_size: int) -> dict:
     when no JSON is pinned for the shape.
     """
     cfg = _load_mi100_autotune_config(
-        "mi100_w4a16_marlin", M=M, N=N, K=K, group_size=group_size)
+        "mi100_w4a16_marlin", M=M, N=N, K=K, group_size=group_size
+    )
     if cfg is None:
         return _default_marlin_config(M)
     out = _default_marlin_config(M)
@@ -392,9 +421,7 @@ def mi100_w4a16_marlin_gemm(
     assert qweight.shape == (K // 8, N), (
         f"qweight shape {tuple(qweight.shape)} != ({K // 8}, {N})"
     )
-    assert K % group_size == 0, (
-        f"K={K} not divisible by group_size={group_size}"
-    )
+    assert K % group_size == 0, f"K={K} not divisible by group_size={group_size}"
 
     out_dtype = out_dtype or a.dtype
     c = torch.empty((M, N), device=a.device, dtype=out_dtype)
@@ -407,17 +434,31 @@ def mi100_w4a16_marlin_gemm(
         triton.cdiv(M, META["BLOCK_M"]) * triton.cdiv(N, META["BLOCK_N"]),
     )
     _mi100_w4a16_marlin_gemm_kernel[grid](
-        a, qweight, c, scale, zero,
-        M, N, K,
-        a.stride(0), a.stride(1),
-        qweight.stride(0), qweight.stride(1),
-        c.stride(0), c.stride(1),
-        scale.stride(0), scale.stride(1),
-        zero.stride(0), zero.stride(1),
+        a,
+        qweight,
+        c,
+        scale,
+        zero,
+        M,
+        N,
+        K,
+        a.stride(0),
+        a.stride(1),
+        qweight.stride(0),
+        qweight.stride(1),
+        c.stride(0),
+        c.stride(1),
+        scale.stride(0),
+        scale.stride(1),
+        zero.stride(0),
+        zero.stride(1),
         group_size,
-        BLOCK_M=cfg["BLOCK_M"], BLOCK_N=cfg["BLOCK_N"], BLOCK_K=block_k,
+        BLOCK_M=cfg["BLOCK_M"],
+        BLOCK_N=cfg["BLOCK_N"],
+        BLOCK_K=block_k,
         GROUP_M=cfg["GROUP_M"],
-        num_warps=cfg["num_warps"], num_stages=num_stages,
+        num_warps=cfg["num_warps"],
+        num_stages=num_stages,
     )
     return c
 

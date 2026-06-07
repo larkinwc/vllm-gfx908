@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """VAL-CROSS-003 — no kernel becomes default if it loses any cell.
 
 A kernel is the *unconditional default* only if it is ≥ every alternative
@@ -25,6 +26,7 @@ Documented gates (already in tree):
 Exit code is 0 if every winning-but-not-always-best path has at least
 one documented gate, non-zero otherwise.
 """
+
 from __future__ import annotations
 
 import csv
@@ -102,10 +104,14 @@ def main(argv: list[str]) -> int:
         present = per_path_present.get(path, 0)
         lost = per_path_lost.get(path, 0)
         if wins == 0 or present == 0:
-            print(f"  {path:11s}: never selected as winner — no default-claim possible.")  # noqa: E501
+            print(
+                f"  {path:11s}: never selected as winner — no default-claim possible."
+            )  # noqa: E501
             continue
         if lost == 0:
-            print(f"  {path:11s}: wins every measured cell — eligible to be unconditional default.")  # noqa: E501
+            print(
+                f"  {path:11s}: wins every measured cell — eligible to be unconditional default."  # noqa: E501
+            )
             continue
         gates = GATES.get(path, [])
         if not gates:
@@ -120,8 +126,9 @@ def main(argv: list[str]) -> int:
                 f"{', '.join(gates)}; safe to ship as dispatcher-priority path."
             )
     print()
-    print(f"VAL-CROSS-003: {'PASS' if fail == 0 else 'FAIL'} "
-          f"(missing-gate paths: {fail})")
+    print(
+        f"VAL-CROSS-003: {'PASS' if fail == 0 else 'FAIL'} (missing-gate paths: {fail})"
+    )
     return 0 if fail == 0 else 1
 
 

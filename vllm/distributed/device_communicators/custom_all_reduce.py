@@ -50,6 +50,7 @@ class CustomAllreduce:
     def _detect_gfx908() -> bool:
         try:
             from vllm.platforms.rocm import on_mi100
+
             return on_mi100()
         except ImportError:
             return False
@@ -76,8 +77,7 @@ class CustomAllreduce:
         self.disabled = True
         # gfx908: skip custom AR during graph capture (barrier NaN on replay)
         self._gfx908_skip_graph_ar = (
-            current_platform.is_rocm()
-            and self._detect_gfx908()
+            current_platform.is_rocm() and self._detect_gfx908()
         )
 
         if not custom_ar:

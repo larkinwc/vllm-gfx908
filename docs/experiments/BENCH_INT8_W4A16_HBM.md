@@ -362,7 +362,7 @@ was met, all quality gates pass, and the 12 new launch scripts + tuning hash
 manifest are committed for production rollout. Two synthetic-workload cells
 do regress versus production under NCCL\_ALGO=Ring at high concurrency
 (`w8a8_tp4_c2_synthetic` −2.03 %, `w8a8_tp4_c4_synthetic` −7.51 %); both
-are disclosed in [§5 Cumulative Pareto Grid](#5-cumulative-pareto-grid)
+are disclosed in [§6 Cumulative Pareto Grid](#6-cumulative-144-row-pareto-grid)
 and root-caused in [§10 Gap Analysis](#10-gap-analysis-val-final-005-negative-result-clause)
 (at c=4 all-reduce is < 3 % of wall-clock so Ring's scheduling overhead
 dominates, while the per-quant `coding` workload on those same cells WINS

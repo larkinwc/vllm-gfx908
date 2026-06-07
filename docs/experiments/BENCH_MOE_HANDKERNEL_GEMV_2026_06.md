@@ -5,6 +5,7 @@ Follow-up to `RESEARCH_MOE_HANDKERNEL_FEASIBILITY_2026_06.md`. We ran the #58
 loop to completion **including integration**, which is where the story turns.
 
 **Two-line verdict:**
+
 1. **Microbench: WIN.** A `tl.dot`/MFMA kernel with split-K beats the in-tree
    `fused_moe_kernel_gptq_awq` at M=1 decode — 1.63× gate_up, 1.22× down, **1.51×
    combined GEMM** (44.7 → 29.6 µs/layer), head-to-head, same CUDA-graph harness,
@@ -55,10 +56,12 @@ same shapes, same harness, full 10-active-expert M=1 decode:
 ## Why it wins — the occupancy fix, confirmed by profile
 
 rocprof, hand v3 (gate_up) vs in-tree:
-```
+
+```text
 in-tree : grid=20480  -> 80  workgroups, VGPR=108, dur=54 µs (rocprof) / 34 µs (graph)
 hand v3 : grid=81920  -> 320 workgroups, VGPR=76,  dur=39 µs (rocprof) / 21 µs (graph)
 ```
+
 Split-K does exactly what the diagnosis predicted: **80 → 320 workgroups** (fills
 the previously-idle ⅓ of CUs) and **VGPR 108 → 76** (room for more waves/CU),
 *while keeping MFMA*. The kernel is still ~8× above the HBM roofline (M=1 can't
@@ -114,6 +117,7 @@ time) remain the larger untouched pool, addressable only by fusion.
   produced the table above).
 
 ### The deeper lesson: isolated wins must clear the integration tax
+
 The 1.5× isolated-GEMM result was real, but an isolated microbench omits three
 real costs that erased it: the **workspace-zeroing launch** the atomic needs,
 the **unaffected sibling GEMM** (down-proj), and the **M≥2 regime** where the

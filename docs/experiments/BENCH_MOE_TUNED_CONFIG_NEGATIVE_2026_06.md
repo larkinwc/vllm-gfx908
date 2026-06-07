@@ -10,7 +10,7 @@ at the MoE kernel, not compute.
 
 Both MoE servers (fp16 35B and W4A16 512e) logged, every run:
 
-```
+```text
 WARNING fused_moe.py:1091 Using default MoE config. Performance might be
 sub-optimal! Config file not found at .../configs/
 E=512,N=128,device_name=AMD_Instinct_MI100,dtype=int4_w4a16.json
@@ -101,6 +101,7 @@ register-spills / occupancy-starves on our **Triton 3.5.1 / ROCm 7.12** stack.
    are Triton/ROCm-version-sensitive and must be re-validated per stack.
 
 ## Reproduction
+
 ```bash
 /root/fp16-bench/run_qmoe_config_ab.sh   # toggles the config file, default vs tuned
 # results: /root/fp16-bench/qmoe_config_ab/{default,tuned}_tp4_c{1,2,4}/raw.json

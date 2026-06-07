@@ -254,6 +254,7 @@ def get_tokenizer(
         model_type in _MODEL_TYPES_WITH_INCORRECT_TOKENIZER_CLASS
     )
     if use_tokenizers_backend_override:
+        assert model_type is not None
         concrete_qualname = _MODEL_TYPE_TO_TOKENIZER_CLASS_OVERRIDE.get(model_type)
         if concrete_qualname is not None:
             # Load the specific fast tokenizer class this model's processor
@@ -270,14 +271,19 @@ def get_tokenizer(
             # attributes (e.g., max_chars_per_token).
             try:
                 from transformers.tokenization_utils_tokenizers import (
-                    TokenizersBackend as _Tk,
+                    TokenizersBackend,
                 )
+
+                _Tk = TokenizersBackend
             except ImportError:
-                from transformers import PreTrainedTokenizerFast as _Tk
+                from transformers import PreTrainedTokenizerFast
+
+                _Tk = PreTrainedTokenizerFast
 
         logger.debug(
             "Overriding tokenizer_class to %s for model_type=%r",
-            _Tk.__name__, model_type,
+            _Tk.__name__,
+            model_type,
         )
         tokenizer_cls_ = _Tk
     elif tokenizer_cls == TokenizerLike:

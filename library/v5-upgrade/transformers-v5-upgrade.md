@@ -51,6 +51,7 @@ HSA_OVERRIDE_GFX_VERSION=9.0.8 VLLM_WORKER_MULTIPROC_METHOD=spawn
 PYTORCH_ROCM_ARCH=gfx908 ROCM_PATH=/opt/rocm/core-7.12`
 
 ### Serve smoke — all PASS on transformers 5.10.2
+
 | model | result |
 |---|---|
 | Llama-2-7b-hf | ✅ "...a city of contrasts. The city is home to the Eiffel Tower" |
@@ -62,6 +63,7 @@ confirmed working on v5: the concrete `Qwen2TokenizerFast` is loaded, cached,
 and passes `Qwen3VLProcessor`'s strict isinstance check.
 
 ### Benchmarks (Llama-2-7b, gfx908, single GPU)
+
 | bench | pre-v5 (4.57.3) | v5 (5.10.2) | note |
 |---|---|---|---|
 | throughput (in1024/out256, 100 prompts) | 1404.8 tok/s | **1538.3 tok/s** | +9.5%, no regression |

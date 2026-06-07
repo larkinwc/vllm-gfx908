@@ -12,12 +12,14 @@ The combined optimization configuration (FULL_DECODE_ONLY graph mode + prefix ca
 ## Excluded Optimizations
 
 ### MTP Speculative Decoding
+
 - **Status**: NOT RECOMMENDED on MI100
 - **Reason**: Incompatible with HIP graph mode on gfx908
 - **Impact**: When forced to eager mode, causes 25% regression
 - **Library Reference**: `.factory/library/mtp-results.md`
 
 ### TurboQuant KV Cache
+
 - **Status**: BLOCKED
 - **Reason**: vLLM v0.18.1 multi-process architecture incompatibility
 - **Library Reference**: `.factory/library/turboquant.md`
@@ -29,6 +31,7 @@ The combined optimization configuration (FULL_DECODE_ONLY graph mode + prefix ca
 ```
 
 Key parameters:
+
 - `--compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'`
 - `--enable-prefix-caching`
 - `--max-model-len 32768` (Qwen3.5-9B) or `4096` (Llama-2-7B)
@@ -47,6 +50,7 @@ Key parameters:
 ## Validation Contract Status
 
 All assertions PASS:
+
 - VAL-COMBO-001 through VAL-COMBO-006
 - VAL-CROSS-004, VAL-CROSS-005
 

@@ -14,11 +14,13 @@ TurboQuant hybrid decode mode successfully implemented and validated for Qwen3.5
 ## Validation Results
 
 ### VAL-HYB-001: 10 Coding Prompts Test
+
 - **Result:** PASS (8/10 prompts passed quality check)
 - **Details:** All 10 prompts produced coherent output. 8 responses contained at least 2 code-related keywords and reasonable length.
 - **Observation:** Model generates step-by-step reasoning followed by code implementation. Quality is acceptable for coding tasks.
 
 ### VAL-HYB-002: Needle-in-Haystack at 8k Context
+
 - **Result:** PASS
 - **Context:** ~8000 tokens (31995 chars)
 - **Needle:** "The secret project codename is TURBOQUANT-HYBRID-2026."
@@ -26,32 +28,35 @@ TurboQuant hybrid decode mode successfully implemented and validated for Qwen3.5
 - **Observation:** Hybrid mode successfully handles long context retrieval.
 
 ### VAL-HYB-003: Compressed KV Reads During Decode
+
 - **Result:** PASS
-- **Evidence:** 
-  - 56 TQ-related log lines found
-  - TQ backend auto-registered as TRITON_ATTN override in all worker processes
-  - Requests working correctly in hybrid mode
+- **Evidence:**
+    - 56 TQ-related log lines found
+    - TQ backend auto-registered as TRITON_ATTN override in all worker processes
+    - Requests working correctly in hybrid mode
 - **Observation:** TQ layer initialization appears in logs. The mere fact requests succeed in hybrid mode confirms TQ backend is active.
 
 ### VAL-HYB-004: Concurrent Request Isolation
+
 - **Result:** PASS (4/4 requests isolated)
 - **Test:** 4 concurrent requests with different programming language prompts
 - **Results:**
-  - Python prompt: contained "python"
-  - JavaScript prompt: contained "javascript"
-  - Rust prompt: contained "rust"
-  - Go prompt: contained "go"
+    - Python prompt: contained "python"
+    - JavaScript prompt: contained "javascript"
+    - Rust prompt: contained "rust"
+    - Go prompt: contained "go"
 - **Observation:** Each response correctly references its own topic, no cross-contamination between concurrent requests.
 
 ### VAL-HYB-005: KV Cache Memory Reduction
+
 - **Result:** PASS
 - **TQ Hybrid VRAM:** 113.07 GiB total across 4 GPUs
 - **Baseline VRAM:** ~120 GiB (estimated from previous mission)
 - **Reduction:** 5.8%
 - **Observation:** Memory reduction observed on full-attention layers. Expected ~15-20% theoretical max, but practical reduction is limited by:
-  - TQ only affects 8/32 layers (25% of attention)
-  - Ring buffer overhead
-  - GPU memory utilization set to 0.85 for TQ (vs 0.93 for baseline)
+    - TQ only affects 8/32 layers (25% of attention)
+    - Ring buffer overhead
+    - GPU memory utilization set to 0.85 for TQ (vs 0.93 for baseline)
 
 ## Technical Implementation
 
