@@ -112,7 +112,9 @@ apply_patch() {
     echo "    patched already: $(basename "${target}")"
     return 0
   fi
-  ( cd "${root}" && patch -p1 --forward < "${patch}" )
+  # Keep a *.gfx908orig backup of each patched file so the in-place edits to
+  # the installed AITER tree can be reverted.
+  ( cd "${root}" && patch -p1 --forward --backup --suffix=.gfx908orig < "${patch}" )
   echo "    applied: $(basename "${patch}")"
 }
 AITER_PKG_DIR="$(dirname "${AITER_JIT}")"           # .../site-packages/aiter
@@ -142,10 +144,14 @@ INCLUDE_FP8_GEMM="${INCLUDE_FP8_GEMM:-0}"
 INCLUDE_MHA="${INCLUDE_MHA:-0}"
 
 echo "==> AOT-building AITER modules for ${GFX_ARCH} (no runtime JIT at serve)"
+# Machine-readable build-status artifact; defaults next to this script.
+AITER_BUILD_STATUS="${AITER_BUILD_STATUS:-${SCRIPT_DIR}/build-status.json}"
+
 echo "    PER_MODULE_TIMEOUT=${PER_MODULE_TIMEOUT}s  INCLUDE_FP8_GEMM=${INCLUDE_FP8_GEMM}  INCLUDE_MHA=${INCLUDE_MHA}"
+echo "    AITER_BUILD_STATUS=${AITER_BUILD_STATUS}"
 MODULES="${MODULES:-}" FORCE_REBUILD="${FORCE_REBUILD}" \
 PER_MODULE_TIMEOUT="${PER_MODULE_TIMEOUT}" INCLUDE_FP8_GEMM="${INCLUDE_FP8_GEMM}" \
-INCLUDE_MHA="${INCLUDE_MHA}" \
+INCLUDE_MHA="${INCLUDE_MHA}" AITER_BUILD_STATUS="${AITER_BUILD_STATUS}" \
 PYBIN="${PYBIN}" "${PYBIN}" - <<'PY'
 import json, os, signal, subprocess, sys, tempfile, time
 # Run from a scratch dir: aiter/hipcc capability probes drop stray "-.o"
@@ -283,13 +289,15 @@ print(
     f"\n    {len(ok)} ok, {len(bad)} failed, {len(to)} timeout, "
     f"{len(na)} n/a, of {len(results)} attempted"
 )
-# Persist machine-readable status next to this script.
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else ".", "")
-status_path = os.environ.get("AITER_BUILD_STATUS")
-if status_path:
-    with open(status_path, "w") as f:
-        json.dump([{"module": m, "status": s, "secs": round(d, 1)} for m, s, d in results], f, indent=2)
-    print(f"    wrote status -> {status_path}")
+# Persist machine-readable status (path always set by the caller above).
+status_path = os.environ["AITER_BUILD_STATUS"]
+with open(status_path, "w") as f:
+    json.dump(
+        [{"module": m, "status": s, "secs": round(d, 1)} for m, s, d in results],
+        f,
+        indent=2,
+    )
+print(f"    wrote status -> {status_path}")
 # Non-zero exit only on hard build failures (TIMEOUT/n/a are expected on
 # gfx908 for the FP8 GEMM family and asm-only modules).
 sys.exit(1 if bad else 0)
