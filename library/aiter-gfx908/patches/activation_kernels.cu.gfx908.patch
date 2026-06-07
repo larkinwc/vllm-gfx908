@@ -1,0 +1,33 @@
+--- a/csrc/kernels/activation_kernels.cu
++++ b/csrc/kernels/activation_kernels.cu
+@@ -147,7 +147,13 @@
+                 ck_tile::fp32x2_t a = {ax0, ax1};
+                 ck_tile::fp32x2_t b = {y0, y1};
+                 ck_tile::fp32x2_t c;
++#if defined(__gfx908__)
++                // gfx908 (CDNA1) lacks packed v_pk_mul_f32; scalar fallback.
++                c.x = a.x * b.x;
++                c.y = a.y * b.y;
++#else
+                 asm volatile("v_pk_mul_f32 %0, %1, %2" : "=v"(c) : "v"(a), "v"(b));
++#endif
+                 r[j]     = ck_tile::type_convert<DTYPE_O>(c.x);
+                 r[j + 1] = ck_tile::type_convert<DTYPE_O>(c.y);
+             }
+@@ -214,10 +220,16 @@
+                 float2 scale_vals = {scale, scale};
+                 float2 result;
+ 
++#if defined(__gfx908__)
++                // gfx908 (CDNA1) lacks packed v_pk_mul_f32; scalar fallback.
++                result.x = act_vals.x * y_vals.x * scale_vals.x;
++                result.y = act_vals.y * y_vals.y * scale_vals.y;
++#else
+                 asm volatile("v_pk_mul_f32 %0, %1, %2\n\t"
+                              "v_pk_mul_f32 %0, %0, %3"
+                              : "=v"(result)
+                              : "v"(act_vals), "v"(y_vals), "v"(scale_vals));
++#endif
+ 
+                 out[token_idx * d + idx + j]     = ck_tile::type_convert<DTYPE_O>(result.x);
+                 out[token_idx * d + idx + j + 1] = ck_tile::type_convert<DTYPE_O>(result.y);

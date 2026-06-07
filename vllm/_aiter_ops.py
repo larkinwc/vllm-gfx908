@@ -90,9 +90,15 @@ def is_aiter_found_and_supported() -> bool:
     VLLM_ROCM_USE_AITER=0, while preventing unwanted JIT warnings for auto-discovery.
     """
     if current_platform.is_rocm() and IS_AITER_FOUND:
-        from vllm.platforms.rocm import on_mi3xx
+        from vllm.platforms.rocm import on_gfx9
 
-        return on_mi3xx()
+        # AITER is usable on the full gfx9 line (CDNA1+), not just MI3xx.
+        # On MI100 (gfx908 / CDNA1) the supported AITER surface is built
+        # gfx908-correct via library/aiter-gfx908/build-aiter-gfx908.sh
+        # (vllm-gfx908 issue #75). Sub-paths that have no gfx908 kernel
+        # (e.g. FP8 a8w8 GEMM, custom all-reduce) remain individually gated
+        # by their own VLLM_ROCM_USE_AITER_* sub-flags / platform checks.
+        return on_gfx9()
     return False
 
 

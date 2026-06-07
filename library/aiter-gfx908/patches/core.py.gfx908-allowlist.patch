@@ -1,0 +1,10 @@
+--- a/aiter/jit/core.py
++++ b/aiter/jit/core.py
+@@ -362,6 +362,7 @@
+     # List of allowed architectures
+     allowed_archs = [
+         "native",
++        "gfx908",  # MI100 / CDNA1 (vllm-gfx908 issue #75)
+         "gfx90a",
+         "gfx940",
+         "gfx941",

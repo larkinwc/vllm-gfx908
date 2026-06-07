@@ -511,6 +511,122 @@ python3 -c "import flash_attn; print(flash_attn.__version__)"
 # Should print version without "falling back to Triton" warning
 ```
 
+## AMD AITER on MI100 (gfx908, Optional)
+
+Upstream AITER targets CDNA2/CDNA3 (MI2xx/MI3xx). On MI100 (gfx908 / CDNA1)
+two problems block a clean build (see issue #74):
+
+1. **Missing CK headers** — AITER's bundled tree ships without the Composable
+   Kernel submodule, so JIT builds fail with `rmsnorm2d_fwd.hpp: file not found`.
+2. **CDNA2+-only ISA** — several kernels emit inline asm / builtins that do not
+   exist on gfx908: `v_pk_mul_f32` (gfx90a+), `v_cvt_pk_fp8/bf8_f32` and
+   `__builtin_amdgcn_cvt_f32_fp8` (gfx942+ FP8), and `row_newbroadcast/row_share`
+   DPP (gfx90a+).
+
+The `library/aiter-gfx908/` artifacts make the buildable surface compile and
+run gfx908-correctly:
+
+```bash
+# Vendors CK@b0c13f31, applies gfx908 ISA-fallback patches, then AOT-builds
+# every buildable module so there is NO runtime JIT during serving.
+library/aiter-gfx908/build-aiter-gfx908.sh
+```
+
+What the script does:
+
+- Vendors Composable Kernel (pin `b0c13f31`) into
+  `aiter_meta/3rdparty/composable_kernel` (fixes problem 1).
+- Applies `patches/*.gfx908.patch`: scalar fallbacks under `#if defined(__gfx908__)`
+  for `vec_convert.h`, `rmsnorm_quant_kernels.cu`, `activation_kernels.cu`, plus
+  an allowlist patch adding `gfx908` to AITER's `core.py` (fixes problem 2).
+- AOT-builds each module in an isolated subprocess with `PER_MODULE_TIMEOUT`
+  (default 600s), skipping the FP8 a8w8 GEMM family and the CK MHA/FMHA family
+  (opt in with `INCLUDE_FP8_GEMM=1` / `INCLUDE_MHA=1`).
+- Writes a per-module result table to `library/aiter-gfx908/build-status.json`.
+
+### Supported AITER surface on gfx908
+
+Result of `build-aiter-gfx908.sh` on this MI100 (43 of 50 attempted modules
+build; FP8 a8w8 GEMM and CK MHA/FMHA excluded by default):
+
+| Module(s) | Status | Notes |
+|---|---|---|
+| `module_rmsnorm`, `module_rmsnorm_quant` | ✅ built | rmsnorm_quant uses patched gfx908 fallback; numerically correct (scale err ~1.5e-8, int8 within ±1) |
+| `module_activation`, `module_norm`, `module_smoothquant`, `module_quant` | ✅ built | |
+| `module_pa*`, `module_attention*`, `module_mla_asm`, `module_cache` | ✅ built | paged-attention / KV cache helpers |
+| `module_gemm_a16w16_asm`, `module_gemm_a8w8_asm`, `module_gemm_a8w8_blockscale*_asm`, `batched_gemm*` | ✅ built | asm GEMM path |
+| `module_moe_sorting*`, `module_moe_topk`, `module_moe_cktile2stages` | ✅ built | MoE helpers (but the main `module_moe_ck2stages` GEMM stage does not build — see below) |
+| `module_rope_*`, `module_pos_encoding`, `module_fused_qk_norm_mrope_*` | ✅ built | |
+| `module_quant`, `module_sample`, `module_topk_plain`, `module_top_k_per_row`, `module_groupnorm`, `module_causal_conv1d_update`, `module_mla_metadata` | ✅ built | |
+| `module_rocsolgemm`, `module_hipbsolgemm`, `module_mhc`, `module_aiter_unary` | ✅ built | |
+| `module_custom_all_reduce`, `module_quick_all_reduce` | ❌ FAIL | need `fp8-conversion-insts` (no FP8 on gfx908). vLLM uses its own custom-AR path on MI100. |
+| `module_fused_qk_norm_rope_cache_quant_shuffle` | ❌ FAIL | FP8 cache quant builtin (`cvt_f32_fp8`) absent on gfx908 |
+| `module_moe_asm` | ❌ FAIL | `row_newbroadcast/row_share` DPP requires gfx90a+ |
+| `module_moe_ck2stages`, `module_aiter_operator`, `module_mla_reduce` | ⏱ timeout | pathological CK compile on CDNA1 (does not finish even at 1800s) |
+| FP8/int8 a8w8 GEMM (`module_gemm_a8w8`, `module_deepgemm`) | ⏭ skipped / unbuildable | the `a8w8_rowwise_*_intrawave_*` CK instances each take 20+ min to compile on CDNA1; a full build does not complete in hours. `INCLUDE_FP8_GEMM=1` to attempt. |
+| CK MHA/FMHA (`module_mha_*`, `module_fmha_v3_*`, `libmha_*`) | ⏭ skipped | huge CK kernels, time out; MI100 serves attention via CK-FA/Triton. `INCLUDE_MHA=1` to attempt |
+
+### Enabling AITER at serve time
+
+The dispatch gate in `vllm/_aiter_ops.py` (`is_aiter_found_and_supported()`)
+returns `on_gfx9()`, so AITER is *available* on gfx908, but it is **opt-in** via
+`VLLM_ROCM_USE_AITER=1`. After running the build script (so the prebuilt `.so`
+files exist and no runtime JIT is needed), serve with:
+
+```bash
+export PYTORCH_ROCM_ARCH=gfx908
+export HSA_OVERRIDE_GFX_VERSION=9.0.8
+export GPU_ARCHS=gfx908
+export ROCM_PATH=/opt/rocm/core-7.12
+export VLLM_ROCM_USE_AITER=1            # opt in; rmsnorm is on by default once enabled
+# REQUIRED on gfx908 for quantized (w8a8 int8) models: the AITER GEMM path
+# JIT-builds module_gemm_a8w8, which does NOT compile on CDNA1 (see below) and
+# will hang engine startup. Route GEMM to the native path instead:
+export VLLM_ROCM_USE_AITER_LINEAR=0
+# Likewise, AITER MoE needs module_moe_ck2stages / module_moe_asm, neither of
+# which builds on gfx908 — leave AITER MoE off:
+export VLLM_ROCM_USE_AITER_MOE=0
+```
+
+Startup loads `module_rmsnorm.so` / `module_rmsnorm_quant.so` from the prebuilt
+cache with **no runtime JIT** — this is the acceptance criterion for issue #74.
+
+### Performance — AITER is NOT faster on gfx908 (measured)
+
+A/B measured on this MI100 (`enforce_eager`, greedy, MI100):
+
+| Model / config | `USE_AITER=0` | `USE_AITER=1` | Δ |
+|---|---|---|---|
+| Qwen3-0.6B fp16, batch=1 decode | 345 tok/s | 291 tok/s | **−15%** |
+| Qwen3-0.6B fp16, batch=32 | 1454 tok/s | 1079 tok/s | **−26%** |
+| Qwen3-0.6B fp16, batch=64 | 2826 tok/s | 2361 tok/s | **−16%** |
+| Llama-2-7B w8a8 int8, batch=1 (AITER norm only, `LINEAR=0`) | 34.0 tok/s | 32.0 tok/s | **−6%** |
+
+AITER's rmsnorm/quant kernels are tuned for CDNA2/CDNA3; on CDNA1 the native
+vLLM/Triton kernels win in every case measured. **Keep `VLLM_ROCM_USE_AITER=0`
+for production on MI100.**
+
+### Why AITER's quantized/MoE GEMM paths cannot be used on gfx908
+
+The cases AITER is *designed* to accelerate — int8/fp8 w8a8 GEMM and MoE — are
+not viable on CDNA1, and the failure is at **build/startup**, not just perf:
+
+- **w8a8 (`VLLM_ROCM_USE_AITER_LINEAR=1`)**: the engine JIT-builds
+  `module_gemm_a8w8` at startup. Its `a8w8_rowwise_*_intrawave_*` Composable
+  Kernel template instances each take 20+ minutes to compile on the gfx908
+  toolchain; a full build did not complete in hours. Result: **engine hangs at
+  init.** Must run with `VLLM_ROCM_USE_AITER_LINEAR=0`.
+- **MoE (`VLLM_ROCM_USE_AITER_MOE=1`)**: `aiter.fused_moe` needs
+  `module_moe_ck2stages` (same pathological CK compile / timeout) or
+  `module_moe_asm` (fails — `row_share` DPP is gfx90a+). Result: **hang or
+  build error.** Must run with `VLLM_ROCM_USE_AITER_MOE=0`.
+
+So the only AITER surface that both builds *and* runs on gfx908 is the
+norm/activation/rope family — and that is slower than native. The value of this
+work (issue #75) is a *clean, correct, honestly-characterized* build: it removes
+the #74 build wall, documents exactly what does/doesn't work, and lets AITER be
+enabled for compatibility/debugging — it is **not** a speedup on MI100.
+
 ## Optimizations Tested and NOT Recommended
 
 | Optimization | Result | Reason |
@@ -522,6 +638,7 @@ python3 -c "import flash_attn; print(flash_attn.__version__)"
 | NCCL_PROTO=Simple | -13% | LL (low latency) protocol already best for small messages |
 | MTP speculative decoding | -25% to -45% | Incompatible with HIP graph mode |
 | TurboQuant KV compression | -6% to -49% | Not worth it for Qwen3.5 (only 8/32 full attention layers) |
+| AMD AITER (`VLLM_ROCM_USE_AITER=1`) | -6% to -26% | rmsnorm/quant kernels tuned for CDNA2/3; native Triton wins on CDNA1 across fp16 and w8a8, batch 1-64. The int8/MoE GEMM paths don't even build on gfx908 (hang at startup). Build is clean (issue #75) but keep disabled for production. See "AMD AITER on MI100" above. |
 
 ## Known Working Package Versions
 
