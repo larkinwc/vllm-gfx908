@@ -125,8 +125,7 @@ touching the GEMM tiles — and only if a quick prototype clears a few % net.
 ## References in-repo
 
 - `PERF_GFX908.md` — hardware model, the loop, the decode triage (§6).
-- `BENCH_MOE_HANDKERNEL_GEMV_2026_06.md` — the GEMM split-K story (microbench win
-    - integration reality).
+- `BENCH_MOE_HANDKERNEL_GEMV_2026_06.md` — the GEMM split-K story (microbench win + integration reality).
 - `bench_scripts/moe_int4_gemv_bench.py`, `bench_scripts/decode_profile.py` —
   microbench + whole-model profiler templates.
 

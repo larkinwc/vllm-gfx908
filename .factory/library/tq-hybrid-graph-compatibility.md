@@ -73,7 +73,7 @@ Total: **10/10 requests succeeded, 10/10 coherent**
 
 ## Why Graph Capture Works
 
-The key fix from previous features ensured TQ state is initialized **eagerly in **init****, not lazily during forward pass:
+The key fix from previous features ensured TQ state is initialized **eagerly in `__init__`**, not lazily during forward pass:
 
 1. **Eager initialization**: CompressedKVStore and KVCaptureEngine are created during backend construction, before any graph warmup
 2. **Static tensor shapes**: All TQ tensors have pre-determined shapes, compatible with graph capture

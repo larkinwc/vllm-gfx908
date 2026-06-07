@@ -106,11 +106,12 @@ def main(argv: list[str]) -> int:
         if wins == 0 or present == 0:
             print(
                 f"  {path:11s}: never selected as winner — no default-claim possible."
-            )  # noqa: E501
+            )
             continue
         if lost == 0:
             print(
-                f"  {path:11s}: wins every measured cell — eligible to be unconditional default."  # noqa: E501
+                f"  {path:11s}: wins every measured cell — "
+                "eligible to be unconditional default."
             )
             continue
         gates = GATES.get(path, [])

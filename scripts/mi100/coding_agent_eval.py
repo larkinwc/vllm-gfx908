@@ -14,7 +14,7 @@ loading itself -- run it against an ALREADY-RUNNING vLLM OpenAI server (for the
 M0 reference: legacy W4A16, marlin OFF).
 
 Interpreter: /opt/vllm-env/bin/python3 (NOT uv/.venv).
-Dependencies: Python stdlib only.
+Dependencies: Python stdlib + regex.
 
 Prompt set / scoring
 --------------------

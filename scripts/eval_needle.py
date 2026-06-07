@@ -91,7 +91,7 @@ def insert_at_depth(haystack: str, needle_phrase: str, depth_pct: int) -> str:
 
 def chat(
     system: str, user: str, model: str, max_tokens: int = 768, timeout: float = 900.0
-) -> str:  # noqa: E501
+) -> str:
     body = json.dumps(
         {
             "model": model,
@@ -160,7 +160,8 @@ def main() -> int:
                 }
             )
             print(
-                f"  [{i + 1}/{needle_count}] {needle['key']} depth={depth}% — FAIL ({exc})"  # noqa: E501
+                f"  [{i + 1}/{needle_count}] {needle['key']} "
+                f"depth={depth}% — FAIL ({exc})"
             )
             continue
         ok = needle["value"].lower() in response.lower()
@@ -175,7 +176,8 @@ def main() -> int:
         )
         passes += int(ok)
         print(
-            f"  [{i + 1}/{needle_count}] {needle['key']} depth={depth}% — {'PASS' if ok else 'FAIL'}"  # noqa: E501
+            f"  [{i + 1}/{needle_count}] {needle['key']} "
+            f"depth={depth}% — {'PASS' if ok else 'FAIL'}"
         )
     elapsed = time.time() - t0
 
@@ -196,7 +198,8 @@ def main() -> int:
     )
 
     print(
-        f"\nNeedle@{args.ctx}: {passes}/{needle_count} (gate {'PASS' if passes == needle_count else 'FAIL'})"  # noqa: E501
+        f"\nNeedle@{args.ctx}: {passes}/{needle_count} "
+        f"(gate {'PASS' if passes == needle_count else 'FAIL'})"
     )
     print(f"Wrote {args.out}")
     return 0 if passes == needle_count else 1

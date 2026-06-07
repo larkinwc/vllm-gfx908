@@ -9,7 +9,7 @@ TurboQuant KV cache compression is integrated into vLLM as a custom attention ba
 ### TurboQuant Backend (`/opt/turboquant/turboquant/backends/vllm_rocm.py`)
 
 - **TurboQuantTritonBackend** (alias: TurboQuantRocmBackend): Extends `TritonAttentionBackend`. Registered as TRITON_ATTN override. Provides `TurboQuantTritonImpl` as the implementation class.
-- **TurboQuantTritonImpl** (alias: TurboQuantRocmImpl): Extends `TritonAttentionImpl`. Each instance owns per-layer TQ state (CompressedKVStore, KVCaptureEngine) **initialized eagerly in **init**** (required for HIP graph compatibility). Overrides `do_kv_cache_update()` to capture KV into compressed store, and `forward()` to optionally use TQ hybrid decode.
+- **TurboQuantTritonImpl** (alias: TurboQuantRocmImpl): Extends `TritonAttentionImpl`. Each instance owns per-layer TQ state (CompressedKVStore, KVCaptureEngine) **initialized eagerly in `__init__`** (required for HIP graph compatibility). Overrides `do_kv_cache_update()` to capture KV into compressed store, and `forward()` to optionally use TQ hybrid decode.
 
 ### Per-Layer State (lives in worker process)
 

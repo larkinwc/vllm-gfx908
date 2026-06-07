@@ -27,9 +27,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-ROOT = Path(
-    "/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/loose-rats-clean-phm2k"  # noqa: E501
-)
+ROOT = Path(__file__).resolve().parents[2]
 BASE = ROOT / "library" / "bench-baseline"
 POST = ROOT / "library" / "bench-post-sync"
 DELT = ROOT / "library" / "bench-delta"
