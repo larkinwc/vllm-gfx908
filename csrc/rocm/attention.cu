@@ -31,8 +31,8 @@ using __hip_fp8_e4m3 = __hip_fp8_e4m3_fnuz;
 using __hip_fp8_e5m2 = __hip_fp8_e5m2_fnuz;
 #endif
 
-#if defined(__HIPCC__) && \
-    (defined(__gfx908__) || defined(__gfx90a__) || defined(__gfx942__) || defined(__gfx950__))
+#if defined(__HIPCC__) && (defined(__gfx908__) || defined(__gfx90a__) || \
+                           defined(__gfx942__) || defined(__gfx950__))
   #define __HIP__GFX9__
 #endif
 
@@ -98,22 +98,23 @@ __device__ __forceinline__ floatx4 gcn_mfma4x4x4_instr(const _B16x4& inpA,
     return __builtin_amdgcn_mfma_f32_4x4x4f16(inpA, inpB, inpC, absz, cbid,
                                               blgp);
   } else if constexpr (std::is_same<T, __hip_bfloat16>::value) {
-#if defined(__gfx908__)
+  #if defined(__gfx908__)
     // gfx908 (CDNA1) lacks bf16_1k MFMA. Cast BF16 inputs to FP16 via
     // float intermediate, then use the FP16 MFMA available on all CDNA.
     _B16x4 a16, b16;
     for (int i = 0; i < 4; i++) {
-      float fa = __bfloat162float(reinterpret_cast<const __hip_bfloat16*>(&inpA)[i]);
-      float fb = __bfloat162float(reinterpret_cast<const __hip_bfloat16*>(&inpB)[i]);
+      float fa =
+          __bfloat162float(reinterpret_cast<const __hip_bfloat16*>(&inpA)[i]);
+      float fb =
+          __bfloat162float(reinterpret_cast<const __hip_bfloat16*>(&inpB)[i]);
       reinterpret_cast<_Float16*>(&a16)[i] = static_cast<_Float16>(fa);
       reinterpret_cast<_Float16*>(&b16)[i] = static_cast<_Float16>(fb);
     }
-    return __builtin_amdgcn_mfma_f32_4x4x4f16(a16, b16, inpC, absz, cbid,
-                                              blgp);
-#else
+    return __builtin_amdgcn_mfma_f32_4x4x4f16(a16, b16, inpC, absz, cbid, blgp);
+  #else
     return __builtin_amdgcn_mfma_f32_4x4x4bf16_1k(inpA, inpB, inpC, absz, cbid,
                                                   blgp);
-#endif
+  #endif
   } else {
     static_assert(false, "unsupported 16b dtype");
   }
@@ -127,22 +128,24 @@ __device__ __forceinline__ floatx4 gcn_mfma16x16x16_instr(const _B16x4& inpA,
     return __builtin_amdgcn_mfma_f32_16x16x16f16(inpA, inpB, inpC, absz, cbid,
                                                  blgp);
   } else if constexpr (std::is_same<T, __hip_bfloat16>::value) {
-#if defined(__gfx908__)
+  #if defined(__gfx908__)
     // gfx908 (CDNA1) lacks bf16_1k MFMA. Cast BF16 inputs to FP16 via
     // float intermediate, then use the FP16 MFMA available on all CDNA.
     _B16x4 a16, b16;
     for (int i = 0; i < 4; i++) {
-      float fa = __bfloat162float(reinterpret_cast<const __hip_bfloat16*>(&inpA)[i]);
-      float fb = __bfloat162float(reinterpret_cast<const __hip_bfloat16*>(&inpB)[i]);
+      float fa =
+          __bfloat162float(reinterpret_cast<const __hip_bfloat16*>(&inpA)[i]);
+      float fb =
+          __bfloat162float(reinterpret_cast<const __hip_bfloat16*>(&inpB)[i]);
       reinterpret_cast<_Float16*>(&a16)[i] = static_cast<_Float16>(fa);
       reinterpret_cast<_Float16*>(&b16)[i] = static_cast<_Float16>(fb);
     }
     return __builtin_amdgcn_mfma_f32_16x16x16f16(a16, b16, inpC, absz, cbid,
                                                  blgp);
-#else
+  #else
     return __builtin_amdgcn_mfma_f32_16x16x16bf16_1k(inpA, inpB, inpC, absz,
                                                      cbid, blgp);
-#endif
+  #endif
   } else {
     static_assert(false, "unsupported 16b dtype");
   }

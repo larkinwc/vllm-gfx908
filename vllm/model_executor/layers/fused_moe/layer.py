@@ -1078,7 +1078,7 @@ class FusedMoE(PluggableLayer):
             # Block-alignment check: if we're splitting the packed-byte
             # inner dim of a GGUF k-quant / i-quant tensor, the per-rank
             # byte count MUST be an integer multiple of the GGUF block's
-            # type_size. Otherwise the dequant kernel reads mis-aligned
+            # type_size. Otherwise the dequant kernel reads misaligned
             # blocks and produces NaN (silent corruption observed with
             # MiniMax-M2 IQ3_XXS at TP=4: intermediate_size=1536 with
             # QK_K=256 gives 1536/256 = 6 blocks per expert row; TP=4

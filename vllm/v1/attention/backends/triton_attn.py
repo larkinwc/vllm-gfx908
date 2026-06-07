@@ -52,9 +52,11 @@ logger = init_logger(__name__)
 def _get_mi100_tuned_constants():
     if current_platform.is_rocm():
         from vllm.platforms.rocm import on_mi100
+
         if on_mi100():
             return 64, 8
     return 128, 16
+
 
 MIN_LAUNCH_GRID_SIZE_2D, NUM_PAR_SOFTMAX_SEGMENTS = _get_mi100_tuned_constants()
 
@@ -128,7 +130,6 @@ def _compute_flash_decoding_splits(
             return split_count
 
     return FLASH_DECODING_SPLIT_COUNTS[-1]
-
 
 
 @dataclass
@@ -274,14 +275,12 @@ class TritonAttentionMetadataBuilder(AttentionMetadataBuilder[TritonAttentionMet
             device=device,
         )
         self.softmax_segm_max = torch.empty(
-            (self.seq_threshold_3D, self.num_heads_q,
-             self.max_flash_decoding_splits),
+            (self.seq_threshold_3D, self.num_heads_q, self.max_flash_decoding_splits),
             dtype=torch.float32,
             device=device,
         )
         self.softmax_segm_expsum = torch.empty(
-            (self.seq_threshold_3D, self.num_heads_q,
-             self.max_flash_decoding_splits),
+            (self.seq_threshold_3D, self.num_heads_q, self.max_flash_decoding_splits),
             dtype=torch.float32,
             device=device,
         )

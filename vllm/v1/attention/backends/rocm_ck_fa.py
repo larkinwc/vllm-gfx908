@@ -113,7 +113,12 @@ class RocmCKFlashAttentionBackend(AttentionBackend):
         return (num_blocks, 2, block_size, num_kv_heads, head_size)
 
     @staticmethod
-    def get_kv_cache_stride_order() -> tuple[int, ...]:
+    def get_kv_cache_stride_order(
+        include_num_layers_dimension: bool = False,
+    ) -> tuple[int, ...]:
+        if include_num_layers_dimension:
+            # (num_blocks, num_layers, 2, block_size, num_kv_heads, head_size)
+            return (1, 0, 2, 3, 4, 5)
         return (0, 1, 2, 3, 4)
 
     @staticmethod
@@ -190,9 +195,13 @@ class RocmCKFlashAttentionImpl(AttentionImpl):
             if alibi_slopes is not None
             else None
         )
-        self.sliding_window = (-1, -1) if sliding_window is None else (
-            sliding_window - 1,
-            0,
+        self.sliding_window = (
+            (-1, -1)
+            if sliding_window is None
+            else (
+                sliding_window - 1,
+                0,
+            )
         )
         self.kv_cache_dtype = kv_cache_dtype
         self.logits_soft_cap = logits_soft_cap or 0.0

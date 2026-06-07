@@ -774,7 +774,7 @@ def main() -> int:
         torch.accelerator.set_device_index(device.index)
 
     gpu_name = (
-        torch.cuda.get_device_name(device)  # noqa: TID — informational only
+        torch.cuda.get_device_name(device)  # informational only
         if hasattr(torch.cuda, "get_device_name")
         else "unknown"
     )

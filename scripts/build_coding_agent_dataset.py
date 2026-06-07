@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 Build /root/bench-int8-w4a16/datasets/coding_agent.jsonl.
 
@@ -20,6 +21,7 @@ Qwen3.5 tokenizer (close enough for the +/-20 % tolerance the
 contract allows). The resulting JSONL is consumed by
 `vllm bench serve --dataset-name custom`.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -129,7 +131,7 @@ CODING_PROMPTS: list[dict] = [
         ),
         "context": (
             "def login(username, password):\n"
-            "    query = f\"SELECT * FROM users WHERE"
+            '    query = f"SELECT * FROM users WHERE'
             " username='{username}' AND password='{password}'\"\n"
             "    result = db.execute(query)\n"
             "    return result.fetchone()"
@@ -238,8 +240,9 @@ def _pad_context(base_context: str, target_tokens: int) -> str:
         "\n\n# additional related code (for context)\n"
         + base_context
         + "\n\n# additional related logs\n"
-        + "\n".join(f"[INFO] step {i}: validated input dict and output schema"
-                    for i in range(5))
+        + "\n".join(
+            f"[INFO] step {i}: validated input dict and output schema" for i in range(5)
+        )
         + "\n"
     )
     out = base_context
@@ -310,11 +313,11 @@ def main() -> int:
     print(f"wrote {len(items)} prompts to {args.out}")
     print(
         f"  input tokens (approx): min={in_lens[0]}, "
-        f"p50={in_lens[len(in_lens)//2]}, max={in_lens[-1]}"
+        f"p50={in_lens[len(in_lens) // 2]}, max={in_lens[-1]}"
     )
     print(
         f"  output tokens         : min={out_lens[0]}, "
-        f"p50={out_lens[len(out_lens)//2]}, max={out_lens[-1]}"
+        f"p50={out_lens[len(out_lens) // 2]}, max={out_lens[-1]}"
     )
     return 0
 

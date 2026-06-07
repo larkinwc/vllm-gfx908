@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 M0 Needle-in-a-Haystack at 8k context (VAL-M0-005).
 
@@ -15,6 +17,7 @@ Usage:
         --depths 10,30,50,70,90 \
         --out /root/bench-int8-w4a16/baseline/niah_w8a8.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -56,9 +59,7 @@ NEEDLES = [
     {
         "key": "Coral fish species",
         "value": "1582",
-        "phrase": (
-            "Exactly 1582 coral fish species were catalogued in the registry."
-        ),
+        "phrase": ("Exactly 1582 coral fish species were catalogued in the registry."),
     },
     {
         "key": "Captain's birthday",
@@ -81,8 +82,14 @@ def insert_at_depth(haystack: str, needle_phrase: str, depth_pct: int) -> str:
     return haystack[:pos] + " " + needle_phrase + " " + haystack[pos:]
 
 
-def chat_complete(base_url: str, model: str, system: str, user: str,
-                  max_tokens: int = 768, timeout: int = 300) -> str:
+def chat_complete(
+    base_url: str,
+    model: str,
+    system: str,
+    user: str,
+    max_tokens: int = 768,
+    timeout: int = 300,
+) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
     payload = {
         "model": model,
@@ -103,9 +110,13 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-url", default="http://127.0.0.1:8000/v1")
     ap.add_argument("--model", required=True)
-    ap.add_argument("--ctx", type=int, default=8192,
-                    help="Approximate target context tokens. We size the "
-                         "haystack body so total prompt fits inside.")
+    ap.add_argument(
+        "--ctx",
+        type=int,
+        default=8192,
+        help="Approximate target context tokens. We size the "
+        "haystack body so total prompt fits inside.",
+    )
     ap.add_argument("--depths", default="10,30,50,70,90")
     ap.add_argument("--out", required=True)
     ap.add_argument("--label", default="")
@@ -136,24 +147,34 @@ def main() -> int:
             f"in the passage? Answer with the exact value as written."
         )
         try:
-            ans = chat_complete(args.base_url, args.model, system, question,
-                                max_tokens=768)
+            ans = chat_complete(
+                args.base_url, args.model, system, question, max_tokens=768
+            )
         except Exception as e:
-            results.append({
-                "needle": needle["key"], "depth_pct": depth,
-                "ok": False, "error": f"{type(e).__name__}: {e}",
-                "elapsed_s": round(time.time() - t0, 2),
-            })
+            results.append(
+                {
+                    "needle": needle["key"],
+                    "depth_pct": depth,
+                    "ok": False,
+                    "error": f"{type(e).__name__}: {e}",
+                    "elapsed_s": round(time.time() - t0, 2),
+                }
+            )
             continue
         ok = needle["value"] in ans
         if ok:
             passes += 1
-        results.append({
-            "needle": needle["key"], "depth_pct": depth,
-            "expected": needle["value"], "answer": ans[:1000],
-            "answer_len": len(ans),
-            "ok": ok, "elapsed_s": round(time.time() - t0, 2),
-        })
+        results.append(
+            {
+                "needle": needle["key"],
+                "depth_pct": depth,
+                "expected": needle["value"],
+                "answer": ans[:1000],
+                "answer_len": len(ans),
+                "ok": ok,
+                "elapsed_s": round(time.time() - t0, 2),
+            }
+        )
 
     summary = {
         "label": args.label,
@@ -168,8 +189,10 @@ def main() -> int:
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     with open(args.out, "w") as f:
         json.dump(summary, f, indent=2)
-    print(f"[m0_niah] {args.label} -> {passes}/{len(NEEDLES)} "
-          f"gate={'PASS' if summary['gate_5_of_5'] else 'FAIL'}")
+    print(
+        f"[m0_niah] {args.label} -> {passes}/{len(NEEDLES)} "
+        f"gate={'PASS' if summary['gate_5_of_5'] else 'FAIL'}"
+    )
     return 0 if summary["gate_5_of_5"] else 1
 
 

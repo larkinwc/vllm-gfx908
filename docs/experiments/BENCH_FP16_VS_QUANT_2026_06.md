@@ -34,7 +34,7 @@ so the FP16-vs-quant delta can finally be stated honestly.
 | `fp16_tp4_c1` | **72.15** | 156.77 | 13.70 | 0.282 |
 | `fp16_tp4_c2` | **126.02** | 148.33 | 15.41 | 0.492 |
 
-**FP16 decode-dominated geomean = 76.29 tok/s**
+FP16 decode-dominated geomean = **76.29 tok/s**
 
 ## Head-to-head (vs BENCH.md headline quant grids)
 

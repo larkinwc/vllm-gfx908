@@ -9,11 +9,12 @@ TurboQuant KV cache compression is integrated into vLLM as a custom attention ba
 ### TurboQuant Backend (`/opt/turboquant/turboquant/backends/vllm_rocm.py`)
 
 - **TurboQuantTritonBackend** (alias: TurboQuantRocmBackend): Extends `TritonAttentionBackend`. Registered as TRITON_ATTN override. Provides `TurboQuantTritonImpl` as the implementation class.
-- **TurboQuantTritonImpl** (alias: TurboQuantRocmImpl): Extends `TritonAttentionImpl`. Each instance owns per-layer TQ state (CompressedKVStore, KVCaptureEngine) **initialized eagerly in __init__** (required for HIP graph compatibility). Overrides `do_kv_cache_update()` to capture KV into compressed store, and `forward()` to optionally use TQ hybrid decode.
+- **TurboQuantTritonImpl** (alias: TurboQuantRocmImpl): Extends `TritonAttentionImpl`. Each instance owns per-layer TQ state (CompressedKVStore, KVCaptureEngine) **initialized eagerly in `__init__`** (required for HIP graph compatibility). Overrides `do_kv_cache_update()` to capture KV into compressed store, and `forward()` to optionally use TQ hybrid decode.
 
 ### Per-Layer State (lives in worker process)
 
 Each `TurboQuantRocmImpl` instance owns:
+
 - `CompressedKVStore` -- chunked compressed KV history (3-bit keys via MSE+QJL, 2-bit values via group quantization)
 - `KVCaptureEngine` -- ring buffer (128 recent tokens in full precision) + bulk capture for prefill
 - `TurboQuantProd` quantizer -- rotation matrix Pi (DxD), QJL matrix S (DxD), codebook (8 centroids)
@@ -28,7 +29,8 @@ Each `TurboQuantRocmImpl` instance owns:
 ### Data Flow
 
 **Capture-only mode (Phase 1):**
-```
+
+```text
 Request → vLLM Scheduler → Worker Process → Model Forward
   → TurboQuantRocmImpl.do_kv_cache_update():
       1. Write to paged KV cache (standard path via super())
@@ -39,7 +41,8 @@ Request → vLLM Scheduler → Worker Process → Model Forward
 ```
 
 **Hybrid mode (Phase 2):**
-```
+
+```text
 Prefill:
   → do_kv_cache_update(): write to paged cache + capture into TQ store
   → forward(): use standard flash attention for prefill (super())
@@ -56,6 +59,7 @@ Decode (single token):
 ### Registration Flow
 
 **CRITICAL:** Override TRITON_ATTN, NOT ROCM_ATTN or CUSTOM:
+
 ```python
 from vllm.v1.attention.backends.registry import register_backend, AttentionBackendEnum
 register_backend(AttentionBackendEnum.TRITON_ATTN, "turboquant.backends.vllm_rocm.TurboQuantTritonBackend")
@@ -64,6 +68,7 @@ register_backend(AttentionBackendEnum.TRITON_ATTN, "turboquant.backends.vllm_roc
 This must execute in every worker process (via sitecustomize.py in PYTHONPATH). No `--attention-backend` flag needed.
 
 **Why TRITON_ATTN, not ROCM_ATTN or CUSTOM:**
+
 - On ROCm, vLLM selects TRITON_ATTN (not ROCM_ATTN) for standard attention layers in `_get_backend_priorities()`
 - ROCM_ATTN is only selected if `use_prefill_decode_attention=True`, which is not the default
 - CUSTOM + `--attention-backend CUSTOM` forces ALL layers through system 1, crashing GDN layers
@@ -72,6 +77,7 @@ This must execute in every worker process (via sitecustomize.py in PYTHONPATH). 
 ### vLLM Dual Backend Routing
 
 vLLM has TWO separate backend routing systems:
+
 1. **AttentionBackendEnum** (standard attention) → `get_attn_backend()` → TRITON_ATTN on ROCm
 2. **MambaAttentionBackendEnum** (mamba/GDN/linear) → `get_mamba_attn_backend()` → GDN_ATTN for GDN layers
 
@@ -81,6 +87,7 @@ Qwen3.5-9B's 24 GDN layers use system 2 (GDN_ATTN → unchanged).
 ### Memory Budget
 
 Per full-attention layer overhead:
+
 - Pi rotation matrix: 256x256 float32 = 256 KB
 - S QJL matrix: 256x256 float32 = 256 KB  
 - Codebook: 8 float32 = 32 B
@@ -92,10 +99,12 @@ Per full-attention layer overhead:
 FULL_DECODE_ONLY captures decode forward passes into HIP graphs. Both TQ capture_only and TQ hybrid modes ARE compatible with FULL_DECODE_ONLY graphs.
 
 **VALIDATED:**
+
 - TQ capture_only + FULL_DECODE_ONLY: 35 graphs captured, 10/10 requests coherent (VAL-GRAPH-001)
 - TQ hybrid + FULL_DECODE_ONLY: 35 graphs captured, 10/10 requests coherent (VAL-GRAPH-002)
 
 **Requirements for HIP graph compatibility:**
+
 1. All random tensor generation must specify `device='cpu'` explicitly (e.g., `torch.randn(..., device='cpu')`)
 2. Tensors used in forward() operations must be pre-registered as module buffers via `register_buffer()`, not created dynamically during forward
 3. TQ state (CompressedKVStore, KVCaptureEngine) must be initialized eagerly in `__init__`, not lazily during first forward pass

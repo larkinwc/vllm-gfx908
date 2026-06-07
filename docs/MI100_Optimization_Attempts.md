@@ -16,7 +16,7 @@ I attempted to port MI100-specific optimizations from older branches (created fo
 
 **Baseline Performance**: 38.5 tok/s prompt, 48.7 tok/s generation
 **Post-Optimization**: Same or worse (0% to -7%)
-**Conclusion**: Vanilla vLLM on ROCm 7.0 is satifactory for MI100
+**Conclusion**: Vanilla vLLM on ROCm 7.0 is satisfactory for MI100
 
 ---
 
@@ -123,7 +123,7 @@ Modified low-level GPTQ quantization kernels to use AMD-specific instructions an
 
 **File Modified**: `csrc/quantization/gptq/q_gemm.cu`
 
-**Change 1: Increased Block Sizes**
+#### Change 1: Increased Block Sizes
 
 ```cpp
 // BEFORE (upstream default):
@@ -144,7 +144,7 @@ Modified low-level GPTQ quantization kernels to use AMD-specific instructions an
 - Reduces kernel launch overhead
 - Previously showed 6.3% improvement on ROCm 5.x/6.x
 
-**Change 2: AMD fdot2 Intrinsic**
+#### Change 2: AMD fdot2 Intrinsic
 
 ```cpp
 __forceinline__ __device__ float dot22_8_f(half2 (&dq)[4], const half* a_ptr,
@@ -194,7 +194,7 @@ __forceinline__ __device__ float dot22_8_f(half2 (&dq)[4], const half* a_ptr,
 1. **Initial Implementation Bug**:
    - Used `#if defined(__gfx908__)` for conditional compilation
    - Caused memory access faults during torch.compile:
-     ```
+     ```text
      Memory access fault by GPU node-4 on address 0x712951800000
      Reason: Page not present or supervisor privilege
      ```
@@ -335,7 +335,7 @@ Optimizations are tied to their environment.
 
 ### Hardware Configuration
 
-```
+```text
 System: 4x AMD Instinct MI100
 - Architecture: CDNA1 (gfx908)
 - Compute Units: 120 per GPU
@@ -347,7 +347,7 @@ System: 4x AMD Instinct MI100
 
 ### Software Stack
 
-```
+```text
 OS: Ubuntu 22.04
 ROCm: 7.0.2
 HIP: 6.2.x

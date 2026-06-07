@@ -153,6 +153,7 @@ CUDA-graph timing + roofline + occupancy).
 | 2026-06 | **Hand int4 MoE GEMM, MFMA + split-K** (keep `tl.dot`, fix occupancy) | **microbench 1.51× WIN** isolated GEMM (1.63× gate_up, 1.22× down), rel-err <4e-4; 80→320 WG, VGPR 108→76 — **BUT integration NEGATIVE: ~1.0× at M=1, 0.67–0.74× regress at M=4–8** (atomic needs `zero_()` ~7 µs launch ≈ cancels saving; baseline already CU-filled at M≥2). **Reverted, not shipped.** | `BENCH_MOE_HANDKERNEL_GEMV_*` + `RESEARCH_MOE_HANDKERNEL_FEASIBILITY_*` |
 
 ### Distilled rules from the ledger
+
 - **torch.compile is the biggest realized win on gfx908** (~10% on MoE serving).
   Enable for MoE; concurrency-gate for dense.
 - **Don't tile-tune the int4 MoE decode GEMM** (±2% = noise). Split-K *does* win
@@ -175,6 +176,7 @@ CUDA-graph timing + roofline + occupancy).
   was not.
 
 ### Open / unexplored (candidate next work)
+
 - **MoE routing-glue fusion — DE-PRIORITIZED (2026-06).** The "~37% glue" was an
   *eager* rocprof inflated by launch gaps. **Graph-timed** (real serving), per
   layer at M=1: GEMM 43.7 µs (66%), `moe_align` 7.2 µs (11%), `reduce` 4.9 µs
@@ -231,6 +233,7 @@ generic `tl.dot` tile kernel) and so launched just 80 workgroups.
    well-occupied and either memory-bound or trivially small; no roofline gap.
 
 ### Triage rule (add to the loop)
+>
 > Before hand-building any decode kernel, check whether it already routes through
 > **`wvSplitK`/`wvSplitKQ`** (dense GEMM) or a well-occupied attention kernel.
 > If it does, it's already CU-filled — stop. The hand-kernel opportunity on
@@ -243,6 +246,7 @@ validation bug in the in-process `LLM()` API on this stack — use a
 Llama-family model for the dense triage, or profile Qwen via the server path.)
 
 ### Standing conclusion (2026-06)
+
 The MoE decode well is **mostly dry** at the kernel level: the int4 expert GEMM
 is already occupancy-optimal (split-K wins isolated but not integrated), the
 dense paths already use `wvSplitK`, and the routing/glue is ~34% of MoE GPU time

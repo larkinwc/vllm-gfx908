@@ -198,6 +198,7 @@ def block_rotate(x: torch.Tensor, params: RotationParams) -> torch.Tensor:
         *lead, d = x.shape
         xp = x.reshape(*lead, d // 2, 2)
         x0, x1 = xp[..., 0], xp[..., 1]
+        assert params.cos is not None and params.sin is not None
         c, s = params.cos, params.sin
         y0 = c * x0 + s * x1
         y1 = -s * x0 + c * x1
@@ -206,6 +207,7 @@ def block_rotate(x: torch.Tensor, params: RotationParams) -> torch.Tensor:
         *lead, d = x.shape
         xq = x.reshape(*lead, d // 4, 4)
         # Forward map applies m on the left of each 4-vector: y = m @ x.
+        assert params.quat is not None
         w = params.quat[:, 0]
         xx = params.quat[:, 1]
         yy = params.quat[:, 2]

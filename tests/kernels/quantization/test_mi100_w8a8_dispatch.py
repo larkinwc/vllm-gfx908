@@ -8,19 +8,19 @@ Focuses on dispatch behaviour rather than absolute speed. Numerical
 correctness of the hipBLASLt path is covered separately by
 ``test_hipblaslt_int8_correctness.py``.
 """
+
 from __future__ import annotations
 
 import json
 import os
+from collections.abc import Generator
 from pathlib import Path
 from unittest import mock
 
 import pytest
 import torch
 
-pytest.importorskip(
-    "vllm.model_executor.kernels.linear.scaled_mm.mi100_int8"
-)
+pytest.importorskip("vllm.model_executor.kernels.linear.scaled_mm.mi100_int8")
 
 from vllm.model_executor.kernels.linear.scaled_mm import (  # noqa: E402
     mi100_hipblaslt,
@@ -42,7 +42,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-def tmp_tuned_shapes(tmp_path: Path) -> Path:
+def tmp_tuned_shapes(tmp_path: Path) -> Generator[Path, None, None]:
     manifest = {
         "schema_version": 1,
         "rocm_version": "7.12",
@@ -55,9 +55,12 @@ def tmp_tuned_shapes(tmp_path: Path) -> Path:
     p = tmp_path / "tuned.json"
     p.write_text(json.dumps(manifest))
     mi100_hipblaslt.reset_tuned_shape_cache()
-    with mock.patch.dict(os.environ, {
-        "VLLM_HIPBLASLT_TUNED_SHAPES": str(p),
-    }):
+    with mock.patch.dict(
+        os.environ,
+        {
+            "VLLM_HIPBLASLT_TUNED_SHAPES": str(p),
+        },
+    ):
         yield p
     mi100_hipblaslt.reset_tuned_shape_cache()
 
@@ -102,12 +105,16 @@ def test_dispatcher_prefers_hipblaslt_for_tuned_shape(tmp_tuned_shapes):
     def kernel_spy(*args, **kwargs):
         called["triton"] += 1
 
-    with mock.patch.object(mi100_int8, "mi100_hipblaslt_scaled_mm",
-                           hipblaslt_spy), \
-         mock.patch.object(mi100_int8, "mi100_int8_scaled_mm_kernel",
-                           kernel_spy):
+    with (
+        mock.patch.object(mi100_int8, "mi100_hipblaslt_scaled_mm", hipblaslt_spy),
+        mock.patch.object(mi100_int8, "mi100_int8_scaled_mm_kernel", kernel_spy),
+    ):
         out = mi100_int8.mi100_int8_scaled_mm(
-            a, b, sa, sb, out_dtype=torch.float16,
+            a,
+            b,
+            sa,
+            sb,
+            out_dtype=torch.float16,
         )
     assert called["hipblaslt"] == 1
     assert called["triton"] == 0
@@ -125,10 +132,13 @@ def test_dispatcher_falls_back_to_triton_for_untuned(tmp_tuned_shapes):
     def hipblaslt_spy(*args, **kwargs):
         called_hipblaslt.append(1)
 
-    with mock.patch.object(mi100_int8, "mi100_hipblaslt_scaled_mm",
-                           hipblaslt_spy):
+    with mock.patch.object(mi100_int8, "mi100_hipblaslt_scaled_mm", hipblaslt_spy):
         out = mi100_int8.mi100_int8_scaled_mm(
-            a, b, sa, sb, out_dtype=torch.float16,
+            a,
+            b,
+            sa,
+            sb,
+            out_dtype=torch.float16,
         )
     assert called_hipblaslt == []
     assert out.shape == (M, N)
@@ -144,11 +154,16 @@ def test_disable_env_forces_triton_even_for_tuned_shape(tmp_tuned_shapes):
     def hipblaslt_spy(*args, **kwargs):
         hits.append(1)
 
-    with mock.patch.dict(os.environ, {"VLLM_DISABLE_HIPBLASLT": "1"}), \
-         mock.patch.object(mi100_int8, "mi100_hipblaslt_scaled_mm",
-                           hipblaslt_spy):
+    with (
+        mock.patch.dict(os.environ, {"VLLM_DISABLE_HIPBLASLT": "1"}),
+        mock.patch.object(mi100_int8, "mi100_hipblaslt_scaled_mm", hipblaslt_spy),
+    ):
         out = mi100_int8.mi100_int8_scaled_mm(
-            a, b, sa, sb, out_dtype=torch.float16,
+            a,
+            b,
+            sa,
+            sb,
+            out_dtype=torch.float16,
         )
     assert hits == []
     assert out.shape == (M, N)
@@ -161,11 +176,19 @@ def test_disable_env_output_matches_default_triton(tmp_tuned_shapes):
     a, b, sa, sb = _make_w8a8_tensors(M, N, K)
 
     out_default = mi100_int8.mi100_int8_scaled_mm(
-        a, b, sa, sb, out_dtype=torch.float16,
+        a,
+        b,
+        sa,
+        sb,
+        out_dtype=torch.float16,
     )
     with mock.patch.dict(os.environ, {"VLLM_DISABLE_HIPBLASLT": "1"}):
         out_disabled = mi100_int8.mi100_int8_scaled_mm(
-            a, b, sa, sb, out_dtype=torch.float16,
+            a,
+            b,
+            sa,
+            sb,
+            out_dtype=torch.float16,
         )
     assert torch.equal(out_default, out_disabled)
 

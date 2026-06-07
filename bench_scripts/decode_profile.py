@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Full-model decode profiler: load a model, run a steady-state decode region,
 so rocprofv3 --kernel-trace can rank ALL hot kernels (attention, GEMM, norms,
 sampling, all-reduce) — the triage step for finding hand-kernel candidates.
@@ -8,6 +10,7 @@ Usage:
     --output-format csv -d /tmp/decprof -- \
     python bench_scripts/decode_profile.py <model_path> <tp>
 """
+
 import os
 import sys
 
@@ -38,9 +41,9 @@ def main():
 
     # steady-state decode region to be profiled: 1 prompt, many decode steps
     sp = SamplingParams(temperature=0.0, max_tokens=128, ignore_eos=True)
-    torch.cuda.synchronize()
+    torch.accelerator.synchronize()
     llm.generate(["Once upon a time in a distant land,"], sp, use_tqdm=False)
-    torch.cuda.synchronize()
+    torch.accelerator.synchronize()
     sys.stdout.flush()
 
 

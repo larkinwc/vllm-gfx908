@@ -7,6 +7,7 @@ The original summary files predate the VAL-TRITON-003 amendment. This
 regenerates them from the per-shape JSONs in configs/gfx908/ so the
 coverage block is available without rerunning the bench loop.
 """
+
 from __future__ import annotations
 
 import datetime as dt
@@ -23,32 +24,36 @@ def _shapes_for(kernel: str) -> list[dict]:
     for path in sorted(CONFIG_DIR.glob(f"{kernel}_M*.json")):
         blob = json.loads(path.read_text())
         shape = blob["shape"]
-        rows.append({
-            "shape": [
-                shape["M"], shape["N"], shape["K"],
-                shape.get("group_size"),
-            ],
-            "best_ms": blob.get("measured_ms_per_iter"),
-            "best_cfg": {
-                k: v for k, v in blob["config"].items()
-                if k not in {"GROUP_SIZE_M", "num_warps"}
-            },
-            "evaluated": blob.get("autotune_runs_evaluated", 0),
-            "pruned": blob.get("autotune_runs_pruned", 0),
-            "cartesian_total": blob.get("autotune_cartesian_total", 0),
-            "evaluated_pct_of_cart": (
-                blob.get("autotune_runs_evaluated", 0)
-                / blob.get("autotune_cartesian_total", 1) * 100.0
-            ),
-            "legal_subset": blob.get("autotune_legal_subset", 0),
-            "legal_coverage_pct": blob.get(
-                "autotune_legal_coverage_pct", 0.0
-            ),
-            "hard_invariant_eliminated": blob.get(
-                "autotune_hard_invariant_eliminated", 0
-            ),
-            "out_path": str(path),
-        })
+        rows.append(
+            {
+                "shape": [
+                    shape["M"],
+                    shape["N"],
+                    shape["K"],
+                    shape.get("group_size"),
+                ],
+                "best_ms": blob.get("measured_ms_per_iter"),
+                "best_cfg": {
+                    k: v
+                    for k, v in blob["config"].items()
+                    if k not in {"GROUP_SIZE_M", "num_warps"}
+                },
+                "evaluated": blob.get("autotune_runs_evaluated", 0),
+                "pruned": blob.get("autotune_runs_pruned", 0),
+                "cartesian_total": blob.get("autotune_cartesian_total", 0),
+                "evaluated_pct_of_cart": (
+                    blob.get("autotune_runs_evaluated", 0)
+                    / blob.get("autotune_cartesian_total", 1)
+                    * 100.0
+                ),
+                "legal_subset": blob.get("autotune_legal_subset", 0),
+                "legal_coverage_pct": blob.get("autotune_legal_coverage_pct", 0.0),
+                "hard_invariant_eliminated": blob.get(
+                    "autotune_hard_invariant_eliminated", 0
+                ),
+                "out_path": str(path),
+            }
+        )
     return rows
 
 
@@ -80,14 +85,20 @@ def _emit(kernel: str) -> None:
     sweep_kernel = name_map[kernel]
     out = LOG_DIR / f"sweep_{sweep_kernel}_summary.json"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps({
-        "kernel": sweep_kernel,
-        "shapes": rows,
-        "cartesian_total": cart_total_global,
-        "coverage_summary": coverage_summary,
-        "regenerated_from": "per-shape config JSONs",
-        "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
-    }, indent=2) + "\n")
+    out.write_text(
+        json.dumps(
+            {
+                "kernel": sweep_kernel,
+                "shapes": rows,
+                "cartesian_total": cart_total_global,
+                "coverage_summary": coverage_summary,
+                "regenerated_from": "per-shape config JSONs",
+                "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+            },
+            indent=2,
+        )
+        + "\n"
+    )
     print(f"wrote {out}")
     # Pretty-print summary line for the validator log.
     for r in rows:
@@ -98,9 +109,7 @@ def _emit(kernel: str) -> None:
             f"legal-coverage = {r['evaluated']}/{r['legal_subset']} = "
             f"{r['legal_coverage_pct']:.1f}%"
         )
-    print(
-        f"  average legal-coverage = {cov_avg:.1f}% across {len(rows)} shapes"
-    )
+    print(f"  average legal-coverage = {cov_avg:.1f}% across {len(rows)} shapes")
 
 
 def main() -> int:

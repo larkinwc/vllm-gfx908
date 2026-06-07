@@ -34,8 +34,8 @@
 - **Selection-proof + numerical correctness still hold**: the
   infrastructure (TensileLite tuning client, merged-library build,
   hipBLASLt dispatcher) is intact and is required for any future
-  per-shape kernel substitution. The negative result is _on uplift
-  for these shapes_, not on the build/dispatch chain.
+  per-shape kernel substitution. The negative result is *on uplift
+  for these shapes*, not on the build/dispatch chain.
 - **Reproducibility canary differs across runs** — Tensile's "best"
   kernel selection is sensitive to measurement noise on this MI100
   host. With the new finding that tuning provides ~0% uplift, the
@@ -44,7 +44,7 @@
 
 ## Files added/modified (this resume)
 
-```
+```text
 scripts/mi100/
 ├── merge_tensile_logic.sh           # NEW — yaml staging + TensileCreateLibrary
 ├── verify_tuned_kernel_selected.sh  # NEW — rocprofv3-driven selection proof
@@ -93,7 +93,7 @@ kernel — they remain on the Triton path).
 
 ## Lazy-merge pipeline
 
-```
+```text
 1. Stage 8 tuned YAMLs into merge_workspace/merged_logic/
      scripts/mi100/merge_tensile_logic.sh (Step 1)
 
@@ -134,7 +134,7 @@ documents this trade-off.
 
 ## Selection Proof (VAL-TENSILE-003 evidence)
 
-```
+```text
 $ scripts/mi100/verify_tuned_kernel_selected.sh
 ===== M2 selection-proof summary (2026-05-09T23:34:35Z) =====
 
@@ -160,6 +160,7 @@ the assembly kernel name embedded, and we grep for the
 `MT*_MI*` tile fragment.
 
 Output traces:
+
 - `/root/bench-int8-w4a16/tensilelite/select_proof_prebuilt_kernel_trace.csv`
 - `/root/bench-int8-w4a16/tensilelite/select_proof_merged_kernel_trace.csv`
 - `/root/bench-int8-w4a16/tensilelite/select_proof_summary.txt`
@@ -184,6 +185,7 @@ TensileLite tuning by itself bought us, controlling for the library
 swap".
 
 Files:
+
 - M1 baseline: `/root/bench-int8-w4a16/baseline/{synthetic,coding}/w8a8_*.json` (May-7)
 - M1-rebaselined: `/root/bench-int8-w4a16/m1-rebaseline/{synthetic,coding}/w8a8_*.json` (May-9/10)
 - M2 (tuned): `/root/bench-int8-w4a16/m2/{synthetic,coding}/w8a8_*.json` (May-9/10)
@@ -192,70 +194,70 @@ Files:
 ### Three-way comparison table (full 12-cell W8A8 grid)
 
 Markup: **bold** = improvement ≥ 3% on this metric (Pareto-bar);
-_italic_ = regression > 1%.
+*italic* = regression > 1%.
 
 | Cell | Workload | Metric | M1 (May-7) | M1-rebaseline | M2 | Δ M1→M2 | Δ M1→M1rb (lib-swap) | Δ M1rb→M2 (**tuning**) |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| w8a8_tp1_c1 | synthetic | tput | 38.97 | 37.44 | 37.17 | _-4.61%_ | _-3.91%_ | -0.73% |
+| w8a8_tp1_c1 | synthetic | tput | 38.97 | 37.44 | 37.17 | *-4.61%* | *-3.91%* | -0.73% |
 | w8a8_tp1_c1 | synthetic | mean_ttft | 314.33 | 283.48 | 283.76 | **-9.73%** | **-9.81%** | +0.10% |
-| w8a8_tp1_c1 | synthetic | p99_ttft | 318.00 | 288.05 | 295.71 | **-7.01%** | **-9.42%** | _+2.66%_ |
-| w8a8_tp1_c1 | synthetic | mean_tpot | 24.53 | 25.70 | 25.90 | _+5.57%_ | _+4.77%_ | +0.76% |
-| w8a8_tp1_c1 | synthetic | p99_tpot | 24.55 | 25.77 | 25.91 | _+5.55%_ | _+4.98%_ | +0.54% |
-| w8a8_tp1_c1 | coding    | tput | 38.06 | 36.56 | 36.31 | _-4.58%_ | _-3.92%_ | -0.68% |
+| w8a8_tp1_c1 | synthetic | p99_ttft | 318.00 | 288.05 | 295.71 | **-7.01%** | **-9.42%** | *+2.66%* |
+| w8a8_tp1_c1 | synthetic | mean_tpot | 24.53 | 25.70 | 25.90 | *+5.57%* | *+4.77%* | +0.76% |
+| w8a8_tp1_c1 | synthetic | p99_tpot | 24.55 | 25.77 | 25.91 | *+5.55%* | *+4.98%* | +0.54% |
+| w8a8_tp1_c1 | coding    | tput | 38.06 | 36.56 | 36.31 | *-4.58%* | *-3.92%* | -0.68% |
 | w8a8_tp1_c1 | coding    | mean_ttft | 231.00 | 219.86 | 218.16 | **-5.56%** | **-4.82%** | -0.78% |
 | w8a8_tp1_c1 | coding    | p99_ttft | 1183.77 | 1065.09 | 1063.76 | **-10.14%** | **-10.03%** | -0.13% |
-| w8a8_tp1_c1 | coding    | mean_tpot | 25.34 | 26.49 | 26.69 | _+5.35%_ | _+4.58%_ | +0.74% |
-| w8a8_tp1_c1 | coding    | p99_tpot | 33.36 | 34.50 | 34.72 | _+4.07%_ | _+3.42%_ | +0.62% |
-| w8a8_tp1_c2 | synthetic | tput | 73.81 | 70.78 | 70.67 | _-4.26%_ | _-4.11%_ | -0.16% |
+| w8a8_tp1_c1 | coding    | mean_tpot | 25.34 | 26.49 | 26.69 | *+5.35%* | *+4.58%* | +0.74% |
+| w8a8_tp1_c1 | coding    | p99_tpot | 33.36 | 34.50 | 34.72 | *+4.07%* | *+3.42%* | +0.62% |
+| w8a8_tp1_c2 | synthetic | tput | 73.81 | 70.78 | 70.67 | *-4.26%* | *-4.11%* | -0.16% |
 | w8a8_tp1_c2 | synthetic | mean_ttft | 488.31 | 439.42 | 439.20 | **-10.06%** | **-10.01%** | -0.05% |
 | w8a8_tp1_c2 | synthetic | p99_ttft | 556.20 | 492.42 | 492.33 | **-11.48%** | **-11.47%** | -0.02% |
-| w8a8_tp1_c2 | synthetic | mean_tpot | 25.29 | 26.64 | 26.69 | _+5.55%_ | _+5.37%_ | +0.18% |
-| w8a8_tp1_c2 | synthetic | p99_tpot | 25.56 | 26.86 | 26.91 | _+5.25%_ | _+5.09%_ | +0.15% |
-| w8a8_tp1_c2 | coding    | tput | 68.61 | 66.67 | 66.07 | _-3.71%_ | _-2.83%_ | -0.91% |
+| w8a8_tp1_c2 | synthetic | mean_tpot | 25.29 | 26.64 | 26.69 | *+5.55%* | *+5.37%* | +0.18% |
+| w8a8_tp1_c2 | synthetic | p99_tpot | 25.56 | 26.86 | 26.91 | *+5.25%* | *+5.09%* | +0.15% |
+| w8a8_tp1_c2 | coding    | tput | 68.61 | 66.67 | 66.07 | *-3.71%* | *-2.83%* | -0.91% |
 | w8a8_tp1_c2 | coding    | mean_ttft | 277.97 | 255.55 | 254.33 | **-8.51%** | **-8.07%** | -0.48% |
-| w8a8_tp1_c2 | coding    | p99_ttft | 1341.32 | 1185.41 | 1214.56 | **-9.45%** | **-11.62%** | _+2.46%_ |
-| w8a8_tp1_c2 | coding    | mean_tpot | 27.88 | 29.01 | 29.32 | _+5.15%_ | _+4.05%_ | _+1.06%_ |
-| w8a8_tp1_c2 | coding    | p99_tpot | 37.91 | 35.77 | 37.54 | -0.96% | **-5.64%** | _+4.96%_ |
-| w8a8_tp1_c4 | synthetic | tput | 135.90 | 131.90 | 132.01 | _-2.86%_ | _-2.94%_ | +0.08% |
+| w8a8_tp1_c2 | coding    | p99_ttft | 1341.32 | 1185.41 | 1214.56 | **-9.45%** | **-11.62%** | *+2.46%* |
+| w8a8_tp1_c2 | coding    | mean_tpot | 27.88 | 29.01 | 29.32 | *+5.15%* | *+4.05%* | *+1.06%* |
+| w8a8_tp1_c2 | coding    | p99_tpot | 37.91 | 35.77 | 37.54 | -0.96% | **-5.64%** | *+4.96%* |
+| w8a8_tp1_c4 | synthetic | tput | 135.90 | 131.90 | 132.01 | *-2.86%* | *-2.94%* | +0.08% |
 | w8a8_tp1_c4 | synthetic | mean_ttft | 814.96 | 717.53 | 717.53 | **-11.96%** | **-11.96%** | +0.00% |
 | w8a8_tp1_c4 | synthetic | p99_ttft | 956.65 | 819.69 | 820.69 | **-14.21%** | **-14.32%** | +0.12% |
-| w8a8_tp1_c4 | synthetic | mean_tpot | 26.35 | 27.63 | 27.60 | _+4.75%_ | _+4.85%_ | -0.09% |
-| w8a8_tp1_c4 | synthetic | p99_tpot | 27.41 | 28.51 | 28.48 | _+3.93%_ | _+4.03%_ | -0.10% |
-| w8a8_tp1_c4 | coding    | tput | 120.36 | 116.55 | 117.12 | _-2.69%_ | _-3.16%_ | +0.49% |
+| w8a8_tp1_c4 | synthetic | mean_tpot | 26.35 | 27.63 | 27.60 | *+4.75%* | *+4.85%* | -0.09% |
+| w8a8_tp1_c4 | synthetic | p99_tpot | 27.41 | 28.51 | 28.48 | *+3.93%* | *+4.03%* | -0.10% |
+| w8a8_tp1_c4 | coding    | tput | 120.36 | 116.55 | 117.12 | *-2.69%* | *-3.16%* | +0.49% |
 | w8a8_tp1_c4 | coding    | mean_ttft | 322.69 | 293.71 | 293.36 | **-9.09%** | **-8.98%** | -0.12% |
-| w8a8_tp1_c4 | coding    | p99_ttft | 1436.67 | 1393.34 | 1436.77 | +0.01% | **-3.02%** | _+3.12%_ |
-| w8a8_tp1_c4 | coding    | mean_tpot | 31.76 | 32.94 | 33.01 | _+3.95%_ | _+3.73%_ | +0.22% |
-| w8a8_tp1_c4 | coding    | p99_tpot | 42.66 | 38.61 | 41.43 | -2.87% | **-9.48%** | _+7.30%_ |
-| w8a8_tp4_c1 | synthetic | tput | 63.95 | 57.04 | 57.18 | _-10.58%_ | _-10.80%_ | +0.25% |
+| w8a8_tp1_c4 | coding    | p99_ttft | 1436.67 | 1393.34 | 1436.77 | +0.01% | **-3.02%** | *+3.12%* |
+| w8a8_tp1_c4 | coding    | mean_tpot | 31.76 | 32.94 | 33.01 | *+3.95%* | *+3.73%* | +0.22% |
+| w8a8_tp1_c4 | coding    | p99_tpot | 42.66 | 38.61 | 41.43 | -2.87% | **-9.48%** | *+7.30%* |
+| w8a8_tp4_c1 | synthetic | tput | 63.95 | 57.04 | 57.18 | *-10.58%* | *-10.80%* | +0.25% |
 | w8a8_tp4_c1 | synthetic | mean_ttft | 165.10 | 165.79 | 164.19 | -0.55% | +0.41% | -0.96% |
 | w8a8_tp4_c1 | synthetic | p99_ttft | 166.57 | 167.80 | 167.07 | +0.30% | +0.74% | -0.43% |
-| w8a8_tp4_c1 | synthetic | mean_tpot | 15.05 | 16.95 | 16.91 | _+12.37%_ | _+12.61%_ | -0.22% |
-| w8a8_tp4_c1 | synthetic | p99_tpot | 15.08 | 16.96 | 16.92 | _+12.23%_ | _+12.53%_ | -0.26% |
-| w8a8_tp4_c1 | coding    | tput | 60.98 | 54.69 | 54.82 | _-10.11%_ | _-10.32%_ | +0.24% |
+| w8a8_tp4_c1 | synthetic | mean_tpot | 15.05 | 16.95 | 16.91 | *+12.37%* | *+12.61%* | -0.22% |
+| w8a8_tp4_c1 | synthetic | p99_tpot | 15.08 | 16.96 | 16.92 | *+12.23%* | *+12.53%* | -0.26% |
+| w8a8_tp4_c1 | coding    | tput | 60.98 | 54.69 | 54.82 | *-10.11%* | *-10.32%* | +0.24% |
 | w8a8_tp4_c1 | coding    | mean_ttft | 132.13 | 131.41 | 130.46 | -1.27% | -0.54% | -0.73% |
 | w8a8_tp4_c1 | coding    | p99_ttft | 494.09 | 461.20 | 460.94 | **-6.71%** | **-6.66%** | -0.05% |
-| w8a8_tp4_c1 | coding    | mean_tpot | 15.86 | 17.76 | 17.72 | _+11.72%_ | _+11.97%_ | -0.22% |
-| w8a8_tp4_c1 | coding    | p99_tpot | 24.00 | 25.89 | 25.85 | _+7.73%_ | _+7.89%_ | -0.15% |
-| w8a8_tp4_c2 | synthetic | tput | 125.30 | 113.56 | 113.08 | _-9.75%_ | _-9.37%_ | -0.43% |
+| w8a8_tp4_c1 | coding    | mean_tpot | 15.86 | 17.76 | 17.72 | *+11.72%* | *+11.97%* | -0.22% |
+| w8a8_tp4_c1 | coding    | p99_tpot | 24.00 | 25.89 | 25.85 | *+7.73%* | *+7.89%* | -0.15% |
+| w8a8_tp4_c2 | synthetic | tput | 125.30 | 113.56 | 113.08 | *-9.75%* | *-9.37%* | -0.43% |
 | w8a8_tp4_c2 | synthetic | mean_ttft | 137.05 | 135.98 | 135.99 | -0.77% | -0.78% | +0.01% |
 | w8a8_tp4_c2 | synthetic | p99_ttft | 165.91 | 162.57 | 163.75 | -1.30% | -2.02% | +0.73% |
-| w8a8_tp4_c2 | synthetic | mean_tpot | 15.49 | 17.15 | 17.22 | _+11.21%_ | _+10.72%_ | +0.44% |
-| w8a8_tp4_c2 | synthetic | p99_tpot | 15.59 | 17.23 | 17.32 | _+11.10%_ | _+10.57%_ | +0.48% |
-| w8a8_tp4_c2 | coding    | tput | 110.08 | 100.13 | 101.14 | _-8.13%_ | _-9.04%_ | +1.01% |
-| w8a8_tp4_c2 | coding    | mean_ttft | 116.15 | 118.08 | 119.55 | _+2.93%_ | _+1.66%_ | _+1.25%_ |
-| w8a8_tp4_c2 | coding    | p99_ttft | 156.93 | 153.96 | 159.80 | _+1.83%_ | -1.89% | _+3.80%_ |
-| w8a8_tp4_c2 | coding    | mean_tpot | 17.70 | 19.38 | 19.38 | _+9.52%_ | _+9.51%_ | +0.01% |
-| w8a8_tp4_c2 | coding    | p99_tpot | 24.27 | 26.20 | 26.26 | _+8.20%_ | _+7.92%_ | +0.25% |
-| w8a8_tp4_c4 | synthetic | tput | 247.74 | 224.58 | 223.82 | _-9.66%_ | _-9.35%_ | -0.34% |
+| w8a8_tp4_c2 | synthetic | mean_tpot | 15.49 | 17.15 | 17.22 | *+11.21%* | *+10.72%* | +0.44% |
+| w8a8_tp4_c2 | synthetic | p99_tpot | 15.59 | 17.23 | 17.32 | *+11.10%* | *+10.57%* | +0.48% |
+| w8a8_tp4_c2 | coding    | tput | 110.08 | 100.13 | 101.14 | *-8.13%* | *-9.04%* | +1.01% |
+| w8a8_tp4_c2 | coding    | mean_ttft | 116.15 | 118.08 | 119.55 | *+2.93%* | *+1.66%* | *+1.25%* |
+| w8a8_tp4_c2 | coding    | p99_ttft | 156.93 | 153.96 | 159.80 | *+1.83%* | -1.89% | *+3.80%* |
+| w8a8_tp4_c2 | coding    | mean_tpot | 17.70 | 19.38 | 19.38 | *+9.52%* | *+9.51%* | +0.01% |
+| w8a8_tp4_c2 | coding    | p99_tpot | 24.27 | 26.20 | 26.26 | *+8.20%* | *+7.92%* | +0.25% |
+| w8a8_tp4_c4 | synthetic | tput | 247.74 | 224.58 | 223.82 | *-9.66%* | *-9.35%* | -0.34% |
 | w8a8_tp4_c4 | synthetic | mean_ttft | 199.47 | 194.82 | 194.65 | -2.41% | -2.33% | -0.09% |
 | w8a8_tp4_c4 | synthetic | p99_ttft | 249.35 | 230.98 | 228.98 | **-8.17%** | **-7.37%** | -0.86% |
-| w8a8_tp4_c4 | synthetic | mean_tpot | 15.43 | 17.11 | 17.18 | _+11.35%_ | _+10.95%_ | +0.36% |
-| w8a8_tp4_c4 | synthetic | p99_tpot | 15.76 | 17.43 | 17.49 | _+10.94%_ | _+10.56%_ | +0.34% |
-| w8a8_tp4_c4 | coding    | tput | 196.29 | 181.94 | 181.29 | _-7.64%_ | _-7.31%_ | -0.36% |
-| w8a8_tp4_c4 | coding    | mean_ttft | 124.39 | 121.66 | 124.22 | -0.13% | -2.19% | _+2.10%_ |
+| w8a8_tp4_c4 | synthetic | mean_tpot | 15.43 | 17.11 | 17.18 | *+11.35%* | *+10.95%* | +0.36% |
+| w8a8_tp4_c4 | synthetic | p99_tpot | 15.76 | 17.43 | 17.49 | *+10.94%* | *+10.56%* | +0.34% |
+| w8a8_tp4_c4 | coding    | tput | 196.29 | 181.94 | 181.29 | *-7.64%* | *-7.31%* | -0.36% |
+| w8a8_tp4_c4 | coding    | mean_ttft | 124.39 | 121.66 | 124.22 | -0.13% | -2.19% | *+2.10%* |
 | w8a8_tp4_c4 | coding    | p99_ttft | 208.17 | 193.70 | 195.01 | **-6.32%** | **-6.95%** | +0.68% |
-| w8a8_tp4_c4 | coding    | mean_tpot | 19.70 | 21.49 | 21.42 | _+8.74%_ | _+9.09%_ | -0.32% |
-| w8a8_tp4_c4 | coding    | p99_tpot | 24.87 | 26.65 | 26.55 | _+6.75%_ | _+7.15%_ | -0.37% |
+| w8a8_tp4_c4 | coding    | mean_tpot | 19.70 | 21.49 | 21.42 | *+8.74%* | *+9.09%* | -0.32% |
+| w8a8_tp4_c4 | coding    | p99_tpot | 24.87 | 26.65 | 26.55 | *+6.75%* | *+7.15%* | -0.37% |
 
 (Aggregator: `scripts/mi100/aggregate_m2_threeway.py`; raw cells under
 `/root/bench-int8-w4a16/{baseline,m1-rebaseline,m2}/`. The `request_throughput`
@@ -267,8 +269,8 @@ metric is omitted from this table for compactness — it tracks `tput` 1:1.)
    improvements on TP=1 cells (-9% to -14% mean and p99 TTFT) and
    regressions on TPOT/throughput (+4% to +12%). This was the
    "improvement" we previously claimed for M2.
-2. **Δ M1→M1-rebaseline (the lib-swap column)** is _virtually
-   identical_ to Δ M1→M2 across every metric. **The change in `libhipblaslt.so`
+2. **Δ M1→M1-rebaseline (the lib-swap column)** is *virtually
+   identical* to Δ M1→M2 across every metric. **The change in `libhipblaslt.so`
    alone (system → M2 build) accounts for nearly all of the apparent
    M2 win.** TP=4 in particular shows a uniform -7% to -10% throughput
    regression and +7% to +12% TPOT regression that has nothing to do
@@ -369,7 +371,7 @@ unaffected. **Δ ≤ +1% gate PASSES.** Evidence:
 
 ## Triton fallback (VAL-TENSILE-008 evidence)
 
-```
+```text
 $ scripts/mi100/run_triton_fallback_smoke.sh
 [fallback] VLLM_DISABLE_HIPBLASLT=1
 [fallback] LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib
@@ -385,7 +387,7 @@ the Triton fallback is intact.
 
 ## Numerical correctness (VAL-TENSILE-005)
 
-```
+```text
 $ pytest tests/kernels/quantization/test_hipblaslt_int8_correctness.py -v
   test_hipblaslt_matches_reference[512-4096-12288]      PASSED
   test_hipblaslt_matches_reference[512-24576-4096]      PASSED
@@ -406,7 +408,7 @@ INT32-equivalent precision (max product ~12.5M < 2^24).
 
 ## Dispatch routing (VAL-TENSILE-004)
 
-```
+```text
 $ pytest tests/kernels/quantization/test_mi100_w8a8_dispatch.py -v
 test_supports_returns_true_for_listed_shape           PASSED
 test_supports_returns_false_for_unknown_shape         PASSED
@@ -434,6 +436,7 @@ resume because the *committed* logic YAMLs are reproducible (the
 *selection* is not).
 
 Mitigation paths (deferred to `m2-repro-pin`):
+
 - Pin GPU clocks via `rocm-smi --setperflevel high` + manual SCLK lock.
 - Larger Tensile `BenchmarkRepeats` count to reduce variance.
 - Monte-Carlo agreement instead of single-winner — pick the kernel

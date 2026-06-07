@@ -330,7 +330,7 @@ synthetic regime that M3 (NCCL topology) targets.
 
 ### Bench artifacts (per cell)
 
-```
+```text
 /root/bench-int8-w4a16-hbm/m1-kvint8/
 ├── w8a8/
 │   ├── w8a8_tp1_c1_synthetic.json   …   w8a8_tp4_c4_coding.json   (12)
@@ -387,10 +387,10 @@ KV_CACHE_DTYPE=int8_per_token_head bash scripts/launch_w8a8_tp1_c1.sh --serve-on
 ### Cross-links
 
 - **Production baseline (read-only reference):**
-  - [`BENCH_INT8_W4A16_FINAL.md`](./BENCH_INT8_W4A16_FINAL.md)
-  - [`/root/bench-int8-w4a16/final/final_grid.csv`](./../../../../../root/bench-int8-w4a16/final/final_grid.csv)
+    - [`BENCH_INT8_W4A16_FINAL.md`](./BENCH_INT8_W4A16_FINAL.md)
+    - [`/root/bench-int8-w4a16/final/final_grid.csv`](./../../../../../root/bench-int8-w4a16/final/final_grid.csv)
 - **Prior mission's M1 baseline (omniperf evidence for HBM-bound hot kernels):**
-  - [`BENCH_INT8_W4A16_BASELINE.md`](./BENCH_INT8_W4A16_BASELINE.md)
+    - [`BENCH_INT8_W4A16_BASELINE.md`](./BENCH_INT8_W4A16_BASELINE.md)
 - **Smoke + correctness predecessor feature:**
   `/root/bench-int8-w4a16-hbm/m1-kvint8/SMOKE_CORRECTNESS_REPORT.md`
 - **Pareto exceptions:**

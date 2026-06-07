@@ -51,8 +51,12 @@ def benchmark_decode_attention(
         num_seqs, num_query_heads, head_size, dtype=dtype, device="cuda"
     )
     key_cache = torch.randn(
-        num_blocks, block_size, num_kv_heads, head_size,
-        dtype=dtype, device="cuda",
+        num_blocks,
+        block_size,
+        num_kv_heads,
+        head_size,
+        dtype=dtype,
+        device="cuda",
     )
     value_cache = torch.randn_like(key_cache)
 
@@ -65,8 +69,11 @@ def benchmark_decode_attention(
 
     max_num_blocks_per_seq = (kv_len + block_size - 1) // block_size
     block_tables = torch.randint(
-        0, num_blocks, (num_seqs, max_num_blocks_per_seq),
-        dtype=torch.int32, device="cuda",
+        0,
+        num_blocks,
+        (num_seqs, max_num_blocks_per_seq),
+        dtype=torch.int32,
+        device="cuda",
     )
 
     output = torch.empty_like(query)
@@ -84,15 +91,18 @@ def benchmark_decode_attention(
         seq_threshold_3D = num_seqs
         segm_output = torch.empty(
             (num_seqs, num_query_heads, actual_splits, head_size_padded),
-            dtype=torch.float32, device="cuda",
+            dtype=torch.float32,
+            device="cuda",
         )
         segm_max = torch.empty(
             (num_seqs, num_query_heads, actual_splits),
-            dtype=torch.float32, device="cuda",
+            dtype=torch.float32,
+            device="cuda",
         )
         segm_expsum = torch.empty(
             (num_seqs, num_query_heads, actual_splits),
-            dtype=torch.float32, device="cuda",
+            dtype=torch.float32,
+            device="cuda",
         )
 
     def run_once():
@@ -124,15 +134,15 @@ def benchmark_decode_attention(
     # Warmup
     for _ in range(num_warmup):
         run_once()
-    torch.cuda.synchronize()
+    torch.accelerator.synchronize()
 
     # Benchmark
     latencies = []
     for _ in range(num_iters):
-        torch.cuda.synchronize()
+        torch.accelerator.synchronize()
         start = time.perf_counter()
         run_once()
-        torch.cuda.synchronize()
+        torch.accelerator.synchronize()
         end = time.perf_counter()
         latencies.append((end - start) * 1e6)  # us
 
@@ -141,9 +151,7 @@ def benchmark_decode_attention(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Benchmark Flash-Decoding Split-K"
-    )
+    parser = argparse.ArgumentParser(description="Benchmark Flash-Decoding Split-K")
     parser.add_argument(
         "--seq-lens",
         type=int,
@@ -159,23 +167,33 @@ def main():
         help="Batch sizes to benchmark",
     )
     parser.add_argument(
-        "--num-query-heads", type=int, default=8,
+        "--num-query-heads",
+        type=int,
+        default=8,
         help="Number of query heads",
     )
     parser.add_argument(
-        "--num-kv-heads", type=int, default=2,
+        "--num-kv-heads",
+        type=int,
+        default=2,
         help="Number of KV heads",
     )
     parser.add_argument(
-        "--head-size", type=int, default=128,
+        "--head-size",
+        type=int,
+        default=128,
         help="Head dimension",
     )
     parser.add_argument(
-        "--block-size", type=int, default=16,
+        "--block-size",
+        type=int,
+        default=16,
         help="KV cache block size",
     )
     parser.add_argument(
-        "--num-iters", type=int, default=100,
+        "--num-iters",
+        type=int,
+        default=100,
         help="Number of benchmark iterations",
     )
     args = parser.parse_args()
@@ -183,8 +201,10 @@ def main():
     print("=" * 90)
     print("Flash-Decoding Split-K Benchmark")
     print("=" * 90)
-    print(f"Config: {args.num_query_heads} Q heads, {args.num_kv_heads} KV "
-          f"heads, head_size={args.head_size}, block_size={args.block_size}")
+    print(
+        f"Config: {args.num_query_heads} Q heads, {args.num_kv_heads} KV "
+        f"heads, head_size={args.head_size}, block_size={args.block_size}"
+    )
     print(f"Iterations: {args.num_iters}")
     print()
 
@@ -198,8 +218,10 @@ def main():
             f"{'Splits':>6} │ {'Speedup vs 2D':>14} │ "
             f"{'Speedup vs F8':>14}"
         )
-        print(f"{'─' * 10}─┼─{'─' * 10}─┼─{'─' * 12}─┼─{'─' * 14}─┼─"
-              f"{'─' * 6}─┼─{'─' * 14}─┼─{'─' * 14}")
+        print(
+            f"{'─' * 10}─┼─{'─' * 10}─┼─{'─' * 12}─┼─{'─' * 14}─┼─"
+            f"{'─' * 6}─┼─{'─' * 14}─┼─{'─' * 14}"
+        )
 
         for seq_len in args.seq_lens:
             # Compute adaptive split count
@@ -265,8 +287,10 @@ def main():
     print(f"\n{'=' * 90}")
     print("Flash-Decoding Split Schedule (batch=1)")
     print(f"{'=' * 90}")
-    print(f"{'Seq Len':>10} │ {'KV Heads=2':>12} │ {'KV Heads=4':>12} │ "
-          f"{'KV Heads=8':>12}")
+    print(
+        f"{'Seq Len':>10} │ {'KV Heads=2':>12} │ {'KV Heads=4':>12} │ "
+        f"{'KV Heads=8':>12}"
+    )
     print(f"{'─' * 10}─┼─{'─' * 12}─┼─{'─' * 12}─┼─{'─' * 12}")
     for seq_len in [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768]:
         splits = []
@@ -278,10 +302,7 @@ def main():
                 tile_size=32,
             )
             splits.append(s)
-        print(
-            f"{seq_len:>10} │ {splits[0]:>12} │ {splits[1]:>12} │ "
-            f"{splits[2]:>12}"
-        )
+        print(f"{seq_len:>10} │ {splits[0]:>12} │ {splits[1]:>12} │ {splits[2]:>12}")
 
 
 if __name__ == "__main__":

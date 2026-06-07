@@ -8,22 +8,22 @@ Verifies VAL-TRITON-002:
     bitshift+mask, no global-mem hop).
   - Group-size {32, 128} correctness against an FP32 PyTorch reference.
 """
+
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 import pytest
+import regex as re
 import torch
 
 from vllm.platforms import current_platform
 
 
 def _kernel_source() -> str:
-    return (
-        Path("vllm/model_executor/kernels/linear/scaled_mm/mi100_w4a16.py")
-        .read_text()
-    )
+    return Path(
+        "vllm/model_executor/kernels/linear/scaled_mm/mi100_w4a16.py"
+    ).read_text()
 
 
 def test_module_exists_with_register_unpack_pattern():
@@ -46,9 +46,9 @@ def test_module_exists_with_register_unpack_pattern():
 
 
 def _pytorch_w4a16_reference(
-    a: torch.Tensor,        # [M, K] fp16
-    b_packed: torch.Tensor, # [K, N//8] int32
-    scales: torch.Tensor,   # [K//G, N] fp16
+    a: torch.Tensor,  # [M, K] fp16
+    b_packed: torch.Tensor,  # [K, N//8] int32
+    scales: torch.Tensor,  # [K//G, N] fp16
     group_size: int,
     zp_bias: int = 8,
 ) -> torch.Tensor:
@@ -58,9 +58,7 @@ def _pytorch_w4a16_reference(
 
     shifts = torch.arange(8, device=b_packed.device, dtype=torch.int32) * 4
     # [K, N//8, 8] -> [K, N]
-    nibbles = ((b_packed.unsqueeze(-1) >> shifts) & 0xF).reshape(K, N).to(
-        torch.int32
-    )
+    nibbles = ((b_packed.unsqueeze(-1) >> shifts) & 0xF).reshape(K, N).to(torch.int32)
     nibbles_minus_z = nibbles - zp_bias
     # Broadcast scales [K//G, N] -> [K, N] by repeating each group.
     scales_full = scales.repeat_interleave(group_size, dim=0)
@@ -90,16 +88,19 @@ def test_groupwise_unpack(group_size: int):
     from vllm.model_executor.kernels.linear.scaled_mm.mi100_w4a16 import (
         mi100_w4a16_gemm,
     )
+
     M, K, N = 16, 256, 64
     torch.manual_seed(group_size)
-    a = (torch.randn((M, K), device="cuda", dtype=torch.float16) * 0.1)
+    a = torch.randn((M, K), device="cuda", dtype=torch.float16) * 0.1
     b_packed = _make_packed_b(K, N, seed=group_size)
-    scales = (
-        0.01 * torch.rand((K // group_size, N), device="cuda")
-    ).to(torch.float16)
+    scales = (0.01 * torch.rand((K // group_size, N), device="cuda")).to(torch.float16)
 
     out = mi100_w4a16_gemm(
-        a, b_packed, scales, qzeros=None, group_size=group_size,
+        a,
+        b_packed,
+        scales,
+        qzeros=None,
+        group_size=group_size,
         zp_bias=8,
     )
     ref = _pytorch_w4a16_reference(a, b_packed, scales, group_size, zp_bias=8)

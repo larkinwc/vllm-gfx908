@@ -42,7 +42,7 @@ shows `Using ROCM_CK_FA backend (selected via --attention-backend)` (see
 **Symptom.** Serving `/models/Qwen3.5-9B-w8a8` crashed during multimodal
 processor construction:
 
-```
+```text
 TypeError: Received a CachedPreTrainedTokenizerFast for argument tokenizer,
 but a ('Qwen2Tokenizer', 'Qwen2TokenizerFast') was expected.
 ```
@@ -61,6 +61,7 @@ the *vendored* Step3 processors) enforces a strict
 the generic class.
 
 Upstream does not hit this because:
+
 - it does not carry `qwen3_5` in the override set, and
 - its own override entries (`step3_vl`, `step3p7`) use vLLM-vendored
   processors that do not do the strict transformers isinstance check.

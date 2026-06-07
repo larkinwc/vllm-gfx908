@@ -2,7 +2,7 @@
 
 ## Installation
 
-TurboQuant is installed from https://github.com/0xSero/turboquant at `/opt/turboquant`.
+TurboQuant is installed from <https://github.com/0xSero/turboquant> at `/opt/turboquant`.
 
 ```bash
 # Install (after ensuring PyTorch ROCm is present)
@@ -58,6 +58,7 @@ hooks = install_turboquant_hooks(
 ```
 
 Integration files:
+
 - `turboquant/vllm_attn_backend.py` - Legacy API shim
 - `turboquant/integration/vllm.py` - New modular integration
 
@@ -84,18 +85,22 @@ If Triton kernels fail, TurboQuant has a pure-PyTorch fallback path in `score.py
 **BLOCKED**: TurboQuant's integration layer is incompatible with vLLM v0.18.1's multi-process architecture.
 
 ### Root Cause
+
 - vLLM v0.18.1 uses separate OS processes for GPU workers (`Worker_TP*`)
 - TurboQuant's `install_hooks()` requires direct access to `GPUModelRunner` in the same process
 - Worker processes don't inherit monkey-patches from the main process
 - `collective_rpc` can send functions but patches don't persist across requests
 
 ### Attempted Approaches
+
 1. **Direct LLM class with hooks**: Engine initialization hangs during profile_run
 2. **collective_rpc hook installation**: Hooks install but don't persist
 3. **enable_no_alloc() early patching**: Workers spawn fresh processes without patches
 
 ### Resolution
+
 TurboQuant integration requires either:
+
 - vLLM adding official extension hooks for attention backends
 - TurboQuant updating for vLLM v0.18.x architecture
 - Custom vLLM fork (not recommended for production)
@@ -132,11 +137,13 @@ The core TurboQuant technology (Triton kernels, quantization, compression) works
 4. No IPC mechanism exists for method patching across processes
 
 **Recommendations for future work:**
+
 - Wait for vLLM to add official attention backend extension hooks
 - Wait for TurboQuant to update for vLLM v0.18.x architecture
 - Consider custom vLLM fork (not recommended for production)
 
 **Alternative optimizations confirmed working on MI100:**
+
 - FULL_DECODE_ONLY HIP graph mode: +68% TPOT improvement
 - Prefix caching: TTFT reduction on cache hits
 - MTP speculative decoding: Works with --enforce-eager (not compatible with graph mode)

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Aggregate M4 W8A8 grid results into a markdown table.
 
 Compares the M4 W8A8 W8A8 path under two settings:
@@ -17,6 +18,7 @@ verdict).
 Usage:
     /opt/vllm-env/bin/python3 scripts/mi100/aggregate_m4.py > _m4_grid.md
 """
+
 from __future__ import annotations
 
 import json
@@ -33,18 +35,18 @@ W8A8_CELLS = [
 ROOTS = {
     "M3-auto": Path("/root/bench-int8-w4a16/m3/w8a8/autotune"),
     "M3-heur": Path("/root/bench-int8-w4a16/m3/w8a8/heuristic"),
-    "M4-CK":   Path("/root/bench-int8-w4a16/m4/w8a8/ck"),
+    "M4-CK": Path("/root/bench-int8-w4a16/m4/w8a8/ck"),
     "M4-noCk": Path("/root/bench-int8-w4a16/m4/w8a8/noCk"),
 }
 
 # (key, label, direction)
 METRICS = [
-    ("output_throughput_toks_s", "tput",      "higher_better"),
-    ("request_throughput_req_s", "req_tput",  "higher_better"),
-    ("mean_ttft_ms",             "mean_ttft", "lower_better"),
-    ("p99_ttft_ms",              "p99_ttft",  "lower_better"),
-    ("mean_tpot_ms",             "mean_tpot", "lower_better"),
-    ("p99_tpot_ms",              "p99_tpot",  "lower_better"),
+    ("output_throughput_toks_s", "tput", "higher_better"),
+    ("request_throughput_req_s", "req_tput", "higher_better"),
+    ("mean_ttft_ms", "mean_ttft", "lower_better"),
+    ("p99_ttft_ms", "p99_ttft", "lower_better"),
+    ("mean_tpot_ms", "mean_tpot", "lower_better"),
+    ("p99_tpot_ms", "p99_tpot", "lower_better"),
 ]
 
 
@@ -70,13 +72,11 @@ def fmt_delta(d: float, direction: str, threshold: float = 3.0) -> str:
         return "—"
     sign = "+" if d > 0 else ""
     s = f"{sign}{d:.2f}%"
-    is_imp = (
-        (direction == "higher_better" and d >= threshold)
-        or (direction == "lower_better" and d <= -threshold)
+    is_imp = (direction == "higher_better" and d >= threshold) or (
+        direction == "lower_better" and d <= -threshold
     )
-    is_reg = (
-        (direction == "higher_better" and d <= -1.0)
-        or (direction == "lower_better" and d >= 1.0)
+    is_reg = (direction == "higher_better" and d <= -1.0) or (
+        direction == "lower_better" and d >= 1.0
     )
     if is_imp:
         return f"**{s}**"
@@ -111,9 +111,7 @@ def write_grid(out: list[str]) -> dict:
         "| Cell | Workload | Metric | M3-auto | M3-heur | M4-noCk | "
         "M4-CK | Δ noCk→CK | Δ M3-auto→CK (**gate**) | Δ M3-best→CK |"
     )
-    out.append(
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"
-    )
+    out.append("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
 
     n_pareto_gate = 0
     n_reg5_gate = 0
@@ -160,13 +158,11 @@ def write_grid(out: list[str]) -> dict:
                 f"{fmt_delta(d_b_c, direction)} |"
             )
 
-            is_imp = (
-                (direction == "higher_better" and d_a_c >= 3.0)
-                or (direction == "lower_better" and d_a_c <= -3.0)
+            is_imp = (direction == "higher_better" and d_a_c >= 3.0) or (
+                direction == "lower_better" and d_a_c <= -3.0
             )
-            is_reg5 = (
-                (direction == "higher_better" and d_a_c <= -5.0)
-                or (direction == "lower_better" and d_a_c >= 5.0)
+            is_reg5 = (direction == "higher_better" and d_a_c <= -5.0) or (
+                direction == "lower_better" and d_a_c >= 5.0
             )
             if is_imp:
                 n_pareto_gate += 1
@@ -178,7 +174,7 @@ def write_grid(out: list[str]) -> dict:
             ("M3-auto", m3a["output_throughput_toks_s"]),
             ("M3-heur", m3h["output_throughput_toks_s"]),
             ("M4-noCk", m4n["output_throughput_toks_s"]),
-            ("M4-CK",   m4c["output_throughput_toks_s"]),
+            ("M4-CK", m4c["output_throughput_toks_s"]),
             key=lambda x: x[1],
         )
         cell_winners[f"{cell_id}_{wl}"] = winner_throughput[0]
@@ -197,9 +193,7 @@ def write_grid(out: list[str]) -> dict:
         f"**Pareto bar (≥3% gain M3-auto → M4-CK on any metric):** "
         f"{n_pareto_gate} metric(s)"
     )
-    out.append(
-        f"**>5% regressions (M3-auto → M4-CK):** {n_reg5_gate} metric(s)"
-    )
+    out.append(f"**>5% regressions (M3-auto → M4-CK):** {n_reg5_gate} metric(s)")
     out.append("")
     out.append(
         f"**Throughput geomean M4-CK / M3-auto:** "
@@ -234,12 +228,12 @@ def write_perplexity(out: list[str]) -> None:
     out.append("| Run | Perplexity | Δ vs M1-rebaseline |")
     out.append("| --- | ---: | ---: |")
     files = [
-        ("M1-rebaseline (W8A8 reference)",
-         Path("/root/bench-int8-w4a16/m1-rebaseline/ppl_w8a8_m1rb.json")),
-        ("M3-autotune W8A8",
-         Path("/root/bench-int8-w4a16/m3/ppl_w8a8_m3.json")),
-        ("M4-CK W8A8",
-         Path("/root/bench-int8-w4a16/m4/ppl_w8a8_m4_ck.json")),
+        (
+            "M1-rebaseline (W8A8 reference)",
+            Path("/root/bench-int8-w4a16/m1-rebaseline/ppl_w8a8_m1rb.json"),
+        ),
+        ("M3-autotune W8A8", Path("/root/bench-int8-w4a16/m3/ppl_w8a8_m3.json")),
+        ("M4-CK W8A8", Path("/root/bench-int8-w4a16/m4/ppl_w8a8_m4_ck.json")),
     ]
     ref = None
     for label, p in files:
@@ -297,16 +291,10 @@ def main() -> int:
     )
     out.append("")
     out.append("```")
-    out.append(
-        "# CK path (default, CK > hipBLASLt > Triton)"
-    )
-    out.append(
-        "NUM_PROMPTS=200 scripts/mi100/run_grid.sh m4-w8a8-ck w8a8_"
-    )
+    out.append("# CK path (default, CK > hipBLASLt > Triton)")
+    out.append("NUM_PROMPTS=200 scripts/mi100/run_grid.sh m4-w8a8-ck w8a8_")
     out.append("# noCk path (VLLM_DISABLE_CK=1, hipBLASLt > Triton)")
-    out.append(
-        "NUM_PROMPTS=200 scripts/mi100/run_grid.sh m4-w8a8-noCk w8a8_"
-    )
+    out.append("NUM_PROMPTS=200 scripts/mi100/run_grid.sh m4-w8a8-noCk w8a8_")
     out.append("```")
     out.append("")
 
@@ -342,23 +330,13 @@ def main() -> int:
     out.append("")
     out.append("## Files")
     out.append("")
+    out.append("- M4-CK cells: `/root/bench-int8-w4a16/m4/w8a8/ck/{synthetic,coding}/`")
     out.append(
-        "- M4-CK cells: "
-        "`/root/bench-int8-w4a16/m4/w8a8/ck/{synthetic,coding}/`"
+        "- M4-noCk cells: `/root/bench-int8-w4a16/m4/w8a8/noCk/{synthetic,coding}/`"
     )
-    out.append(
-        "- M4-noCk cells: "
-        "`/root/bench-int8-w4a16/m4/w8a8/noCk/{synthetic,coding}/`"
-    )
-    out.append(
-        "- Perplexity: `/root/bench-int8-w4a16/m4/ppl_w8a8_m4_ck.json`"
-    )
-    out.append(
-        "- TP=4 startup: `/root/bench-int8-w4a16/m4/tp4_w8a8_startup.json`"
-    )
-    out.append(
-        "- Pareto exceptions: `/root/bench-int8-w4a16/m4/pareto_exceptions.md`"
-    )
+    out.append("- Perplexity: `/root/bench-int8-w4a16/m4/ppl_w8a8_m4_ck.json`")
+    out.append("- TP=4 startup: `/root/bench-int8-w4a16/m4/tp4_w8a8_startup.json`")
+    out.append("- Pareto exceptions: `/root/bench-int8-w4a16/m4/pareto_exceptions.md`")
     out.append("")
 
     print("\n".join(out))

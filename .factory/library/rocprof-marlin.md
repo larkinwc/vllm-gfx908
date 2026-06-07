@@ -36,6 +36,7 @@ FETCH_SIZE / WRITE_SIZE, KB), reading the raw counter-collection CSVs directly.
 | distinct kernels | **4** | **14** | +10 helper kernels |
 
 Raw CSVs:
+
 - marlin: `/root/bench-w4a16/m3/rocprof_marlin/pmc_offline/pmc_1/aimeme-MU72-SU0-00/885420_counter_collection.csv`
 - legacy: `/root/bench-w4a16/m3/rocprof_legacy_offline/pmc_offline/aimeme-MU72-SU0-00/1497237_counter_collection.csv`
 - aggregator: `/root/agg_rocprof.py`

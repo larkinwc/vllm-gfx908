@@ -21,7 +21,7 @@ Companion to `BENCH_INT8_W4A16_M2.md`. M3 lands the custom Triton W8A8 + W4A16 k
 
 ## Reproduction
 
-```
+```text
 # Autotune configs already in vllm/model_executor/kernels/configs/gfx908/
 scripts/mi100/run_grid.sh m3-w8a8-autotune w8a8_
 scripts/mi100/run_grid.sh m3-w8a8-heuristic w8a8_
@@ -31,8 +31,8 @@ scripts/mi100/run_grid.sh m3-w4a16-generic w4a16_
 
 **Triage levers if M3 regresses:**
 
-- W8A8: `VLLM_MI100_DISABLE_AUTOTUNE_CONFIG=1` reverts to the heuristic fallback path.
-- W4A16: `VLLM_DISABLE_MI100_W4A16=1` reverts to the generic Triton W4A16 path.
+* W8A8: `VLLM_MI100_DISABLE_AUTOTUNE_CONFIG=1` reverts to the heuristic fallback path.
+* W4A16: `VLLM_DISABLE_MI100_W4A16=1` reverts to the generic Triton W4A16 path.
 
 ## W8A8: M3-autotune vs M1-rebaseline vs M3-heuristic
 
@@ -208,14 +208,13 @@ Two-way M3 comparison: M3 with the new `mi100_w4a16` Triton kernel (autotune con
 
 ## Headline
 
-- W8A8 M3-autotune-vs-M1rb: 1 metric(s) ≥ 3% gain; 20 metric(s) regress > 5%.
-- W4A16 mi100-vs-generic: 5 metric(s) ≥ 3% gain.
+* W8A8 M3-autotune-vs-M1rb: 1 metric(s) ≥ 3% gain; 20 metric(s) regress > 5%.
+* W4A16 mi100-vs-generic: 5 metric(s) ≥ 3% gain.
 
 ## Files
 
-- W8A8 autotune cells: `/root/bench-int8-w4a16/m3/w8a8/autotune/{synthetic,coding}/`
-- W8A8 heuristic cells: `/root/bench-int8-w4a16/m3/w8a8/heuristic/{synthetic,coding}/`
-- W4A16 mi100 cells: `/root/bench-int8-w4a16/m3/w4a16/mi100/{synthetic,coding}/`
-- W4A16 generic cells: `/root/bench-int8-w4a16/m3/w4a16/generic/{synthetic,coding}/`
-- Pareto exceptions: `/root/bench-int8-w4a16/m3/pareto_exceptions.md`
-
+* W8A8 autotune cells: `/root/bench-int8-w4a16/m3/w8a8/autotune/{synthetic,coding}/`
+* W8A8 heuristic cells: `/root/bench-int8-w4a16/m3/w8a8/heuristic/{synthetic,coding}/`
+* W4A16 mi100 cells: `/root/bench-int8-w4a16/m3/w4a16/mi100/{synthetic,coding}/`
+* W4A16 generic cells: `/root/bench-int8-w4a16/m3/w4a16/generic/{synthetic,coding}/`
+* Pareto exceptions: `/root/bench-int8-w4a16/m3/pareto_exceptions.md`

@@ -16,7 +16,7 @@ against the wrong code:
 
 ## Before
 
-```
+```text
 MAPPING: {'vllm': '/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/fuzzy-hornets-see-szfl4/vllm'}
 direct_url.json: file:///home/aimeme/.../fuzzy-hornets-see-szfl4
 
@@ -55,7 +55,7 @@ vllm._rocm_C  -> .../fuzzy-hornets-see-szfl4/vllm/_rocm_C.abi3.so
 
 ## After
 
-```
+```text
 MAPPING: {'vllm': '/home/aimeme/Desktop/vllm-gfx908/.emdash/worktrees/vllm-gfx908/emdash/loose-rats-clean-phm2k/vllm'}
 direct_url.json: file:///home/aimeme/.../loose-rats-clean-phm2k
 

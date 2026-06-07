@@ -218,11 +218,11 @@ stock constants) already produces.
 > *"`kernel_unified_attention` — M4 mean μs/inv: 941.896, M1 mean μs/inv: 941.310,
 > Δ mean: -0.06 %. Mean launch-grid volume: M4 119 707.5, M1 119 707.5, Δ grid: 0.00 %"*
 > — `w8a8_tp1_c1_synthetic`, the M1-winner cell.
-
+>
 > *"`kernel_unified_attention` — M4 mean μs/inv: 1 199.833, M1 mean μs/inv: 1 199.459,
 > Δ mean: -0.03 %. Mean launch-grid volume: M4 91 301.9, M1 91 301.9, Δ grid: 0.00 %"*
 > — `w8a8_tp1_c4_coding`, the cell with the worst p99_ttft regression (+26.75 %).
-
+>
 > *"M1/M4 unique (Workgroup_Size_X, VGPR_Count, SGPR_Count, Grid_Size_X,
 > Grid_Size_Y) tuples are identical between traces … the winners it returns for
 > the (quant=w8a8, head_dim=128, seq_len_bucket, num_seqs) buckets exercised by

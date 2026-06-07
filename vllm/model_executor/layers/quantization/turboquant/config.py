@@ -9,15 +9,15 @@ import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from vllm.config import ModelConfig
-
-logger = logging.getLogger(__name__)
-
 from vllm.model_executor.layers.quantization.turboquant.rotations import (
     ROTATION_HADAMARD,
     ROTATION_KINDS,
 )
+
+if TYPE_CHECKING:
+    from vllm.config import ModelConfig
+
+logger = logging.getLogger(__name__)
 
 # Named TQ presets: each maps to frozen config parameters.
 # key_quant_bits: 8 = FP8 keys, 3-4 = MSE (Lloyd-Max) quantized keys.

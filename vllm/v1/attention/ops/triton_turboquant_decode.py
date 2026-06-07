@@ -651,7 +651,7 @@ def triton_turboquant_decode_attention(
         # for every token, the stage2 output equals out_orig @ PiT. Recover the
         # original-space output with the inverse rotation out @ Pi (= out @ PiT.T).
         # Output rows = B×Hq is small at decode, so the dense GEMM is cheapest.
-        inv = Pi if Pi is not None else PiT.T.contiguous()
+        inv = Pi
         rotated = (output.float() @ inv).to(output.dtype)
         output.copy_(rotated)
 

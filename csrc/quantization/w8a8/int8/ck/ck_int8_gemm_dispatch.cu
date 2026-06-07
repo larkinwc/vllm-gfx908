@@ -82,18 +82,17 @@ void apply_scales(at::Tensor& acc_int32, const at::Tensor& scale_a,
                        : nullptr;
   hipLaunchKernelGGL(apply_scales_kernel, dim3(blocks), dim3(threads), 0,
                      at::cuda::getCurrentCUDAStream(),
-                     acc_int32.data_ptr<int32_t>(),
-                     scale_a.data_ptr<float>(), scale_b.data_ptr<float>(),
-                     bias_ptr, reinterpret_cast<__half*>(out_fp16.data_ptr()),
-                     M, N);
+                     acc_int32.data_ptr<int32_t>(), scale_a.data_ptr<float>(),
+                     scale_b.data_ptr<float>(), bias_ptr,
+                     reinterpret_cast<__half*>(out_fp16.data_ptr()), M, N);
 }
 
 }  // namespace
 
-void register_instance(int64_t m_min, int64_t m_max, int64_t n, int64_t k,
-                       int64_t tp_rank,
-                       std::function<bool(const at::Tensor&, const at::Tensor&,
-                                          at::Tensor&)> run) {
+void register_instance(
+    int64_t m_min, int64_t m_max, int64_t n, int64_t k, int64_t tp_rank,
+    std::function<bool(const at::Tensor&, const at::Tensor&, at::Tensor&)>
+        run) {
   std::lock_guard<std::mutex> g(registry_mutex());
   registry().push_back({m_min, m_max, n, k, tp_rank, std::move(run)});
 }
@@ -144,8 +143,7 @@ torch::Tensor ck_int8_gemm(const torch::Tensor& a, const torch::Tensor& b,
       }
     }
   }
-  TORCH_CHECK(picked,
-              "No CK INT8 instance registered for (M=", M, ", N=", N,
+  TORCH_CHECK(picked, "No CK INT8 instance registered for (M=", M, ", N=", N,
               ", K=", K, ", tp_rank=", tp_rank,
               "). Caller should fall back to hipBLASLt/Triton.");
 

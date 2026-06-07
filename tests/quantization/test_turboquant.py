@@ -851,23 +851,40 @@ class TestRotorQuantRoundTrip:
         slot_mapping = torch.tensor([0], device=device, dtype=torch.int32)
 
         triton_turboquant_store(
-            key, value, kv_cache, slot_mapping, PiT, midpoints,
-            mse_bits=cfg.key_mse_bits, key_packed_size=cfg.key_packed_size,
-            value_quant_bits=cfg.effective_value_quant_bits, key_fp8=cfg.key_fp8,
-            rot_params=rot_params, value_rotation=cfg.value_rotation,
+            key,
+            value,
+            kv_cache,
+            slot_mapping,
+            PiT,
+            midpoints,
+            mse_bits=cfg.key_mse_bits,
+            key_packed_size=cfg.key_packed_size,
+            value_quant_bits=cfg.effective_value_quant_bits,
+            key_fp8=cfg.key_fp8,
+            rot_params=rot_params,
+            value_rotation=cfg.value_rotation,
         )
 
         query = key.expand(B, Hq, D).contiguous().to(torch.float16)
         block_table = torch.tensor([[0]], device=device, dtype=torch.int32)
         seq_lens = torch.tensor([1], device=device, dtype=torch.int32)
         output = triton_turboquant_decode_attention(
-            query=query, kv_cache=kv_cache, block_table=block_table,
-            seq_lens=seq_lens, Pi=Pi, centroids=centroids,
-            scale=1.0 / math.sqrt(D), mse_bits=cfg.key_mse_bits,
+            query=query,
+            kv_cache=kv_cache,
+            block_table=block_table,
+            seq_lens=seq_lens,
+            Pi=Pi,
+            centroids=centroids,
+            scale=1.0 / math.sqrt(D),
+            mse_bits=cfg.key_mse_bits,
             key_packed_size=cfg.key_packed_size,
-            value_quant_bits=cfg.effective_value_quant_bits, key_fp8=cfg.key_fp8,
-            norm_correction=cfg.norm_correction, PiT=PiT, rot_params=rot_params,
-            value_rotation=cfg.value_rotation, max_num_kv_splits=4,
+            value_quant_bits=cfg.effective_value_quant_bits,
+            key_fp8=cfg.key_fp8,
+            norm_correction=cfg.norm_correction,
+            PiT=PiT,
+            rot_params=rot_params,
+            value_rotation=cfg.value_rotation,
+            max_num_kv_splits=4,
         )
 
         out_fp32 = output.float()
@@ -912,12 +929,22 @@ class TestRotorQuantRoundTrip:
 
         def run(use_fused):
             kv = torch.zeros(
-                num_blocks, block_size, Hk, cfg.slot_size_aligned,
-                device=device, dtype=torch.uint8,
+                num_blocks,
+                block_size,
+                Hk,
+                cfg.slot_size_aligned,
+                device=device,
+                dtype=torch.uint8,
             )
             triton_turboquant_store(
-                key, value, kv, slot_mapping, PiT, midpoints,
-                mse_bits=cfg.key_mse_bits, key_packed_size=cfg.key_packed_size,
+                key,
+                value,
+                kv,
+                slot_mapping,
+                PiT,
+                midpoints,
+                mse_bits=cfg.key_mse_bits,
+                key_packed_size=cfg.key_packed_size,
                 value_quant_bits=cfg.effective_value_quant_bits,
                 key_fp8=cfg.key_fp8,
                 rot_params=rot_params if use_fused else None,

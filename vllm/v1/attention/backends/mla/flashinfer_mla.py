@@ -22,7 +22,6 @@ from vllm.v1.attention.backend import (
     AttentionLayer,
     AttentionType,
     MultipleOf,
-    is_quantized_kv_cache,  # noqa: F811
 )
 from vllm.v1.attention.backends.utils import KVCacheLayoutType
 

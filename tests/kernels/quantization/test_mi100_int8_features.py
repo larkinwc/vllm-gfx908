@@ -8,22 +8,21 @@ Verifies VAL-TRITON-001:
   - Fuses dequant * scales + bias -> fp16 in the store epilogue (no
     separate dequant launch).
 """
+
 from __future__ import annotations
 
 import inspect
-import re
 from pathlib import Path
 
 import pytest
+import regex as re
 import torch
 
 from vllm.platforms import current_platform
 
 
 def _kernel_source() -> str:
-    path = Path(
-        "vllm/model_executor/kernels/linear/scaled_mm/mi100_int8.py"
-    )
+    path = Path("vllm/model_executor/kernels/linear/scaled_mm/mi100_int8.py")
     return path.read_text()
 
 
@@ -63,10 +62,16 @@ def test_kernel_signature_and_epilogue():
     from vllm.model_executor.kernels.linear.scaled_mm.mi100_int8 import (
         mi100_int8_scaled_mm,
     )
+
     sig = inspect.signature(mi100_int8_scaled_mm)
     params = list(sig.parameters)
     assert params[:6] == [
-        "input", "weight", "scale_a", "scale_b", "out_dtype", "bias"
+        "input",
+        "weight",
+        "scale_a",
+        "scale_b",
+        "out_dtype",
+        "bias",
     ], f"unexpected signature: {params}"
 
 
@@ -91,9 +96,7 @@ def test_w8a8_per_channel_per_token_runs_and_matches_reference():
 
     out = mi100_int8_scaled_mm(a, b, scale_a, scale_b, torch.float16, bias)
 
-    ref = (
-        scale_a * a.to(torch.float32) @ b.to(torch.float32)
-    ) * scale_b.T
+    ref = (scale_a * a.to(torch.float32) @ b.to(torch.float32)) * scale_b.T
     ref = ref + bias.to(torch.float32)
     ref = ref.to(torch.float16)
     torch.testing.assert_close(out, ref, atol=1e-2, rtol=5e-2)

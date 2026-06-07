@@ -412,7 +412,7 @@ with any cell that lands below 1.0× M3 best.
 
 ## Files added / modified
 
-```
+```text
 NEW  csrc/quantization/w8a8/int8/ck/CMakeLists.txt
 NEW  csrc/quantization/w8a8/int8/ck/ck_int8_gemm.h
 NEW  csrc/quantization/w8a8/int8/ck/ck_int8_gemm_dispatch.hip
@@ -624,7 +624,7 @@ default for these shapes):
 | `w8a8_tp1_c1_coding` | +2.18% | -29.32% | **-13.56%** | TP=1, prefill-heavy (M ∈ [16, 4096]); CK registered, dispatched, wins on every latency metric. |
 | `w8a8_tp1_c4_coding` | **+4.11%** | **-21.58%** | **-3.50%** | Headline coding-prefill cell: highest CK throughput uplift **and** p99_ttft improves vs M3-best (CK=1378 ms vs M3-heur=1428 ms). Mean prefill latency drops by 21.58%. |
 | `w8a8_tp4_c1_coding` | +2.14% | **-18.75%** | **-15.49%** | TP=4, c=1, prefill-heavy. Despite the TP=4 sharded shapes not being CK-registered, the unsharded prefill on the column-parallel out_proj path picks CK and wins on latency. |
-| `w8a8_tp4_c4_coding` | **+5.54%** | +5.06% | _+16.71%_ | Best CK lever on TP=4 on the throughput axis (+5.54% tput, +8.40% req_tput, -3.42% mean_tpot vs M3-best). Mean and p99 TTFT regress vs the M3-heur low-water mark — p99_ttft is the documented exception above (suspected `_get_tp_rank` dispatcher overhead). |
+| `w8a8_tp4_c4_coding` | **+5.54%** | +5.06% | *+16.71%* | Best CK lever on TP=4 on the throughput axis (+5.54% tput, +8.40% req_tput, -3.42% mean_tpot vs M3-best). Mean and p99 TTFT regress vs the M3-heur low-water mark — p99_ttft is the documented exception above (suspected `_get_tp_rank` dispatcher overhead). |
 
 Net per-cell `tput` winners across the 12 cells (post-rerun): 4× M4-CK,
 5× M4-noCk, 3× M3-heur. The CK wins concentrate on the prefill-heavy

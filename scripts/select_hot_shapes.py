@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 Pick the top 1-2 hot GEMM shapes per (regime, quant scheme) from the
 profile traces and write ``hot_shapes.json`` for downstream consumption
@@ -22,6 +23,7 @@ Usage:
         --top 2 --regimes tp1c1,tp4c4 \
         --out /root/bench-int8-w4a16/baseline/hot_shapes.json
 """
+
 from __future__ import annotations
 
 import argparse

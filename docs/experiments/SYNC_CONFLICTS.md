@@ -4,7 +4,8 @@
 **Sync branch:** `upstream-sync-2026-05-28`
 **Base (ours):** `3d9de886d` (`origin/mi100-fixes` HEAD at mission start)
 **Theirs:** `upstream/main` = `5b115bb8a33d72820075450ecefcd292607bfe57`
-  - "[Attention][AMD] Standardize kv layout to blocks first for AMD (#43660)"
+
+- "[Attention][AMD] Standardize kv layout to blocks first for AMD (#43660)"
 **Commits behind upstream/main:** 770
 
 ## Dry-run merge command
@@ -150,5 +151,3 @@ The following upstream feature areas arrive **passively** via the merge and are 
 | `vllm/model_executor/kernels/configs/gfx908/*.json` (26 files) | **ours, unchanged** | M1-F2 pinned Triton autotune JSONs byte-identical to pre-sync-baseline. |
 | `docker/entrypoints/test_vllm_nonroot_entrypoint.sh` (M1-F5 targeted fix) | **theirs + symmetric root-guard added** | upstream's case3 (unwritable HOME under root) fails identically to the case7 DAC-override condition; applied symmetric root-skip guard so the hook passes under our root build env without weakening non-root deployment coverage. |
 | All other auto-merged files | per audit table above | clean; MI100 marker counts unchanged vs baseline. |
-
-

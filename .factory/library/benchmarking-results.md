@@ -48,6 +48,7 @@ At c=1, TQ capture_only shows anomalous TTFT of 4107ms vs baseline 715ms (+475%)
 ## Result Files
 
 All located at `/root/benchmark-results/`:
+
 - `baseline_optimized_synthetic_c{1,2,4}_20260330.json` — baseline synthetic benchmarks
 - `tq_capture_only_graph_synthetic_c{1,2,4}_20260330.json` — TQ capture_only synthetic
 - `tq_hybrid_graph_synthetic_c{1,2,4}_20260330.json` — TQ hybrid synthetic
@@ -60,6 +61,7 @@ All located at `/root/benchmark-results/`:
 ## Prefix Caching + TQ Interaction
 
 Prefix caching still provides TTFT reduction with TQ active. Tested via `prefix_caching_test.json`:
+
 - First request TTFT: 15623ms (cold cache; note: unusually high, likely server warm-up artifact)
 - Second request TTFT: 138ms (cache hit)
 - TTFT reduction: 99.1%
@@ -67,6 +69,7 @@ Prefix caching still provides TTFT reduction with TQ active. Tested via `prefix_
 ## Production Recommendation
 
 **Use the optimized baseline** (FULL_DECODE_ONLY + prefix caching, no TQ):
+
 ```bash
 /root/launch-vllm-optimized.sh
 ```

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Evaluate perplexity of Qwen3.5-9B variants on wikitext-2.
 
 Computes per-token cross-entropy loss (perplexity = exp(loss))
@@ -132,7 +134,7 @@ def compute_perplexity_vllm(
 
     # Cleanup
     del llm
-    torch.cuda.empty_cache()
+    torch.accelerator.empty_cache()
     import gc
 
     gc.collect()

@@ -39,6 +39,7 @@ log, and the resulting "best config" gets persisted to:
 with full provenance (timestamp, vllm git SHA, ROCm version, hash of the
 kernel source file).
 """
+
 from __future__ import annotations
 
 import argparse
@@ -139,9 +140,7 @@ def _prune_w8a8(cfg: SweepConfig, M: int, N: int, K: int) -> str | None:
         return "block_n_gt_N"
     if cfg.BLOCK_K > K:
         return "block_k_gt_K"
-    if cfg.matrix_instr_nonkdim == 32 and (
-        cfg.BLOCK_M < 32 or cfg.BLOCK_N < 32
-    ):
+    if cfg.matrix_instr_nonkdim == 32 and (cfg.BLOCK_M < 32 or cfg.BLOCK_N < 32):
         return "nonkdim32_needs_>=32_tiles"
     return None
 
@@ -160,9 +159,7 @@ def _prune_w4a16(
         return f"lds_overflow_{a_bytes + b_bytes}B"
     if cfg.BLOCK_N > N:
         return "block_n_gt_N"
-    if cfg.matrix_instr_nonkdim == 32 and (
-        cfg.BLOCK_M < 32 or cfg.BLOCK_N < 32
-    ):
+    if cfg.matrix_instr_nonkdim == 32 and (cfg.BLOCK_M < 32 or cfg.BLOCK_N < 32):
         return "nonkdim32_needs_>=32_tiles"
     return None
 
@@ -172,6 +169,7 @@ def _next_pow2(x: int) -> int:
 
 
 # --------------------------- W8A8 path ---------------------------------------
+
 
 def _bench_w8a8_one_config(
     cfg: SweepConfig, M: int, N: int, K: int, trials: int
@@ -208,11 +206,21 @@ def _bench_w8a8_one_config(
 
     def _launch():
         mi100_int8_scaled_mm_kernel[grid](
-            a, b, sa, sb, out, None,
-            M, N, K,
-            a.stride(0), a.stride(1),
-            b.stride(0), b.stride(1),
-            out.stride(0), out.stride(1),
+            a,
+            b,
+            sa,
+            sb,
+            out,
+            None,
+            M,
+            N,
+            K,
+            a.stride(0),
+            a.stride(1),
+            b.stride(0),
+            b.stride(1),
+            out.stride(0),
+            out.stride(1),
             BLOCK_SIZE_M=cfg.BLOCK_M,
             BLOCK_SIZE_N=cfg.BLOCK_N,
             BLOCK_SIZE_K=cfg.BLOCK_K,
@@ -226,14 +234,14 @@ def _bench_w8a8_one_config(
     try:
         for _ in range(WARMUP_ITERS):
             _launch()
-        torch.cuda.synchronize()
+        torch.accelerator.synchronize()
         # Time `trials` runs and return the median in ms.
         timings: list[float] = []
         for _ in range(trials):
-            torch.cuda.synchronize()
+            torch.accelerator.synchronize()
             t0 = time.perf_counter()
             _launch()
-            torch.cuda.synchronize()
+            torch.accelerator.synchronize()
             timings.append((time.perf_counter() - t0) * 1000.0)
         timings.sort()
         return timings[len(timings) // 2], None
@@ -242,6 +250,7 @@ def _bench_w8a8_one_config(
 
 
 # --------------------------- W4A16 path --------------------------------------
+
 
 def _bench_w4a16_one_config(
     cfg: SweepConfig, M: int, N: int, K: int, group_size: int, trials: int
@@ -257,8 +266,7 @@ def _bench_w4a16_one_config(
     b_packed = torch.randint(
         0, 0x7FFFFFFF, (K, N // 8), dtype=torch.int32, device="cuda"
     )
-    scales = torch.rand((K // group_size, N), dtype=torch.float16,
-                        device="cuda") * 0.01
+    scales = torch.rand((K // group_size, N), dtype=torch.float16, device="cuda") * 0.01
     out = torch.empty((M, N), dtype=torch.float16, device="cuda")
     grid = (triton.cdiv(M, cfg.BLOCK_M), triton.cdiv(N, cfg.BLOCK_N))
 
@@ -274,11 +282,20 @@ def _bench_w4a16_one_config(
 
     def _launch():
         mi100_w4a16_gemm_kernel[grid](
-            a, b_packed, scales, b_packed, out,  # zeros_ptr=dummy when no zp
-            M, N, K,
-            a.stride(0), a.stride(1),
-            b_packed.stride(0), b_packed.stride(1),
-            out.stride(0), out.stride(1),
+            a,
+            b_packed,
+            scales,
+            b_packed,
+            out,  # zeros_ptr=dummy when no zp
+            M,
+            N,
+            K,
+            a.stride(0),
+            a.stride(1),
+            b_packed.stride(0),
+            b_packed.stride(1),
+            out.stride(0),
+            out.stride(1),
             group_size=group_size,
             HAS_ZP=False,
             ZP_BIAS=8,
@@ -292,13 +309,13 @@ def _bench_w4a16_one_config(
     try:
         for _ in range(WARMUP_ITERS):
             _launch()
-        torch.cuda.synchronize()
+        torch.accelerator.synchronize()
         timings: list[float] = []
         for _ in range(trials):
-            torch.cuda.synchronize()
+            torch.accelerator.synchronize()
             t0 = time.perf_counter()
             _launch()
-            torch.cuda.synchronize()
+            torch.accelerator.synchronize()
             timings.append((time.perf_counter() - t0) * 1000.0)
         timings.sort()
         return timings[len(timings) // 2], None
@@ -307,6 +324,7 @@ def _bench_w4a16_one_config(
 
 
 # --------------------------- Driver ------------------------------------------
+
 
 def _git_sha() -> str:
     try:
@@ -320,13 +338,9 @@ def _git_sha() -> str:
 
 def _kernel_source_sha(kernel: str) -> str:
     if kernel == "w8a8":
-        path = (
-            REPO / "vllm/model_executor/kernels/linear/scaled_mm/mi100_int8.py"
-        )
+        path = REPO / "vllm/model_executor/kernels/linear/scaled_mm/mi100_int8.py"
     elif kernel == "w4a16":
-        path = (
-            REPO / "vllm/model_executor/kernels/linear/scaled_mm/mi100_w4a16.py"
-        )
+        path = REPO / "vllm/model_executor/kernels/linear/scaled_mm/mi100_w4a16.py"
     else:
         return ""
     if not path.exists():
@@ -335,8 +349,15 @@ def _kernel_source_sha(kernel: str) -> str:
 
 
 def _persist_best(
-    kernel: str, M: int, N: int, K: int, group_size: int | None,
-    best_cfg: SweepConfig, best_ms: float, evaluated: int, pruned: int,
+    kernel: str,
+    M: int,
+    N: int,
+    K: int,
+    group_size: int | None,
+    best_cfg: SweepConfig,
+    best_ms: float,
+    evaluated: int,
+    pruned: int,
     out_dir: Path,
     cartesian_total: int = 0,
     legal_subset: int = 0,
@@ -358,7 +379,9 @@ def _persist_best(
         "schema_version": 1,
         "kernel": config_key,
         "shape": {
-            "M": M, "N": N, "K": K,
+            "M": M,
+            "N": N,
+            "K": K,
             "group_size": group_size,
         },
         "config": {
@@ -391,27 +414,35 @@ def _persist_best(
     return fpath
 
 
-def _shapes_for_kernel(kernel: str, hot_path: Path,
-                       extra: list[tuple[int, int, int, int | None]]
-                       ) -> list[tuple[int, int, int, int | None]]:
+def _shapes_for_kernel(
+    kernel: str, hot_path: Path, extra: list[tuple[int, int, int, int | None]]
+) -> list[tuple[int, int, int, int | None]]:
     """Return (M, N, K, group_size_or_None) tuples to tune."""
     if extra:
         return extra
     # Curated shapes for Qwen3.5-9B that matter on TP=1 and TP=4.
     # Hidden=4096, FFN=12288.
     # TP=1 prefill (M ~= 512), TP=4 prefill (M ~= 512), decode (M ~= 1).
-    qkv_tp1 = (4096, 10240)   # qkv
-    o_tp1 = (4096, 4096)      # o_proj
+    qkv_tp1 = (4096, 10240)  # qkv
+    o_tp1 = (4096, 4096)  # o_proj
     gate_up_tp1 = (4096, 24576)  # gate_up
     down_tp1 = (12288, 4096)  # down_proj
-    qkv_tp4 = (4096, 2560)    # qkv sharded by 4
-    o_tp4 = (1024, 4096)      # o_proj K sharded
+    qkv_tp4 = (4096, 2560)  # qkv sharded by 4
+    o_tp4 = (1024, 4096)  # o_proj K sharded
     gate_up_tp4 = (4096, 6144)
     down_tp4 = (3072, 4096)
 
-    layers = [qkv_tp1, o_tp1, gate_up_tp1, down_tp1,
-              qkv_tp4, o_tp4, gate_up_tp4, down_tp4]
-    Ms = [1, 32, 128, 512]    # decode + prefill regimes
+    layers = [
+        qkv_tp1,
+        o_tp1,
+        gate_up_tp1,
+        down_tp1,
+        qkv_tp4,
+        o_tp4,
+        gate_up_tp4,
+        down_tp4,
+    ]
+    Ms = [1, 32, 128, 512]  # decode + prefill regimes
 
     out: list[tuple[int, int, int, int | None]] = []
     for M in Ms:
@@ -433,15 +464,21 @@ def main() -> int:
     p.add_argument("--log-dir", default=str(DEFAULT_LOG))
     p.add_argument("--trials-per-config", type=int, default=TIMING_ITERS)
     p.add_argument(
-        "--max-configs", type=int, default=0,
+        "--max-configs",
+        type=int,
+        default=0,
         help="Debug: cap cartesian product (0 = full sweep).",
     )
     p.add_argument(
-        "--shape", action="append", default=[],
+        "--shape",
+        action="append",
+        default=[],
         help='Debug: tune one shape "M,N,K[,group]".',
     )
     p.add_argument(
-        "--max-shapes", type=int, default=0,
+        "--max-shapes",
+        type=int,
+        default=0,
         help="Debug: cap number of shapes processed (0 = all).",
     )
     args = p.parse_args()
@@ -455,9 +492,7 @@ def main() -> int:
     for raw in args.shape:
         parts = raw.split(",")
         if len(parts) == 3:
-            extra_shapes.append(
-                (int(parts[0]), int(parts[1]), int(parts[2]), None)
-            )
+            extra_shapes.append((int(parts[0]), int(parts[1]), int(parts[2]), None))
         elif len(parts) == 4:
             extra_shapes.append(
                 (int(parts[0]), int(parts[1]), int(parts[2]), int(parts[3]))
@@ -465,9 +500,7 @@ def main() -> int:
         else:
             raise SystemExit(f"--shape malformed: {raw}")
 
-    shapes = _shapes_for_kernel(
-        args.kernel, Path(args.shapes_json), extra_shapes
-    )
+    shapes = _shapes_for_kernel(args.kernel, Path(args.shapes_json), extra_shapes)
     if args.max_shapes > 0:
         shapes = shapes[: args.max_shapes]
 
@@ -509,18 +542,13 @@ def main() -> int:
                 reason = _prune_w4a16(cfg, M, N, K, group_size or 128)
             if reason is not None:
                 pruned += 1
-                log_fh.write(
-                    f"PRUNED {cfg.as_launch_kwargs()} reason={reason}\n"
-                )
+                log_fh.write(f"PRUNED {cfg.as_launch_kwargs()} reason={reason}\n")
                 continue
             if args.kernel == "w8a8":
-                ms, err = _bench_w8a8_one_config(
-                    cfg, M, N, K, args.trials_per_config
-                )
+                ms, err = _bench_w8a8_one_config(cfg, M, N, K, args.trials_per_config)
             else:
                 ms, err = _bench_w4a16_one_config(
-                    cfg, M, N, K,
-                    group_size or 128, args.trials_per_config
+                    cfg, M, N, K, group_size or 128, args.trials_per_config
                 )
             evaluated += 1
             row = {
@@ -556,12 +584,15 @@ def main() -> int:
         # different shape could legitimately use it.
         if args.kernel == "w8a8":
             hard_invariants = {
-                "lds_overflow", "nonkdim32_needs_>=32_tiles",
+                "lds_overflow",
+                "nonkdim32_needs_>=32_tiles",
             }
         else:
             hard_invariants = {
-                "block_k_gt_group", "block_n_not_multiple_of_8",
-                "lds_overflow", "nonkdim32_needs_>=32_tiles",
+                "block_k_gt_group",
+                "block_n_not_multiple_of_8",
+                "lds_overflow",
+                "nonkdim32_needs_>=32_tiles",
             }
         legal_subset = 0
         eliminated_by_hard_invariant = 0
@@ -576,28 +607,30 @@ def main() -> int:
             # Check whether this prune reason is a hard invariant
             # (would also eliminate the config for any other
             # shape) vs a shape-specific filter.
-            is_hard = any(
-                r.startswith(inv) for inv in hard_invariants
-            )
+            is_hard = any(r.startswith(inv) for inv in hard_invariants)
             if is_hard:
                 eliminated_by_hard_invariant += 1
             else:
                 legal_subset += 1
-        legal_pct = (
-            (evaluated / legal_subset) * 100.0 if legal_subset else 0.0
-        )
+        legal_pct = (evaluated / legal_subset) * 100.0 if legal_subset else 0.0
         logger.info(
             "best %s: %s @ %.4f ms",
-            prefix, best_cfg.as_launch_kwargs(), best_ms,
+            prefix,
+            best_cfg.as_launch_kwargs(),
+            best_ms,
         )
         logger.info(
             "  cartesian-coverage: evaluated %d/%d = %.1f%%",
-            evaluated, cart_total, evaluated_pct,
+            evaluated,
+            cart_total,
+            evaluated_pct,
         )
         logger.info(
             "  legal-coverage:     evaluated %d/%d = %.1f%% "
             "(eliminated by hard invariants: %d)",
-            evaluated, legal_subset, legal_pct,
+            evaluated,
+            legal_subset,
+            legal_pct,
             eliminated_by_hard_invariant,
         )
         log_fh.write(
@@ -609,8 +642,16 @@ def main() -> int:
         )
 
         out_path = _persist_best(
-            args.kernel, M, N, K, group_size,
-            best_cfg, best_ms, evaluated, pruned, out_dir,
+            args.kernel,
+            M,
+            N,
+            K,
+            group_size,
+            best_cfg,
+            best_ms,
+            evaluated,
+            pruned,
+            out_dir,
             cartesian_total=cart_total,
             legal_subset=legal_subset,
             eliminated_by_hard_invariant=eliminated_by_hard_invariant,
@@ -635,12 +676,8 @@ def main() -> int:
     # is verifiable without re-deriving numbers from per-shape JSONs.
     cart_total_global = len(_enumerate_configs())
     if summary_rows:
-        legal_avg = sum(r["legal_subset"] for r in summary_rows) / len(
-            summary_rows
-        )
-        cov_avg = sum(r["legal_coverage_pct"] for r in summary_rows) / len(
-            summary_rows
-        )
+        legal_avg = sum(r["legal_subset"] for r in summary_rows) / len(summary_rows)
+        cov_avg = sum(r["legal_coverage_pct"] for r in summary_rows) / len(summary_rows)
     else:
         legal_avg = 0.0
         cov_avg = 0.0
@@ -663,14 +700,19 @@ def main() -> int:
     }
 
     summary_path = log_dir / f"sweep_{args.kernel}_summary.json"
-    summary_path.write_text(json.dumps({
-        "kernel": args.kernel,
-        "shapes": summary_rows,
-        "cartesian_total": cart_total_global,
-        "coverage_summary": coverage_summary,
-        "trials_per_config": args.trials_per_config,
-        "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
-    }, indent=2))
+    summary_path.write_text(
+        json.dumps(
+            {
+                "kernel": args.kernel,
+                "shapes": summary_rows,
+                "cartesian_total": cart_total_global,
+                "coverage_summary": coverage_summary,
+                "trials_per_config": args.trials_per_config,
+                "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+            },
+            indent=2,
+        )
+    )
 
     logger.info("=" * 70)
     logger.info("Sweep coverage summary (kernel=%s):", args.kernel)
@@ -683,11 +725,14 @@ def main() -> int:
             shape_str,
             r["legal_subset"],
             r["evaluated"],
-            r["evaluated"], r["legal_subset"], r["legal_coverage_pct"],
+            r["evaluated"],
+            r["legal_subset"],
+            r["legal_coverage_pct"],
         )
     logger.info(
         "  average legal-coverage   = %.1f%% across %d shapes",
-        cov_avg, len(summary_rows),
+        cov_avg,
+        len(summary_rows),
     )
     logger.info("=" * 70)
     logger.info("summary written to %s", summary_path)

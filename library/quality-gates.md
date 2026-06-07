@@ -109,7 +109,7 @@ Needle@32768: 5/5 (gate PASS)
 
 ---
 
-# M1 Quality Gates — W4A16 AWQ-vs-GPTQ A/B (3-path comparison)
+## M1 Quality Gates — W4A16 AWQ-vs-GPTQ A/B (3-path comparison)
 
 **Feature**: M1-F4 (gate_summary.json synthesis)
 **Run date**: 2026-05-27

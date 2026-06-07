@@ -139,20 +139,16 @@ class GGUFModelLoader(BaseModelLoader):
             # block_sparse_moe.experts.X.{w1,w2,w3} naming
             for idx in range(config.num_hidden_layers):
                 gguf_to_hf_name_map[f"blk.{idx}.exp_probs_b.bias"] = (
-                    f"model.layers.{idx}.block_sparse_moe"
-                    f".e_score_correction_bias"
+                    f"model.layers.{idx}.block_sparse_moe.e_score_correction_bias"
                 )
                 gguf_to_hf_name_map[f"blk.{idx}.ffn_down_exps.weight"] = (
-                    f"model.layers.{idx}.block_sparse_moe"
-                    f".experts.0.w2.weight"
+                    f"model.layers.{idx}.block_sparse_moe.experts.0.w2.weight"
                 )
                 gguf_to_hf_name_map[f"blk.{idx}.ffn_gate_exps.weight"] = (
-                    f"model.layers.{idx}.block_sparse_moe"
-                    f".experts.0.w1.weight"
+                    f"model.layers.{idx}.block_sparse_moe.experts.0.w1.weight"
                 )
                 gguf_to_hf_name_map[f"blk.{idx}.ffn_up_exps.weight"] = (
-                    f"model.layers.{idx}.block_sparse_moe"
-                    f".experts.0.w3.weight"
+                    f"model.layers.{idx}.block_sparse_moe.experts.0.w3.weight"
                 )
                 sideload_params.append(
                     re.compile(

@@ -23,7 +23,7 @@
 ## (a) Premise — why the W4A16 codepath is expected to be inert
 
 PR #38 ships three fused activation-quant epilogues (issues #26 / #33 /
-#11). None of the three is registered on the W4A16 dispatch path:
+\#11). None of the three is registered on the W4A16 dispatch path
 
 | Fusion | Quant | Wire-in site | Reads W4A16? |
 |---|---|---|---|

@@ -52,6 +52,7 @@ under compile here, a much bigger prefill latency improvement than fp16 MoE saw
 ## The capstone validates the whole stack on gfx908
 
 This single config exercises everything we built/fixed:
+
 1. **Quant capacity** — W4A16 fits a 512-expert MoE (45 GB) on 4×MI100 with KV
    cache for **1.21 M tokens** (74× concurrency @ 16k ctx); the fp16 35B only
    reached 896k / 54.7×. Quant buys ~35% more KV headroom here.
@@ -89,6 +90,7 @@ merged gfx908 fused-MoE config work).
    compile win measured here).
 
 ## Reproduction
+
 ```bash
 /root/fp16-bench/run_qmoe_compile_ab.sh   # TP=4, c{1,2,4}, baseline vs compile
 # results: /root/fp16-bench/qmoe_compile_ab/{baseline,compile}_tp4_c{1,2,4}/raw.json

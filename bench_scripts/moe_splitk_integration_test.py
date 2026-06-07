@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Integration correctness + timing for the gfx908 split-K wna16 MoE path.
 
 Compares fused_experts output with SPLIT_K forced to 1 (baseline) vs the
@@ -6,15 +8,16 @@ gfx908 gate (SPLIT_K=8) at the real Qwen3-Coder-Next decode shape, and times
 both. Run:
   PYTHONPATH=. HIP_VISIBLE_DEVICES=2 python bench_scripts/moe_splitk_integration_test.py
 """
+
 import os
 import time
 
 import torch
 
-from vllm.model_executor.layers.fused_moe import fused_topk
-from vllm.model_executor.layers.fused_moe.fused_moe import fused_experts
-from vllm.model_executor.layers.fused_moe.config import int4_w4a16_moe_quant_config
 import vllm.model_executor.layers.fused_moe.fused_moe as fm
+from vllm.model_executor.layers.fused_moe import fused_topk
+from vllm.model_executor.layers.fused_moe.config import int4_w4a16_moe_quant_config
+from vllm.model_executor.layers.fused_moe.fused_moe import fused_experts
 
 
 def build(E, H, N, GS):
@@ -56,7 +59,8 @@ def main():
     E, H, TK, GS, N = 512, 2048, 10, 32, 128
     x, w1, w2, w1s, w2s, gate = build(E, H, N, GS)
     qc = int4_w4a16_moe_quant_config(
-        w1_scale=w1s, w2_scale=w2s, w1_zp=None, w2_zp=None, block_shape=[0, GS])
+        w1_scale=w1s, w2_scale=w2s, w1_zp=None, w2_zp=None, block_shape=[0, GS]
+    )
     tw, ti, _ = fused_topk(x, gate, TK, renormalize=True)
 
     orig = fm.get_default_config
@@ -67,6 +71,7 @@ def main():
 
     # baseline: monkeypatch the gate off (force SPLIT_K=1)
     import vllm.model_executor.layers.fused_moe.fused_moe as fmod
+
     real_on = fmod._on_mi100
 
     fmod._on_mi100 = lambda: False
@@ -79,8 +84,7 @@ def main():
 
     fmod._on_mi100 = real_on
 
-    rel = ((out_sk - out_base).abs().max()
-           / (out_base.abs().max() + 1e-6)).item()
+    rel = ((out_sk - out_base).abs().max() / (out_base.abs().max() + 1e-6)).item()
     print(f"SPLIT_K=1 baseline : {t_base:7.1f} us")
     print(f"SPLIT_K=8 (gfx908) : {t_sk:7.1f} us")
     print(f"speedup            : {t_base / t_sk:.2f}x")

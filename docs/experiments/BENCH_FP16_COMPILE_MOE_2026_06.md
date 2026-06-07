@@ -2,6 +2,7 @@
 # torch.compile + PIECEWISE on MoE (Qwen3.5-35B-A3B, gfx908/MI100, 2026-06)
 
 Third in the compile series:
+
 - `BENCH_FP16_TORCH_COMPILE_AB_2026_06.md` — dense 9B on 0.19.2: +3.64%
 - `BENCH_FP16_COMPILE_PORT_0202_2026_06.md` — Dynamo fix + dense 9B on 0.20.2: +1.81%
 - **this** — MoE 35B on the fixed 0.20.2 build
@@ -74,6 +75,7 @@ compile win, (c) the gfx908 fused-MoE tuned configs. That's the full-stack
 config worth standing up next.
 
 ## Reproduction
+
 ```bash
 /root/fp16-bench/run_moe_compile_ab.sh   # TP=4, c{1,2,4}, baseline vs compile
 # results: /root/fp16-bench/moe_compile_ab/{baseline,compile}_tp4_c{1,2,4}/raw.json

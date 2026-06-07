@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """VAL-FINAL-004 — needle-in-haystack at 32k context.
 
 Plants 5 needles at fixed depths (10/30/50/70/90 %) inside a 32k-token
@@ -14,6 +15,7 @@ ctx=32768. The system-message guardrail keeps the model from emitting
 "Thinking Process:" preamble that otherwise eats the token budget at
 large contexts.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -87,17 +89,21 @@ def insert_at_depth(haystack: str, needle_phrase: str, depth_pct: int) -> str:
     return haystack[:pos] + " " + needle_phrase + " " + haystack[pos:]
 
 
-def chat(system: str, user: str, model: str, max_tokens: int = 768, timeout: float = 900.0) -> str:  # noqa: E501
-    body = json.dumps({
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0.0,
-        "max_tokens": max_tokens,
-        "seed": 0,
-    }).encode()
+def chat(
+    system: str, user: str, model: str, max_tokens: int = 768, timeout: float = 900.0
+) -> str:
+    body = json.dumps(
+        {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "temperature": 0.0,
+            "max_tokens": max_tokens,
+            "seed": 0,
+        }
+    ).encode()
     req = urllib.request.Request(
         f"{SERVER}/v1/chat/completions",
         data=body,
@@ -143,40 +149,58 @@ def main() -> int:
         try:
             response = chat(SYSTEM, question, model)
         except Exception as exc:
-            results.append({
+            results.append(
+                {
+                    "label": needle["key"],
+                    "depth_pct": depth,
+                    "expected": needle["value"],
+                    "ok": False,
+                    "error": str(exc),
+                    "answer": "",
+                }
+            )
+            print(
+                f"  [{i + 1}/{needle_count}] {needle['key']} "
+                f"depth={depth}% — FAIL ({exc})"
+            )
+            continue
+        ok = needle["value"].lower() in response.lower()
+        results.append(
+            {
                 "label": needle["key"],
                 "depth_pct": depth,
                 "expected": needle["value"],
-                "ok": False,
-                "error": str(exc),
-                "answer": "",
-            })
-            print(f"  [{i+1}/{needle_count}] {needle['key']} depth={depth}% — FAIL ({exc})")  # noqa: E501
-            continue
-        ok = needle["value"].lower() in response.lower()
-        results.append({
-            "label": needle["key"],
-            "depth_pct": depth,
-            "expected": needle["value"],
-            "answer": response,
-            "ok": ok,
-        })
+                "answer": response,
+                "ok": ok,
+            }
+        )
         passes += int(ok)
-        print(f"  [{i+1}/{needle_count}] {needle['key']} depth={depth}% — {'PASS' if ok else 'FAIL'}")  # noqa: E501
+        print(
+            f"  [{i + 1}/{needle_count}] {needle['key']} "
+            f"depth={depth}% — {'PASS' if ok else 'FAIL'}"
+        )
     elapsed = time.time() - t0
 
-    args.out.write_text(json.dumps({
-        "model": model,
-        "ctx": args.ctx,
-        "depths": DEPTHS[:needle_count],
-        "passes": passes,
-        "total": needle_count,
-        "gate_5_of_5": passes == needle_count,
-        "elapsed_s": elapsed,
-        "results": results,
-    }, indent=2))
+    args.out.write_text(
+        json.dumps(
+            {
+                "model": model,
+                "ctx": args.ctx,
+                "depths": DEPTHS[:needle_count],
+                "passes": passes,
+                "total": needle_count,
+                "gate_5_of_5": passes == needle_count,
+                "elapsed_s": elapsed,
+                "results": results,
+            },
+            indent=2,
+        )
+    )
 
-    print(f"\nNeedle@{args.ctx}: {passes}/{needle_count} (gate {'PASS' if passes == needle_count else 'FAIL'})")  # noqa: E501
+    print(
+        f"\nNeedle@{args.ctx}: {passes}/{needle_count} "
+        f"(gate {'PASS' if passes == needle_count else 'FAIL'})"
+    )
     print(f"Wrote {args.out}")
     return 0 if passes == needle_count else 1
 

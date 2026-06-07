@@ -37,10 +37,10 @@ namespace vllm::ck_w4a16 {
 torch::Tensor ck_w4a16_gemm(const torch::Tensor& a_fp16,
                             const torch::Tensor& b_packed_int4,
                             const torch::Tensor& scales,
-                            const torch::Tensor& zeros,
-                            int64_t group_size, int64_t tp_rank);
+                            const torch::Tensor& zeros, int64_t group_size,
+                            int64_t tp_rank);
 
-bool ck_w4a16_gemm_supports(int64_t M, int64_t N, int64_t K,
-                            int64_t group_size, int64_t tp_rank);
+bool ck_w4a16_gemm_supports(int64_t M, int64_t N, int64_t K, int64_t group_size,
+                            int64_t tp_rank);
 
 }  // namespace vllm::ck_w4a16

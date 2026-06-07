@@ -28,6 +28,7 @@ paying off once there's enough work to amortize them.
 ## Critical constraints discovered (these gate deployability)
 
 ### 1. PIECEWISE cudagraphs REQUIRE torch.compile — they are not separable
+
 vLLM rejects piecewise-without-compile:
 > `Cudagraph mode FULL_AND_PIECEWISE is not compatible with compilation mode 0. Overriding to NONE.`
 
@@ -36,6 +37,7 @@ the community config is full `mode=3` (VLLM_COMPILE/Inductor) + piecewise
 together. There is no "cheap" piecewise-only path.
 
 ### 2. torch.compile CRASHES on our 0.20.2 build — works only on 0.19.2
+
 On the **0.20.2** build that matches the current BENCH docs
 (`fuzzy-hornets`, `0.20.2rc1.dev107+gd960f21e4`), `mode=3` aborts engine init:
 > `torch._dynamo.exc.Unsupported: torch.* op returned non-Tensor` on
@@ -54,6 +56,7 @@ where compile *works*, it's a +3.64% win, not a loss. The community runs 0.19.2
 specifically because that's where their compile patch lands cleanly.
 
 ### 3. Cost: ~40 s (TP1) compile warmup per server start + higher peak memory
+
 `max_model_len` had to stay at 32768 and `--gpu-memory-utilization` at 0.90
 (vs 0.93 baseline) for headroom — consistent with the `rocm.py` note that
 Inductor increases peak memory. Compile cache (`/root/.cache/vllm/torch_compile_cache`)

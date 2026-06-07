@@ -23,6 +23,7 @@ Use the optimized baseline without TurboQuant:
 ```
 
 **Configuration:**
+
 - FULL_DECODE_ONLY HIP graph mode
 - Prefix caching enabled
 - Tensor parallelism: 4
@@ -84,44 +85,58 @@ TurboQuant may provide benefits under these conditions:
 ## Validation Contract Evidence
 
 ### VAL-BENCH-001: Synthetic Benchmark TQ Capture Only vs Baseline
-**Status: PASS**
+
+Status: **PASS**
+
 - Benchmarks completed at c=1,2,4
 - TQ capture_only shows 3.5-11% throughput regression
 - Files: `tq_capture_only_graph_synthetic_c{1,2,4}_20260330.json`
 
 ### VAL-BENCH-002: Synthetic Benchmark TQ Hybrid vs Baseline
-**Status: PASS**
+
+Status: **PASS**
+
 - Benchmarks completed at c=1,2,4
 - TQ hybrid shows 6-11% throughput regression
 - Files: `tq_hybrid_graph_synthetic_c{1,2,4}_20260330.json`
 
 ### VAL-BENCH-003: Coding Agent Benchmark TQ Hybrid
-**Status: PASS**
+
+Status: **PASS**
+
 - Benchmarks completed at c=1,2,4
 - TQ hybrid shows 42-49% aggregate throughput regression
 - Files: `tq_hybrid_graph_coding_c1.json`, `tq_hybrid_coding_c{2,4}_20260330.json`
 
 ### VAL-BENCH-004: VRAM Usage Comparison
-**Status: PASS**
+
+Status: **PASS**
+
 - Baseline: 93.3% VRAM
 - TQ Hybrid: 82.5% VRAM
 - Savings: 10.8%
 - Files: `baseline_optimized_vram_20260330.json`, `tq_hybrid_graph_vram_20260331_083315.json`
 
 ### VAL-BENCH-005: Comprehensive Comparison Report
-**Status: PASS**
+
+Status: **PASS**
+
 - Report file: `tq-comparison-report.json`
 - Contains throughput, TPOT, TTFT, VRAM for all configs
 - Percentage changes documented
 
 ### VAL-CROSS-002: TQ + Prefix Caching Interaction
-**Status: PASS**
+
+Status: **PASS**
+
 - Prefix caching still provides TTFT reduction with TQ active
 - Existing test: `prefix_caching_test.json` shows 99.1% TTFT reduction
 - Both systems work together correctly
 
 ### VAL-CROSS-003: Production Recommendation
-**Status: PASS**
+
+Status: **PASS**
+
 - This document provides data-backed recommendation
 - Recommendation: Do NOT enable TQ for Qwen3.5-9B on MI100
 - Production config documented: `/root/launch-vllm-optimized.sh`

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Unit tests for the gfx908 autotune-config loader (VAL-TRITON-004)."""
+
 from __future__ import annotations
 
 import json
@@ -20,8 +21,15 @@ def tmp_config(monkeypatch, tmp_path):
     config_loader.reset_cache()
 
 
-def _write_cfg(dirpath: Path, kernel: str, M: int, N: int, K: int,
-               group_size: int | None, block_m: int) -> Path:
+def _write_cfg(
+    dirpath: Path,
+    kernel: str,
+    M: int,
+    N: int,
+    K: int,
+    group_size: int | None,
+    block_m: int,
+) -> Path:
     if group_size is not None:
         fname = f"{kernel}_M{M}_N{N}_K{K}_g{group_size}.json"
     else:
@@ -70,9 +78,7 @@ def test_load_groupsize_keyed(tmp_config):
     _write_cfg(tmp_config, "mi100_w4a16", 16, 4096, 4096, 32, block_m=32)
     config_loader.reset_cache()
     a = config_loader.load_config("mi100_w4a16", 16, 4096, 4096, group_size=32)
-    b = config_loader.load_config(
-        "mi100_w4a16", 16, 4096, 4096, group_size=128
-    )
+    b = config_loader.load_config("mi100_w4a16", 16, 4096, 4096, group_size=128)
     assert a is not None and b is not None
     assert a["BLOCK_M"] == 32
     assert b["BLOCK_M"] == 16

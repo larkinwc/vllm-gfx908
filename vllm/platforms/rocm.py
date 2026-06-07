@@ -776,9 +776,7 @@ class RocmPlatform(Platform):
         # torch.compile adds overhead without benefit. Disable by
         # default; set VLLM_MI100_TORCH_COMPILE=1 to re-enable.
         if _ON_MI100:
-            mi100_compile = os.environ.get(
-                "VLLM_MI100_TORCH_COMPILE", "0"
-            ) == "1"
+            mi100_compile = os.environ.get("VLLM_MI100_TORCH_COMPILE", "0") == "1"
             if not mi100_compile and (
                 compilation_config.mode is None
                 or compilation_config.mode != CompilationMode.NONE
@@ -799,9 +797,7 @@ class RocmPlatform(Platform):
             # Keep FULL_DECODE_ONLY as the default. Set
             # VLLM_MI100_ALLOW_PIECEWISE=1 to opt in when re-testing or when
             # upstream graph-piece fusion improves.
-            allow_piecewise = os.environ.get(
-                "VLLM_MI100_ALLOW_PIECEWISE", "0"
-            ) == "1"
+            allow_piecewise = os.environ.get("VLLM_MI100_ALLOW_PIECEWISE", "0") == "1"
             if not allow_piecewise and (
                 compilation_config.cudagraph_mode is None
                 or compilation_config.cudagraph_mode
@@ -816,9 +812,7 @@ class RocmPlatform(Platform):
                     "needs lower max_model_len to fit KV cache). "
                     "Set VLLM_MI100_ALLOW_PIECEWISE=1 to override."
                 )
-                compilation_config.cudagraph_mode = (
-                    CUDAGraphMode.FULL_DECODE_ONLY
-                )
+                compilation_config.cudagraph_mode = CUDAGraphMode.FULL_DECODE_ONLY
         use_aiter_fused_moe = rocm_aiter_ops.is_fused_moe_enabled()
         use_aiter_fp8_linear = rocm_aiter_ops.is_linear_fp8_enabled()
         use_aiter_fused_se = rocm_aiter_ops.is_fusion_moe_shared_experts_enabled()

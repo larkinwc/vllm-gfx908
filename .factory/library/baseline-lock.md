@@ -28,7 +28,7 @@ lock, NOT FP16 (issue #48 drift — see §6).
 
 ## 1. Version manifest (observed)
 
-```
+```text
 vllm_sha : b7082f30d5956380a2e807ef368503faa9f70661
 vllm     : 0.21.1rc1.dev593+g8b85c9c2c.d20260530.rocm712 (editable, rebuilt 2026-05-29)
 torch    : 2.11.0+rocm7.2
@@ -41,7 +41,7 @@ gpu      : 4× AMD Instinct MI100 (gfx908)
 
 Pinned runtime env (all server runs):
 
-```
+```text
 LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib
 ROCM_PATH=/opt/rocm/core-7.12
 PYTORCH_ROCM_ARCH=gfx908
@@ -117,7 +117,7 @@ correct optimization target for issue #45.
 (`pmc_offline/w4a16_pmc_counter_collection.csv`, 26,560 counter rows = 13,280
 `mi100_w4a16_gemm_kernel` dispatches × {FETCH_SIZE, WRITE_SIZE}):
 
-```
+```text
 FETCH_SIZE  Σ = 1,120,257,907 KB
 WRITE_SIZE  Σ =    24,527,074 KB
 total bytes  = (FETCH+WRITE)×1024 = 1.172e12 B (1172.26 GB)

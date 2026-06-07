@@ -11,6 +11,7 @@ The TQ backend validation has been completed for eager mode. The GPU hardware ex
 ## Eager Mode Results (PASS)
 
 All eager mode validations passed:
+
 - **VAL-REG-001**: ✅ Module imports successfully
 - **VAL-REG-002**: ✅ Backend registration via TRITON_ATTN override works
 - **VAL-REG-003**: ✅ Server starts with TQ backend, health check passes within 60s
@@ -25,7 +26,8 @@ All eager mode validations passed:
 **Blocking Issue:** TQ backend with FULL_DECODE_ONLY graph mode fails during graph capture phase.
 
 **Error Details:**
-```
+
+```text
 RuntimeError: Engine core initialization failed
 Error during CUDA graph capture in worker processes
 ```
@@ -33,6 +35,7 @@ Error during CUDA graph capture in worker processes
 **Root Cause:** The TurboQuantTritonImpl's lazy initialization pattern (`_ensure_tq_state()`) creates TQ state objects (CompressedKVStore, KVCaptureEngine) during the first forward pass. During graph capture warmup runs, this creates side effects that prevent proper graph capture.
 
 **Evidence:**
+
 1. Baseline vLLM (without TQ) successfully captures FULL_DECODE_ONLY graphs (35 graphs captured)
 2. With TQ backend registered, graph capture fails during warmup
 3. The issue is in the conditional tensor creation in `forward()` and `do_kv_cache_update()`
@@ -40,6 +43,7 @@ Error during CUDA graph capture in worker processes
 ## Workaround
 
 Use eager mode (`--enforce-eager`) for TQ capture_only mode. This is acceptable for Phase 1 validation since:
+
 - Output correctness is verified (identical to baseline)
 - VRAM stability is verified
 - Concurrent request handling is verified
@@ -47,6 +51,7 @@ Use eager mode (`--enforce-eager`) for TQ capture_only mode. This is acceptable 
 ## Graph Mode Fix Needed (Phase 2)
 
 For FULL_DECODE_ONLY compatibility, the TQ backend needs:
+
 1. **Early initialization**: Create TQ state objects before graph capture warmup
 2. **Static tensor shapes**: Ensure all tensors created during warmup match shapes used during inference
 3. **No conditional side effects**: Avoid creating new tensors conditionally in forward()
@@ -54,6 +59,7 @@ For FULL_DECODE_ONLY compatibility, the TQ backend needs:
 ## Launch Script Fix Applied
 
 The `/root/benchmark-scripts/launch-tq-backend.sh` has been fixed with all required MI100 env vars:
+
 - `LD_LIBRARY_PATH=/opt/rocm/core-7.12/lib`
 - `ROCM_PATH=/opt/rocm/core-7.12`
 - `PYTORCH_ROCM_ARCH=gfx908`

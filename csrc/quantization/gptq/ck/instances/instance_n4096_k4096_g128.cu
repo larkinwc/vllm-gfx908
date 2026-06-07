@@ -4,4 +4,3 @@
 
 #include "../ck_w4a16_gemm.h"
 // Placeholder TU — see ../ck_w4a16_gemm.h.
-

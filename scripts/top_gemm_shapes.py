@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 Aggregate top GEMM kernels from rocprofv3 kernel-trace CSVs.
 
@@ -18,15 +19,17 @@ Usage:
         --out-md /root/bench-int8-w4a16/baseline/top_gemm_shapes.md \
         --out-csv /root/bench-int8-w4a16/baseline/top_gemm_shapes.csv
 """
+
 from __future__ import annotations
 
 import argparse
 import csv
 import json
-import re
 import sys
 from collections import defaultdict
 from pathlib import Path
+
+import regex as re
 
 GEMM_PATTERNS = [
     r"gemm",
@@ -133,7 +136,9 @@ def main() -> int:
     p.add_argument("--out-md", type=Path, default=None)
     p.add_argument("--out-csv", type=Path, default=None)
     p.add_argument(
-        "--out-json", type=Path, default=None,
+        "--out-json",
+        type=Path,
+        default=None,
         help="Per-trace structured JSON for downstream consumers",
     )
     args = p.parse_args()
@@ -147,8 +152,7 @@ def main() -> int:
 
     per_trace: dict[str, dict] = {}
     global_stats: dict[str, dict] = defaultdict(
-        lambda: {"ns_total": 0, "n_calls": 0, "shape": None,
-                 "appears_in": set()}
+        lambda: {"ns_total": 0, "n_calls": 0, "shape": None, "appears_in": set()}
     )
     grand_busy_ns = 0
     for t in traces:
@@ -169,19 +173,17 @@ def main() -> int:
             g["appears_in"].add(cell)
 
     # Filter to GEMM-like kernels
-    gemm_only = {
-        k: v for k, v in global_stats.items() if GEMM_RE.search(k)
-    }
+    gemm_only = {k: v for k, v in global_stats.items() if GEMM_RE.search(k)}
     if not gemm_only:
         # If nothing matches, fall back to all kernels (still report top N
         # so the worker can adjust the regex).
-        print("[warn] no kernels matched GEMM regex; falling back to all kernels",
-              file=sys.stderr)
+        print(
+            "[warn] no kernels matched GEMM regex; falling back to all kernels",
+            file=sys.stderr,
+        )
         gemm_only = dict(global_stats)
 
-    sorted_k = sorted(
-        gemm_only.items(), key=lambda kv: kv[1]["ns_total"], reverse=True
-    )
+    sorted_k = sorted(gemm_only.items(), key=lambda kv: kv[1]["ns_total"], reverse=True)
     top_n = sorted_k[: args.top]
     cum_ns = sum(v["ns_total"] for _, v in top_n)
     pct_top = 100.0 * cum_ns / max(1, grand_busy_ns)
@@ -202,14 +204,12 @@ def main() -> int:
     # Stdout summary
     print(
         f"\n=== Top {args.top} GEMM kernels (across {len(traces)} traces, "
-        f"grand busy={grand_busy_ns/1e6:.1f} ms) ==="
+        f"grand busy={grand_busy_ns / 1e6:.1f} ms) ==="
     )
-    print(
-        f"{'rank':>4}  {'pct_busy':>8}  {'total_ms':>10}  {'n_calls':>7}  kernel"
-    )
+    print(f"{'rank':>4}  {'pct_busy':>8}  {'total_ms':>10}  {'n_calls':>7}  kernel")
     for i, r in enumerate(rows):
         print(
-            f"{i+1:>4}  {r['pct_of_busy']:>7.2f}%  {r['total_ms']:>9.2f}  "
+            f"{i + 1:>4}  {r['pct_of_busy']:>7.2f}%  {r['total_ms']:>9.2f}  "
             f"{r['n_calls']:>7}  {r['kernel_name'][:90]}"
         )
     print(f"\nTop-{args.top} cumulative coverage: {pct_top:.2f}% of GPU busy time")
@@ -219,15 +219,28 @@ def main() -> int:
         with open(args.out_csv, "w", newline="") as f:
             w = csv.writer(f)
             w.writerow(
-                ["rank", "kernel_name", "shape", "n_calls", "total_ms",
-                 "pct_of_busy", "appears_in"]
+                [
+                    "rank",
+                    "kernel_name",
+                    "shape",
+                    "n_calls",
+                    "total_ms",
+                    "pct_of_busy",
+                    "appears_in",
+                ]
             )
             for i, r in enumerate(rows):
-                w.writerow([
-                    i + 1, r["kernel_name"], r["shape"], r["n_calls"],
-                    f"{r['total_ms']:.3f}", f"{r['pct_of_busy']:.3f}",
-                    ";".join(r["appears_in"]),
-                ])
+                w.writerow(
+                    [
+                        i + 1,
+                        r["kernel_name"],
+                        r["shape"],
+                        r["n_calls"],
+                        f"{r['total_ms']:.3f}",
+                        f"{r['pct_of_busy']:.3f}",
+                        ";".join(r["appears_in"]),
+                    ]
+                )
         print(f"wrote {args.out_csv}")
 
     if args.out_md:
@@ -236,7 +249,7 @@ def main() -> int:
             f"# Top {args.top} GEMM Shapes (M1 Baseline)",
             "",
             f"- Traces analyzed: {len(traces)}",
-            f"- Grand GPU busy time: {grand_busy_ns/1e6:.2f} ms",
+            f"- Grand GPU busy time: {grand_busy_ns / 1e6:.2f} ms",
             f"- Top-{args.top} cumulative coverage: **{pct_top:.2f}%**",
             "",
             "| Rank | %busy | Total ms | Calls | Shape | Kernel |",
@@ -246,7 +259,7 @@ def main() -> int:
             kern = r["kernel_name"]
             kern = kern.replace("|", "\\|")
             lines.append(
-                f"| {i+1} | {r['pct_of_busy']:.2f}% | {r['total_ms']:.2f} | "
+                f"| {i + 1} | {r['pct_of_busy']:.2f}% | {r['total_ms']:.2f} | "
                 f"{r['n_calls']} | {r['shape']} | `{kern[:80]}` |"
             )
         lines.append("")
@@ -257,7 +270,7 @@ def main() -> int:
         for cell, info in sorted(per_trace.items()):
             lines.append(
                 f"| {cell} | {info['n_kernels_total']} | "
-                f"{info['n_records']} | {info['busy_ns']/1e6:.2f} |"
+                f"{info['n_records']} | {info['busy_ns'] / 1e6:.2f} |"
             )
         args.out_md.write_text("\n".join(lines))
         print(f"wrote {args.out_md}")

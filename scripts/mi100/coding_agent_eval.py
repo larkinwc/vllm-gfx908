@@ -1,4 +1,6 @@
 #!/opt/vllm-env/bin/python3
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Self-contained coding-agent eval for a live vLLM OpenAI server.
 
 Reconstructs the legacy ``/root/benchmark-scripts/coding_agent_bench.py``
@@ -12,7 +14,7 @@ loading itself -- run it against an ALREADY-RUNNING vLLM OpenAI server (for the
 M0 reference: legacy W4A16, marlin OFF).
 
 Interpreter: /opt/vllm-env/bin/python3 (NOT uv/.venv).
-Dependencies: Python stdlib only.
+Dependencies: Python stdlib + regex.
 
 Prompt set / scoring
 --------------------
@@ -36,15 +38,17 @@ scored generically via ``test`` / ``canonical_solution`` / ``expected`` keys.
 """
 
 import argparse
+import contextlib
 import json
 import os
-import re
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
 import urllib.request
+
+import regex as re
 
 DEFAULT_TIMEOUT = 600
 SANDBOX_TIMEOUT = 10
@@ -175,8 +179,7 @@ CODING_TASKS: list[dict] = [
         "id": "count_vowels",
         "prompt": _prompt(
             "def count_vowels(s: str) -> int:",
-            "Return the number of vowels (a, e, i, o, u, case-insensitive) "
-            "in `s`.",
+            "Return the number of vowels (a, e, i, o, u, case-insensitive) in `s`.",
         ),
         "test": (
             "assert count_vowels('hello world') == 3\n"
@@ -208,9 +211,7 @@ CODING_TASKS: list[dict] = [
         # ([4, -1, 2, 1]). This fixture deliberately asserts 7, an upstream
         # artifact preserved so the locked baseline reference stays honest. A
         # correct Kadane implementation will (correctly) fail this assertion.
-        "test": (
-            "assert max_subarray([-2, 1, -3, 4, -1, 2, 1, -5, 4]) == 7\n"
-        ),
+        "test": ("assert max_subarray([-2, 1, -3, 4, -1, 2, 1, -5, 4]) == 7\n"),
     },
 ]
 
@@ -287,10 +288,8 @@ def run_in_sandbox(source):
     except Exception:  # noqa: BLE001 - timeout / spawn failure => not a pass
         return False
     finally:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
 
 
 def score_task(task, completion):
@@ -368,7 +367,11 @@ def main():
         tasks = load_tasks(args.tasks, args.limit)
         source = args.tasks
     else:
-        tasks = CODING_TASKS[: args.limit] if args.limit and args.limit > 0 else CODING_TASKS
+        tasks = (
+            CODING_TASKS[: args.limit]
+            if args.limit and args.limit > 0
+            else CODING_TASKS
+        )
         source = "embedded"
 
     per_prompt = []

@@ -101,7 +101,7 @@ Servers: `vllm-w4a16-tp1`, `vllm-w4a16-tp4` (only ONE at a time, port 8000).
 
 ## Output layout
 
-```
+```text
 $W4A16_BENCH_ROOT/
   harness_manifest.json          # env, versions, marlin flag, dataset sha, 12 cells
   synthetic/w4a16_tp{1,4}_c{1,2,4}.json

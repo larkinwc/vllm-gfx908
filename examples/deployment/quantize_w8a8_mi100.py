@@ -97,8 +97,9 @@ def main():
         print("It must live in a DEDICATED venv (not the vLLM serving env),")
         print("because it pins transformers<=4.57 / compressed-tensors==0.16:")
         print("  uv venv --python 3.12 /opt/llmcompressor-env")
-        print("  uv pip install --python /opt/llmcompressor-env/bin/python "
-              "llmcompressor")
+        print(
+            "  uv pip install --python /opt/llmcompressor-env/bin/python llmcompressor"
+        )
         print("Then run this script with /opt/llmcompressor-env/bin/python")
         sys.exit(1)
 

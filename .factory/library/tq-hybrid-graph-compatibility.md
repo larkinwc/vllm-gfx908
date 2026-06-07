@@ -11,12 +11,14 @@ TurboQuant Triton kernels (MSE score, QJL score, fused decode) can be captured i
 ## Validation Results
 
 ### VAL-GRAPH-002: TQ hybrid decode + graph mode compatibility assessed
+
 - **Result:** PASS - Graph capture succeeded with TQ hybrid mode
 - **Graph capture count:** 35 decode graphs captured (batch sizes 1-512)
 - **Graph capture time:** ~37 seconds
 - **Server startup time:** 123 seconds (including graph capture)
 
 ### VAL-GRAPH-003: If graph-incompatible, eager mode hybrid still functions
+
 - **Result:** N/A - Graph capture succeeded, no fallback needed
 
 ## Test Details
@@ -47,7 +49,7 @@ export TURBOQUANT_MODE=hybrid
 
 ### Graph Capture Log Evidence
 
-```
+```text
 Capturing CUDA graphs (decode, FULL): 100%|██████████| 35/35 [00:37<00:00]
 [TurboQuant] Backend auto-registered as TRITON_ATTN override
 ```
@@ -67,11 +69,11 @@ Capturing CUDA graphs (decode, FULL): 100%|██████████| 35/35
 | Linked list reversal | Iterative approach | ✓ |
 | SOLID principles | All 5 principles explained | ✓ |
 
-**Total: 10/10 requests succeeded, 10/10 coherent**
+Total: **10/10 requests succeeded, 10/10 coherent**
 
 ## Why Graph Capture Works
 
-The key fix from previous features ensured TQ state is initialized **eagerly in __init__**, not lazily during forward pass:
+The key fix from previous features ensured TQ state is initialized **eagerly in `__init__`**, not lazily during forward pass:
 
 1. **Eager initialization**: CompressedKVStore and KVCaptureEngine are created during backend construction, before any graph warmup
 2. **Static tensor shapes**: All TQ tensors have pre-determined shapes, compatible with graph capture
@@ -110,6 +112,7 @@ TURBOQUANT_MODE=hybrid \
 ```
 
 This combines:
+
 - TurboQuant KV compression on full-attention layers (5-6% memory savings)
 - FULL_DECODE_ONLY graphs for decode optimization (~10-15% throughput gain)
 - Prefix caching for TTFT reduction on cache hits

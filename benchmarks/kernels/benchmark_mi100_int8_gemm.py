@@ -47,7 +47,7 @@ def benchmark_kernel(fn, warmup=10, iters=100):
     """Benchmark a kernel function using CUDA events."""
     for _ in range(warmup):
         fn()
-    torch.cuda.synchronize()
+    torch.accelerator.synchronize()
 
     start_events = [torch.cuda.Event(enable_timing=True) for _ in range(iters)]
     end_events = [torch.cuda.Event(enable_timing=True) for _ in range(iters)]
@@ -57,7 +57,7 @@ def benchmark_kernel(fn, warmup=10, iters=100):
         fn()
         end_events[i].record()
 
-    torch.cuda.synchronize()
+    torch.accelerator.synchronize()
     times = [s.elapsed_time(e) for s, e in zip(start_events, end_events)]
     times.sort()
     # Use median

@@ -27,6 +27,7 @@ actually matter), per layer at M=1:
 | **total glue** | **~21** | **34%** | **~5.4% TPOT (unreachable)** | — |
 
 Key facts that sink the value case:
+
 - **act_and_mul can't sit in the gate_up GEMM epilogue cheaply.** `silu_and_mul`
   computes `out[i] = silu(c1[i]) * c1[i+N]`; the gate half (cols 0..N) and up half
   (cols N..2N) live in *different* N-tiles, so a program computing one tile lacks
@@ -85,6 +86,7 @@ expected value / risk:
    down-GEMM epilogue / store, avoiding a separate reduce launch.
 
 Each fusion must:
+
 - Keep a non-gfx908 fallback (gate on `on_mi100()` or make the fused kernel arch-
   neutral and just default-on if it's a pure win everywhere).
 - Pass correctness vs the current multi-kernel path (rel-err ≤ 1e-3) across M =
@@ -97,6 +99,7 @@ Each fusion must:
 The sibling split-K GEMM effort got a **1.5× isolated-GEMM microbench win that
 did NOT survive integration** (net ~1.0× at M=1, regressions at M≥2). Root
 causes that will also threaten this work:
+
 - **Launch overhead is the enemy at M=1.** Any *added* kernel (e.g. a separate
   zeroing or reduction pass) costs a fixed ~7 µs launch that can erase the win.
   Fusion is attractive precisely because it *removes* launches — but do not
@@ -120,9 +123,9 @@ align+count(+act) kernel** that removes multiple launches at once *without*
 touching the GEMM tiles — and only if a quick prototype clears a few % net.
 
 ## References in-repo
+
 - `PERF_GFX908.md` — hardware model, the loop, the decode triage (§6).
-- `BENCH_MOE_HANDKERNEL_GEMV_2026_06.md` — the GEMM split-K story (microbench win
-  + integration reality).
+- `BENCH_MOE_HANDKERNEL_GEMV_2026_06.md` — the GEMM split-K story (microbench win + integration reality).
 - `bench_scripts/moe_int4_gemv_bench.py`, `bench_scripts/decode_profile.py` —
   microbench + whole-model profiler templates.
 

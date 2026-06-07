@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 M0 Determinism / no-NaN/Inf check (VAL-M0-007).
 
@@ -14,6 +16,7 @@ Usage:
         --model /models/Qwen3.5-9B-w8a8 \
         --out /root/bench-int8-w4a16/baseline/determinism_w8a8.json
 """
+
 from __future__ import annotations
 
 import argparse
@@ -84,11 +87,11 @@ def main() -> int:
     lp0 = runs[0]["top_logprobs_0"]
     lp1 = runs[1]["top_logprobs_0"]
     lp_keys_match = sorted(lp0.keys()) == sorted(lp1.keys())
-    lp_values_match = all(
-        abs(float(lp0[k]) - float(lp1[k])) < 1e-6
-        for k in lp0
-        if k in lp1
-    ) if lp_keys_match else False
+    lp_values_match = (
+        all(abs(float(lp0[k]) - float(lp1[k])) < 1e-6 for k in lp0 if k in lp1)
+        if lp_keys_match
+        else False
+    )
 
     nan_inf = has_nan_or_inf(lp0) or has_nan_or_inf(lp1)
 
@@ -108,9 +111,11 @@ def main() -> int:
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     with open(args.out, "w") as f:
         json.dump(summary, f, indent=2)
-    print(f"[m0_determinism] {args.label} top1_match={top1_match} "
-          f"logprobs_match={lp_keys_match and lp_values_match} "
-          f"nan_inf={nan_inf} gate={'PASS' if passes else 'FAIL'}")
+    print(
+        f"[m0_determinism] {args.label} top1_match={top1_match} "
+        f"logprobs_match={lp_keys_match and lp_values_match} "
+        f"nan_inf={nan_inf} gate={'PASS' if passes else 'FAIL'}"
+    )
     return 0 if passes else 1
 
 

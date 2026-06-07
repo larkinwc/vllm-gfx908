@@ -30,7 +30,8 @@ def ck_int8_gemm():
             "torch.ops._rocm_C.ck_int8_gemm is unavailable. The vllm "
             "build was made with VLLM_BUILD_CK=OFF or on a non-gfx908 "
             "target. Re-run install with GPU_TARGETS=gfx908 + "
-            "VLLM_BUILD_CK=ON to enable.")
+            "VLLM_BUILD_CK=ON to enable."
+        )
     return op
 
 

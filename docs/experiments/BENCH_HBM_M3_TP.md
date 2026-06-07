@@ -56,7 +56,7 @@ rccl 2.27.7 because KV-INT8 (`--kv-cache-dtype int8_per_token_head`) issues an
 AllGather on `ncclInt8` tensors during profile_run, and rccl 2.27.7 aborts
 engine init with:
 
-```
+```text
 ncclInvalidUsage: no algorithm/protocol available for function AllGather
                   with datatype ncclInt8. NCCL_ALGO was set to Tree.
 ```
@@ -111,7 +111,8 @@ Cumulative stack: **M1 KV-INT8** (`KV_CACHE_DTYPE=int8_per_token_head`) +
 **M2 chunked-prefill** (`--enable-chunked-prefill --max-num-batched-tokens
 2048` for w8a8, `4096` for w4a16, per
 [`m2-chunked/chunk_sweep.json`](/root/bench-int8-w4a16-hbm/m2-chunked/chunk_sweep.json))
-+ **M3 per-cell `NCCL_ALGO`** (Ring on 3 cells, default on 3 cells).
+
+- **M3 per-cell `NCCL_ALGO`** (Ring on 3 cells, default on 3 cells).
 
 The grid wrapper `scripts/mi100/run_grid_hbm.sh m3-tp` diverges from the
 generic 24-cell loop in two M3-specific ways (see commit diff):
@@ -125,7 +126,7 @@ This produced 12 result JSONs (6 cells × 2 workloads). All 12 were
 schema-validated (see
 [`schema_check.log`](/root/bench-int8-w4a16-hbm/m3-tp/schema_check.log)):
 
-```
+```text
 12 files validated, 0 failures
 ```
 

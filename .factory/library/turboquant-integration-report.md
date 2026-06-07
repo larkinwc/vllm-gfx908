@@ -36,6 +36,7 @@
 ```
 
 **Triton Kernel Tests**:
+
 - `_turboquant_mse_score_kernel`: PASS
 - `_turboquant_qjl_score_kernel`: PASS
 - `_turboquant_fused_decode_kernel`: PASS
@@ -44,7 +45,7 @@
 
 vLLM v0.18.1 uses a **multi-process architecture**:
 
-```
+```text
 APIServer (main process)
     └── EngineCore (separate process)
             └── MultiprocExecutor
@@ -99,11 +100,13 @@ enable_no_alloc(key_bits=3, value_bits=2, ...)
 ### 4. Root Cause Analysis
 
 **TurboQuant's Integration Design**:
+
 - Designed for single-process or thread-based vLLM
 - Assumes model_runner is in same process as caller
 - Uses monkey-patching on instance methods
 
 **vLLM v0.18.1 Reality**:
+
 - Workers are separate OS processes (spawn, not fork)
 - Model runners are in GPU worker processes
 - No IPC mechanism for method patching
@@ -114,6 +117,7 @@ enable_no_alloc(key_bits=3, value_bits=2, ...)
 Without TurboQuant hooks, the baseline vLLM server passes all quality tests:
 
 **10 Coding Prompts**: 10/10 PASS
+
 - Python function generation
 - Algorithm explanations
 - TypeScript interfaces
@@ -121,6 +125,7 @@ Without TurboQuant hooks, the baseline vLLM server passes all quality tests:
 - React components
 
 **Needle-in-Haystack (8k context)**: PASS
+
 - Needle found correctly at 8000 token context
 
 **Throughput**: 87.5 tok/s (eager mode, no graphs)
@@ -128,25 +133,33 @@ Without TurboQuant hooks, the baseline vLLM server passes all quality tests:
 ## Recommendations
 
 ### Option 1: Wait for vLLM Native Integration
+
 TurboQuant integration requires changes to vLLM core to support:
+
 - Worker process initialization hooks
 - Persistent attention backend configuration
 - IPC-based configuration propagation
 
 ### Option 2: Custom vLLM Fork
+
 Create a vLLM fork that:
+
 - Bakes TurboQuant hooks into worker initialization
 - Uses a custom attention backend
 - Requires maintaining fork in sync with upstream
 
 ### Option 3: Use TurboQuant Standalone
+
 For non-vLLM inference:
+
 - Use TurboQuant with HuggingFace Transformers directly
 - Manual KV cache management
 - Not suitable for production serving
 
 ### Option 4: Alternative Optimizations
+
 For MI100, continue with proven optimizations:
+
 - FULL_DECODE_ONLY graph mode (+68% TPOT improvement)
 - Prefix caching (TTFT reduction on cache hits)
 - Config tuning (max-model-len, gpu-memory-utilization)
@@ -164,6 +177,7 @@ For MI100, continue with proven optimizations:
 TurboQuant's Triton kernels work correctly on ROCm/gfx908, confirming the core technology is portable to AMD hardware. However, the vLLM integration layer assumes a single-process architecture incompatible with vLLM v0.18.1's multi-process design.
 
 **Recommendation**: Mark TurboQuant integration as BLOCKED pending either:
+
 1. TurboQuant updates for vLLM v0.18.x architecture
 2. vLLM adding official extension hooks for attention backends
 3. Custom fork development (not recommended for production)
