@@ -1,0 +1,252 @@
+[
+  {
+    "module": "module_aiter_enum",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_activation",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_attention",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_pa_ragged",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_pa_v1",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_attention_asm",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_pa",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_pa_metadata",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_ps_metadata",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_mla_asm",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_cache",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_custom_all_reduce",
+    "status": "FAIL: rc=1",
+    "secs": 56.8
+  },
+  {
+    "module": "module_quick_all_reduce",
+    "status": "FAIL: rc=1",
+    "secs": 54.6
+  },
+  {
+    "module": "module_custom",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_gemm_common",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_batched_gemm_bf16",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_batched_gemm_a8w8",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_gemm_a8w8_asm",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_gemm_a16w16_asm",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_gemm_a8w8_blockscale_asm",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_gemm_a8w8_blockscale_bpreshuffle_asm",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_moe_asm",
+    "status": "FAIL: rc=1",
+    "secs": 63.4
+  },
+  {
+    "module": "module_moe_ck2stages",
+    "status": "TIMEOUT",
+    "secs": 90.1
+  },
+  {
+    "module": "module_moe_cktile2stages",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_moe_sorting",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_moe_sorting_opus",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_moe_topk",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_norm",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_pos_encoding",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_rmsnorm",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_rmsnorm_quant",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_smoothquant",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_aiter_operator",
+    "status": "TIMEOUT",
+    "secs": 90.1
+  },
+  {
+    "module": "module_aiter_unary",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_quant",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_sample",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_rope_general_fwd",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_rope_general_bwd",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_rope_pos_fwd",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_fused_qk_norm_mrope_cache_quant_shuffle",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_fused_qk_norm_rope_cache_quant_shuffle",
+    "status": "FAIL: rc=1",
+    "secs": 56.9
+  },
+  {
+    "module": "module_rocsolgemm",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_hipbsolgemm",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_top_k_per_row",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_mla_metadata",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_mla_reduce",
+    "status": "TIMEOUT",
+    "secs": 90.0
+  },
+  {
+    "module": "module_topk_plain",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_groupnorm",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_mhc",
+    "status": "prebuilt",
+    "secs": 0.0
+  },
+  {
+    "module": "module_causal_conv1d_update",
+    "status": "prebuilt",
+    "secs": 0.0
+  }
+]
