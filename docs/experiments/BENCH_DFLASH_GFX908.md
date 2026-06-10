@@ -73,13 +73,6 @@
 > [GPU 1+2 confirmation run](#gpu-12-confirmation-run-20-requser). Absolute
 > tok/s is therefore lower than the TP=4 figures in `BENCH.md`; the headline is
 > the *DFlash-on vs DFlash-off ratio*, which is stable across both GPU pairs.
->
-> **Thermal caveat (GPU 0):** the GPUs-0+3 baseline ran ~20–25 % slower than
-> the GPUs-1+2 baseline (coding c=1: 50.6 vs 63.6 agg tok/s) because **GPU 0
-> was thermally throttling** during the first grid. This shifts the *absolute*
-> baseline but not the DFlash ratio — DFlash is throttled by the same factor,
-> and the on/off ratio is essentially identical on both GPU pairs (0.37–0.44×
-> vs 0.38–0.41× coding). The thermal effect is why both grids are retained.
 
 ---
 
@@ -149,9 +142,9 @@ far short of overcoming the ~2× per-step cost.
 
 ### GPU 1+2 confirmation run (20 req/user)
 
-Re-run on a different, **non-throttling** GPU pair (1+2) with a longer coding
-harness (20 requests/user instead of 10), to rule out a thermal or GPU-pair
-artifact. Verdict is unchanged.
+Re-run on a different GPU pair (1+2) with a longer coding harness (20
+requests/user instead of 10), to rule out a GPU-pair artifact. Verdict is
+unchanged.
 
 Synthetic (`vllm bench serve`, random 128/128):
 
@@ -169,9 +162,8 @@ Coding-agent (`coding_agent_bench.py`, 20 req/user):
 | 2 | 111.8 | 47.3 | **0.42×** | 15.5 ms | 32.9 ms |
 | 4 | 209.7 | 80.2 | **0.38×** | 16.6 ms | 38.7 ms |
 
-The GPUs-1+2 baseline is ~20–25 % faster than GPUs-0+3 (GPU 0 was throttling),
-but the DFlash ratio is the same — confirming the negative result is an
-architecture/compute-bound property, not a thermal or per-GPU artifact.
+The DFlash ratio is the same on both GPU pairs — confirming the negative result
+is an architecture/compute-bound property, not a per-GPU artifact.
 
 ---
 
@@ -189,9 +181,9 @@ not bandwidth-bound, for these batch sizes:
   for free — it linearly adds MFMA work the MI100 cannot hide.
 - The extra DFlash drafter forward (5 layers) + context-KV precompute (fused
   GEMM, per-layer RMSNorm×5, fused RoPE) adds fixed per-step overhead.
-- TPOT roughly **doubles** (e.g. coding c=1: 17.5 → 35.8 ms), and the ~4.8×
-  acceptance is not enough to overcome a 2× per-step cost once verify width and
-  drafter overhead are included.
+- TPOT roughly **doubles** (e.g. coding c=1: 17.5 → 35.8 ms), and the ~2.0
+  steady-state acceptance length is not enough to overcome a 2× per-step cost
+  once verify width and drafter overhead are included.
 
 This mirrors the existing fork findings:
 
