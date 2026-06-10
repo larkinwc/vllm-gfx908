@@ -160,6 +160,7 @@ config above is unambiguous.
 | **`--max-num-seqs 8` scheduler tuning** | Rejected | Neutral on coding; −33 % tput on bursty synthetic c=4 | FP16-era result |
 | **TurboQuant KV compression** | Rejected | 6–11 % overhead synthetic, 42–49 % coding on Qwen3.5-9B (only 8/32 layers full-attention) | FP16-era result |
 | **MTP speculative decoding** | Partial | Incompatible with graph mode; 25–45 % slower in eager. Not recommended | FP16-era result |
+| **DFlash speculative decoding** | Rejected | Functionally correct on gfx908 (non-causal attn + CUDA graphs validated, ~4.8 acceptance length), but **net-negative**: 0.37–0.50× baseline tput across synthetic + coding c=1/2/4. MI100's compute-bound FP16 decode can't absorb the wider batched verify. | [`BENCH_DFLASH_GFX908.md`](docs/experiments/BENCH_DFLASH_GFX908.md) |
 | **W8A8 GPTQ (off-the-shelf symmetric)** | Superseded | Original symmetric per-channel GPTQ failed on GatedDeltaNet `in_proj_qkv` (gibberish output despite PPL 10.02). **Resolved** by RedHatAI's `Qwen3.5-9B-w8a8` calibration artifact (PPL 9.6518, coherent generation) | `BENCH.md` §Historical; [`BENCH_INT8_W4A16_FINAL.md`](docs/experiments/BENCH_INT8_W4A16_FINAL.md) |
 | **AITER unified attention** | Blocked | `aiter` package not available for gfx908 | FP16-era finding |
 | **FP8 native** | Blocked | MI100 lacks FP8 hardware. Software dequant path emulated only | FP16-era finding |
@@ -227,6 +228,8 @@ retroactively** — they are anchored to specific vLLM SHAs.
     - [`BENCH_HBM_M3_TP.md`](docs/experiments/BENCH_HBM_M3_TP.md) — TP topology / NCCL_ALGO sweep
 - **HBM Flash-Decoding tuning + CK FA2 investigation:**
     - [`BENCH_HBM_FA_TUNING.md`](docs/experiments/BENCH_HBM_FA_TUNING.md) — 9216-config sweep null result + CK FA2 NO-GO audit
+- **Speculative decoding on gfx908:**
+    - [`BENCH_DFLASH_GFX908.md`](docs/experiments/BENCH_DFLASH_GFX908.md) — DFlash end-to-end enablement + A/B (correct but net-negative on MI100)
 
 ---
 
