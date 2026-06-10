@@ -33,11 +33,12 @@
   batched-verify and sequential-decode forward passes (divergences only appear
   deep into generation after long identical prefixes; the base model itself is
   run-to-run deterministic).
-- **Acceptance: HEALTHY.** Mean accepted length ≈ **4.8** tokens at
-  `num_speculative_tokens=15` (621 accepted / 165 drafts on the offline probe
-  set) and ≈ **3.5** at `num_speculative_tokens=7` (1833/741 over a coding-bench
-  run). Per-position acceptance decays smoothly (130, 89, 66, 56, … at ns=15),
-  matching the DFlash paper's qualitative shape.
+- **Acceptance: HEALTHY but modest.** Mean accepted length is ≈ **2.0** tokens
+  over the large-sample coding grid at `num_speculative_tokens=15` (29 431
+  accepted / 28 996 drafts); a small offline probe overstates this at ~4.8.
+  Per-position acceptance decays smoothly (130, 89, 66, 56, … at ns=15),
+  matching the DFlash paper's qualitative shape — the drafter works, it just
+  cannot pay for the verify overhead on this hardware.
 - **Performance: NEGATIVE on every cell.** On the realistic coding-agent
   workload DFlash decode aggregate throughput is roughly **0.4–0.5×** the
   non-spec baseline (c=1: 22.4 vs 50.6 agg tok/s). On synthetic random data it
@@ -56,7 +57,7 @@
 
 | Component | Value |
 |---|---|
-| GPUs | 2× AMD Instinct MI100 (gfx908, 32 GB), TP=2, GPUs 0+3 |
+| GPUs | 2× AMD Instinct MI100 (gfx908, 32 GB), TP=2 — primary grid GPUs 0+3, confirmation grid GPUs 1+2 |
 | Target model | `/models/Qwen3.5-9B` (FP16, hybrid linear+full attention, 32 layers) |
 | Drafter | `z-lab/Qwen3.5-9B-DFlash` (5-layer Qwen3, `target_layer_ids=[1,8,15,22,29]`, `block_size=16`) |
 | vLLM | `0.22.1rc1.dev466+g7133b783a` (branch `mi100/dflash-gfx908`, HEAD `7133b783a`) |
@@ -66,12 +67,19 @@
 | CUDA graphs | FULL_DECODE_ONLY (auto on MI100), captured cleanly with DFlash |
 | Launch | `/root/launch-vllm-optimized.sh` + `--max-num-batched-tokens 16384` |
 
-> **TP note:** GPUs 1+2 were occupied by an unrelated session for most of this
-> mission, so the A/B was run at **TP=2 on GPUs 0+3** (both arms identical
-> hardware). Absolute tok/s here is therefore lower than the TP=4 production
-> figures in `BENCH.md`; only the *DFlash-on vs DFlash-off ratio* is the
-> headline result, and that ratio is hardware-config-independent for this
-> conclusion.
+> **TP note:** the A/B was run at **TP=2** (not the TP=4 production config).
+> The primary grid below is GPUs 0+3; it was then **re-confirmed on GPUs 1+2**
+> with a longer coding harness (20 req/user) — see
+> [GPU 1+2 confirmation run](#gpu-12-confirmation-run-20-requser). Absolute
+> tok/s is therefore lower than the TP=4 figures in `BENCH.md`; the headline is
+> the *DFlash-on vs DFlash-off ratio*, which is stable across both GPU pairs.
+>
+> **Thermal caveat (GPU 0):** the GPUs-0+3 baseline ran ~20–25 % slower than
+> the GPUs-1+2 baseline (coding c=1: 50.6 vs 63.6 agg tok/s) because **GPU 0
+> was thermally throttling** during the first grid. This shifts the *absolute*
+> baseline but not the DFlash ratio — DFlash is throttled by the same factor,
+> and the on/off ratio is essentially identical on both GPU pairs (0.37–0.44×
+> vs 0.38–0.41× coding). The thermal effect is why both grids are retained.
 
 ---
 
@@ -131,9 +139,39 @@ All numbers TP=2 (GPUs 0+3), FP16 target, `--max-model-len 8192`,
 |---|---:|---:|---:|---:|
 | ns=15 (offline probe, 6 prompts) | 165 | 2475 | 621 | **4.76** |
 | ns=7 (coding c=1 server run) | 741 | 5187 | 1833 | **3.47** |
+| ns=15 (GPU 1+2 full coding grid, large sample) | 28 996 | 434 940 | 29 431 | **2.02** |
 
 Per-position accepted (ns=15): `[130, 89, 66, 56, 46, 39, 34, 29, 25, 22, 20,
-18, 16, 16, 15]` — smooth decay, drafter is working as designed.
+18, 16, 16, 15]` — smooth decay, drafter is working as designed. The small
+offline probe (4.76) overstates steady-state acceptance; the large-sample
+coding grid lands at ~2.0, which is realistic for this workload mix and still
+far short of overcoming the ~2× per-step cost.
+
+### GPU 1+2 confirmation run (20 req/user)
+
+Re-run on a different, **non-throttling** GPU pair (1+2) with a longer coding
+harness (20 requests/user instead of 10), to rule out a thermal or GPU-pair
+artifact. Verdict is unchanged.
+
+Synthetic (`vllm bench serve`, random 128/128):
+
+| Concurrency | Baseline out tok/s | DFlash ns=15 | Ratio |
+|---:|---:|---:|---:|
+| 1 | 71.6 | 36.5 | **0.51×** |
+| 2 | 122.8 | 64.8 | **0.53×** |
+| 4 | 227.2 | 110.2 | **0.49×** |
+
+Coding-agent (`coding_agent_bench.py`, 20 req/user):
+
+| Concurrency | Baseline agg tok/s | DFlash ns=15 | Ratio | Baseline TPOT | DFlash TPOT |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 63.6 | 26.1 | **0.41×** | 13.5 ms | 30.0 ms |
+| 2 | 111.8 | 47.3 | **0.42×** | 15.5 ms | 32.9 ms |
+| 4 | 209.7 | 80.2 | **0.38×** | 16.6 ms | 38.7 ms |
+
+The GPUs-1+2 baseline is ~20–25 % faster than GPUs-0+3 (GPU 0 was throttling),
+but the DFlash ratio is the same — confirming the negative result is an
+architecture/compute-bound property, not a thermal or per-GPU artifact.
 
 ---
 
@@ -224,10 +262,11 @@ CUDA_VISIBLE_DEVICES=0,3 MODEL=/models/Qwen3.5-9B TP=2 PORT=8100 \
 DFlash is **correct and well-behaved on MI100/gfx908** — no kernel or platform
 work was needed beyond a normal source build, and the non-causal attention path
 that was the primary risk validates cleanly. But it is a **performance
-NEGATIVE** on this hardware: every synthetic and coding-agent cell measured runs
-at 0.37×–0.50× of the non-spec baseline, because MI100's compute-bound FP16
-decode cannot absorb the wider batched verify and extra drafter forward, even at
-a healthy ~4.8 acceptance length.
+NEGATIVE** on this hardware: every synthetic and coding-agent cell measured
+(across two GPU pairs) runs at 0.37×–0.53× of the non-spec baseline, because
+MI100's compute-bound FP16 decode cannot absorb the wider batched verify and
+extra drafter forward, even at a positive ~2.0 (steady-state) acceptance
+length.
 
 **Recommendation:** keep speculative decoding (DFlash and MTP) **off** on gfx908
 for production. Add DFlash to the "Optimizations Tested and NOT Recommended"

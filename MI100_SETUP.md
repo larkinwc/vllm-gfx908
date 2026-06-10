@@ -637,7 +637,7 @@ enabled for compatibility/debugging — it is **not** a speedup on MI100.
 | NCCL_ALGO=Ring | -5% | Default algorithm already optimal for XGMI topology |
 | NCCL_PROTO=Simple | -13% | LL (low latency) protocol already best for small messages |
 | MTP speculative decoding | -25% to -45% | Incompatible with HIP graph mode |
-| DFlash speculative decoding | -50% to -63% | Correct on gfx908 (non-causal attn + CUDA graphs OK, ~4.8 acceptance length) but net-negative: compute-bound FP16 decode can't absorb the wider batched verify. See `docs/experiments/BENCH_DFLASH_GFX908.md` |
+| DFlash speculative decoding | -47% to -63% | Correct on gfx908 (non-causal attn + CUDA graphs OK, ~2.0 steady-state acceptance length) but net-negative: compute-bound FP16 decode can't absorb the wider batched verify. Confirmed on two GPU pairs. See `docs/experiments/BENCH_DFLASH_GFX908.md` |
 | TurboQuant KV compression | -6% to -49% | Not worth it for Qwen3.5 (only 8/32 full attention layers) |
 | AMD AITER (`VLLM_ROCM_USE_AITER=1`) | -6% to -26% | rmsnorm/quant kernels tuned for CDNA2/3; native Triton wins on CDNA1 across fp16 and w8a8, batch 1-64. The int8/MoE GEMM paths don't even build on gfx908 (hang at startup). Build is clean (issue #75) but keep disabled for production. See "AMD AITER on MI100" above. |
 
