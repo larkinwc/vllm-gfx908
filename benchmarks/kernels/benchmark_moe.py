@@ -44,6 +44,16 @@ _CACHE_CLEAR_INTERVAL_ENV = "VLLM_MOE_TUNE_CACHE_CLEAR_INTERVAL"
 TRITON_CACHE_CLEAR_INTERVAL = int(os.environ.get(_CACHE_CLEAR_INTERVAL_ENV, "50"))
 
 
+def disable_inplace() -> bool:
+    """Whether to disable the in-place fused-experts path during tuning.
+
+    The fused-experts kernel defaults to ``inplace=True`` (matching the vLLM
+    serving runtime). Set ``VLLM_MOE_TUNE_DISABLE_INPLACE=1`` to force the
+    out-of-place path, e.g. for debugging an in-place-only correctness issue.
+    """
+    return bool(int(os.environ.get("VLLM_MOE_TUNE_DISABLE_INPLACE", "0")))
+
+
 def clear_triton_cache():
     """Clear Triton JIT compilation cache and Python/CUDA memory.
 
@@ -135,25 +145,29 @@ def benchmark_config(
             dtype=torch.uint8,
         )
     elif use_int8_w8a16:
+        # Weight-only int8 (group-quantized), matching the moe_wna16 runtime
+        # contract: uint8 packed weights (bit8 pack factor = 1, i.e. unpacked)
+        # with grouped fp16 scales and fp16 activations (no activation quant).
+        intermediate_size = shard_intermediate_size // 2  # after silu_and_mul
         w1 = torch.randint(
-            -127,
-            127,
+            0,
+            255,
             (
                 num_experts,
                 shard_intermediate_size,
                 hidden_size,
             ),
-            dtype=torch.int8,
+            dtype=torch.uint8,
         )
         w2 = torch.randint(
-            -127,
-            127,
+            0,
+            255,
             (
                 num_experts,
                 hidden_size,
-                shard_intermediate_size // 2,
+                intermediate_size,
             ),
-            dtype=torch.int8,
+            dtype=torch.uint8,
         )
     else:
         w1 = torch.randn(
@@ -182,10 +196,19 @@ def benchmark_config(
             dtype=dtype,
         )
     elif use_int8_w8a16:
-        w1_scale = torch.randn(
-            (num_experts, 2 * shard_intermediate_size), dtype=torch.float32
+        if block_quant_shape is None:
+            raise ValueError("block_quant_shape is required for int8_w8a16")
+        group_size = block_quant_shape[1]
+        # Grouped fp16 scales, matching moe_wna16 runtime:
+        # w13 (E, 2N, K // gs), w2 (E, K, N // gs).
+        w1_scale = torch.rand(
+            (num_experts, shard_intermediate_size, hidden_size // group_size),
+            dtype=dtype,
         )
-        w2_scale = torch.randn((hidden_size, num_experts), dtype=torch.float32)
+        w2_scale = torch.rand(
+            (num_experts, hidden_size, intermediate_size // group_size),
+            dtype=dtype,
+        )
     if use_deep_gemm:
         # we use the default block shape for deepgemm
         block_quant_shape = [128, 128]
@@ -225,23 +248,35 @@ def benchmark_config(
 
     def run():
         from vllm.model_executor.layers.fused_moe import override_config
+        from vllm.model_executor.layers.fused_moe.config import (
+            int8_w8a16_moe_quant_config,
+        )
 
         if use_fp8_w8a8:
             quant_dtype = torch.float8_e4m3fn
-        elif use_int8_w8a16:
-            quant_dtype = torch.int8
         else:
+            # int8_w8a16 / int4_w4a16 are weight-only: activations stay fp16
+            # (no activation quant), so quant_dtype is None for those paths.
             quant_dtype = None
 
-        quant_config = FusedMoEQuantConfig.make(
-            quant_dtype=quant_dtype,
-            w1_scale=w1_scale,
-            w2_scale=w2_scale,
-            a1_scale=a1_scale,
-            a2_scale=a2_scale,
-            block_shape=block_quant_shape,
-            weight_dtype="int4" if use_int4_w4a16 else None,
-        )
+        if use_int8_w8a16:
+            # Weight-only int8 uses a dedicated builder (grouped fp16 scales,
+            # int8 weights, fp16 activations) — mirrors moe_wna16 runtime.
+            quant_config = int8_w8a16_moe_quant_config(
+                w1_scale=w1_scale,
+                w2_scale=w2_scale,
+                block_shape=block_quant_shape,
+            )
+        else:
+            quant_config = FusedMoEQuantConfig.make(
+                quant_dtype=quant_dtype,
+                w1_scale=w1_scale,
+                w2_scale=w2_scale,
+                a1_scale=a1_scale,
+                a2_scale=a2_scale,
+                block_shape=block_quant_shape,
+                weight_dtype="int4" if use_int4_w4a16 else None,
+            )
 
         deep_gemm_experts = None
         if use_deep_gemm:
@@ -279,7 +314,6 @@ def benchmark_config(
                 x, input_gating, topk, renormalize=not use_deep_gemm
             )
 
-            inplace = not disable_inplace()
             if use_deep_gemm:
                 return deep_gemm_experts.apply(
                     x,
@@ -292,13 +326,15 @@ def benchmark_config(
                     apply_router_weight_on_input=False,
                     expert_map=False,
                 )
+            # NOTE: the modern fused_experts manages in-place internally and no
+            # longer accepts an ``inplace=`` kwarg (vLLM >= 0.22); the deep_gemm
+            # path above still honors ``disable_inplace()`` via FusedMoEKernel.
             return fused_experts(
                 x,
                 w1,
                 w2,
                 topk_weights,
                 topk_ids,
-                inplace=inplace,
                 quant_config=quant_config,
             )
 
