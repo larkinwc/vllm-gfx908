@@ -50,6 +50,13 @@ def disable_inplace() -> bool:
     The fused-experts kernel defaults to ``inplace=True`` (matching the vLLM
     serving runtime). Set ``VLLM_MOE_TUNE_DISABLE_INPLACE=1`` to force the
     out-of-place path, e.g. for debugging an in-place-only correctness issue.
+
+    Returns:
+        bool: ``True`` when ``VLLM_MOE_TUNE_DISABLE_INPLACE=1``, else ``False``.
+
+    Raises:
+        ValueError: If ``VLLM_MOE_TUNE_DISABLE_INPLACE`` is set to a
+            non-integer value.
     """
     return bool(int(os.environ.get("VLLM_MOE_TUNE_DISABLE_INPLACE", "0")))
 

@@ -139,6 +139,11 @@ c=1 regression: each deployment opts in based on its concurrency regime.
 
 ## Artifacts / reproduction
 
+`<worktree>` below is the absolute path to the compiled vLLM source tree
+containing `vllm/_C.abi3.so` (the `happy-carrots` worktree per the build line at
+the bottom of this doc). Per AGENTS.md the standard wrapper is `uv` — substitute
+`uv run python <script>` for `/opt/vllm-env/bin/python3 <script>`.
+
 ```bash
 # Tune (GPUs 1,2; ~2-3 h for the full decode sweep with crash-recovery):
 PYTHONPATH=<worktree> /opt/vllm-env/bin/python3 /root/w8a16-35b/moe_tune_w8a16.py \

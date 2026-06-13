@@ -72,13 +72,17 @@ export HF_HUB_OFFLINE=1
 _find_compiled_worktree() {
   local wt_root
   wt_root="$(cd "$(dirname "$(readlink -f "$0")")/../.." && pwd)"
+  # Enumerate candidates in a deterministic (version-sorted) order so the
+  # selection is stable when multiple compiled worktrees exist — picking the
+  # first match in raw glob order could silently switch checkouts between runs
+  # and invalidate A/B comparisons / gate decisions.
   local cand
-  for cand in "$wt_root"/*/; do
+  while IFS= read -r cand; do
     if [[ -f "${cand}vllm/_C.abi3.so" ]]; then
       printf '%s' "${cand%/}"
       return 0
     fi
-  done
+  done < <(printf '%s\n' "$wt_root"/*/ | LC_ALL=C sort -V)
   return 1
 }
 if [[ -n "${VLLM_SRC:-}" && -f "$VLLM_SRC/vllm/_C.abi3.so" ]]; then
@@ -169,8 +173,10 @@ done
 # ---------------------------------------------------------------------------
 stop_server() {
   if [[ -z "${HIP_VISIBLE_DEVICES:-}" && "${PORT:-8000}" == "8000" ]]; then
-    pkill -9 -f 'vllm.entrypoints' 2>/dev/null || true
-    pkill -9 -f 'VLLM::' 2>/dev/null || true
+    # Scope the broad cleanup to the current user so we never terminate another
+    # user's vLLM services/benchmarks on a shared node (-9 -u "$(id -u)").
+    pkill -9 -u "$(id -u)" -f 'vllm.entrypoints' 2>/dev/null || true
+    pkill -9 -u "$(id -u)" -f 'VLLM::' 2>/dev/null || true
     sleep 2
   elif [[ -n "${SERVER_PID:-}" ]]; then
     kill -9 "$SERVER_PID" 2>/dev/null || true
