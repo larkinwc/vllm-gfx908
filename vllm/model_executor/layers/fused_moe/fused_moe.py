@@ -103,6 +103,7 @@ def fused_moe_kernel_gptq_awq(
     has_zp: tl.constexpr,
     use_int4_w4a16: tl.constexpr,
     use_int8_w8a16: tl.constexpr,
+    GEMV_MODE: tl.constexpr = False,
 ):
     """
     Implements the fused computation for a Mixture of Experts (MOE) using
@@ -267,7 +268,14 @@ def fused_moe_kernel_gptq_awq(
             b = ((b.to(tl.float32) - b_zp) * b_scale).to(compute_type)
         else:
             b = ((b.to(tl.float32) - b_zp_num) * b_scale).to(compute_type)
-        accumulator = tl.dot(a, b, acc=accumulator)
+        if GEMV_MODE:
+            # gfx900 (no MFMA): M=1 decode token would pad to a 16-row tl.dot.
+            # Do a real GEMV: broadcast-multiply and reduce over K.
+            accumulator += tl.sum(
+                a[:, :, None].to(tl.float32) * b[None, :, :].to(tl.float32), axis=1
+            )
+        else:
+            accumulator = tl.dot(a, b, acc=accumulator)
 
         # Advance the ptrs to the next K block.
         a_ptrs += BLOCK_SIZE_K * stride_ak
@@ -1245,7 +1253,21 @@ def get_default_config(
         if use_moe_wna16_cuda:
             config = {"BLOCK_SIZE_M": min(16, M), "SPLIT_K": 1}
         elif M <= 20:
-            config = {"BLOCK_SIZE_M": 16, "GROUP_SIZE_M": 1, "SPLIT_K": 1}
+            from vllm.platforms.rocm import on_gfx900
+            import os as _os
+            if on_gfx900() and M <= 2 and _os.environ.get("VLLM_GFX900_MOE_GEMV", "1") != "0":
+                # gfx900 has no MFMA: a 16-row tl.dot wastes ~16x on a 1-token
+                # decode. Use a real per-token GEMV (BLOCK_SIZE_M=1 + tl.sum).
+                # Small BLOCK_SIZE_N maximizes CU occupancy for the M=1 GEMV
+                # (swept: N=8,K=128 optimal on Vega10, 56 CUs).
+                config = {
+                    "BLOCK_SIZE_M": 1, "GROUP_SIZE_M": 1, "SPLIT_K": 1,
+                    "GEMV_MODE": True,
+                    "BLOCK_SIZE_N": 8, "BLOCK_SIZE_K": 128,
+                    "num_warps": 4, "num_stages": 2,
+                }
+            else:
+                config = {"BLOCK_SIZE_M": 16, "GROUP_SIZE_M": 1, "SPLIT_K": 1}
         elif M <= 40:
             config = {"BLOCK_SIZE_M": 32, "GROUP_SIZE_M": 1, "SPLIT_K": 1}
         else:
