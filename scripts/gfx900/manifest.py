@@ -4,8 +4,10 @@
 
 from __future__ import annotations
 
+import json
 import os
 import platform
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -55,9 +57,11 @@ def _python_runtime() -> dict[str, Any]:
     result = run_command([sys.executable, "-c", probe])
     if result.get("returncode") != 0:
         return {"python": sys.version, "probe_error": result.get("stderr", "")}
-    import json
-
-    return json.loads(str(result["stdout"]))
+    runtime = json.loads(str(result["stdout"]))
+    if runtime.get("vllm_commit") is None:
+        match = re.search(r"\+g([0-9a-f]+)", str(runtime.get("vllm", "")))
+        runtime["vllm_commit"] = match.group(1) if match else None
+    return runtime
 
 
 def _library(path: str | None) -> dict[str, str | None]:
@@ -182,6 +186,13 @@ def validate_manifest(
     source = manifest.get("source", {})
     if require_clean and source.get("dirty"):
         errors.append("reference capture requires a clean source tree")
+    if require_clean:
+        source_commit = str(source.get("commit") or "")
+        runtime_commit = str(manifest.get("runtime", {}).get("vllm_commit") or "")
+        if not runtime_commit:
+            errors.append("unable to determine active vLLM commit")
+        elif not source_commit.startswith(runtime_commit):
+            errors.append("active vLLM commit does not match Git HEAD")
     expected = profile["expected_platform"]
     if expected.get("reset_method") != 2:
         errors.append("profile must require amdgpu.reset_method=2")

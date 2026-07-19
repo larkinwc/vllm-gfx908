@@ -25,7 +25,12 @@ def test_python_runtime_uses_probe_result(monkeypatch) -> None:
             "stdout": '{"python":"3","vllm":"x","devices":[]}',
         },
     )
-    assert manifest._python_runtime() == {"python": "3", "vllm": "x", "devices": []}
+    assert manifest._python_runtime() == {
+        "python": "3",
+        "vllm": "x",
+        "vllm_commit": None,
+        "devices": [],
+    }
 
 
 def test_manifest_uses_live_selected_devices(monkeypatch) -> None:
@@ -90,4 +95,18 @@ def test_manifest_validation_requires_library_hashes() -> None:
     }
     assert "unable to resolve required rccl library hash" in manifest.validate_manifest(
         value, _profile()
+    )
+
+
+def test_reference_manifest_requires_active_vllm_commit_match() -> None:
+    value = {
+        "source": {"commit": "abcdef0123456789", "dirty": False},
+        "kernel": {"reset_method": 2},
+        "devices": [{"arch": "gfx900"}],
+        "runtime": {"vllm": "x", "vllm_commit": "0123456"},
+        "libraries": {"rccl": {"sha256": "x"}},
+        "platform_sha256": "x",
+    }
+    assert "active vLLM commit does not match Git HEAD" in manifest.validate_manifest(
+        value, _profile(), require_clean=True
     )
