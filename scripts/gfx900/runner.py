@@ -134,13 +134,18 @@ def _missing_required_metrics(
 
 
 def _terminate(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
+    """Terminate the server's process group, including surviving children."""
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
         return
-    os.killpg(process.pid, signal.SIGTERM)
     try:
         process.wait(timeout=15)
     except subprocess.TimeoutExpired:
-        os.killpg(process.pid, signal.SIGKILL)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            return
         process.wait(timeout=15)
 
 
@@ -166,6 +171,7 @@ def _run_benchmark(
             stderr=stderr_file,
             text=True,
             env=dict(environment),
+            start_new_session=True,
         )
         started = time.monotonic()
         while process.poll() is None:
@@ -203,6 +209,310 @@ def _run_benchmark(
         raise RuntimeError(f"benchmark result is invalid JSON: {error}") from error
     return raw
 
+
+def _aggregate_trials(trials: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """Reduce recorded benchmark trials with the established per-server median."""
+    aggregate: dict[str, Any] = {}
+    results = [trial["result"] for trial in trials]
+    for key in (
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms",
+        "mean_ttft_ms",
+        "median_tpot_ms",
+    ):
+        values = [
+            result[key]
+            for result in results
+            if isinstance(result.get(key), (float, int))
+        ]
+        if values:
+            aggregate[key] = median(values)
+    aggregate["failed_requests"] = sum(
+        int(result.get("failed", 0)) for result in results
+    )
+    return aggregate
+
+
+def _confirmed_aggregate(launches: list[Mapping[str, Any]]) -> dict[str, Any]:
+    """Reduce independent per-launch medians into the confirm headline."""
+    aggregate: dict[str, Any] = {}
+    for key in (
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms",
+        "mean_ttft_ms",
+        "median_tpot_ms",
+    ):
+        values = [
+            launch["aggregate"][key]
+            for launch in launches
+            if isinstance(launch.get("aggregate", {}).get(key), (float, int))
+        ]
+        if values:
+            aggregate[key] = median(values)
+    aggregate["failed_requests"] = sum(
+        int(launch.get("aggregate", {}).get("failed_requests", 0))
+        for launch in launches
+    )
+    return aggregate
+
+
+def _run_confirm_launch(
+    *,
+    cell: Mapping[str, Any],
+    cell_dir: Path,
+    launch_argv: list[str],
+    benchmark_argv: list[str],
+    environment: Mapping[str, str],
+    base_url: str,
+    model_id: str,
+    launch_index: int,
+    attempt: int,
+) -> tuple[dict[str, Any], BaseException | None]:
+    """Run one independent confirm launch and retain all of its evidence."""
+    launch_id = f"launch-{launch_index}-attempt-{attempt}"
+    launch_dir = cell_dir / "launches" / launch_id
+    stdout_path = launch_dir / "server.stdout.log"
+    stderr_path = launch_dir / "server.stderr.log"
+    launch: dict[str, Any] = {
+        "launch_index": launch_index,
+        "attempt": attempt,
+        "started_at": utc_now(),
+        "status": "FAILED",
+        "failure_reason": None,
+        "logs": {
+            "stdout": str(stdout_path.relative_to(cell_dir)),
+            "stderr": str(stderr_path.relative_to(cell_dir)),
+        },
+        "warmups": [],
+        "trials": [],
+        "aggregate": {},
+    }
+    process: subprocess.Popen[str] | None = None
+    interrupted: BaseException | None = None
+    try:
+        launch_dir.mkdir(parents=True, exist_ok=True)
+        with stdout_path.open("w") as stdout_file, stderr_path.open("w") as stderr_file:
+            process = subprocess.Popen(
+                launch_argv,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                text=True,
+                env=dict(environment),
+                start_new_session=True,
+            )
+            _wait_for_server(base_url, model_id, float(cell["timeout_seconds"]))
+            benchmark_results = launch_dir / "benchmark_results"
+            for index in range(cell["warmup_runs"]):
+                launch["warmups"].append(
+                    _run_benchmark(
+                        benchmark_argv,
+                        environment,
+                        float(cell["timeout_seconds"]),
+                        benchmark_results / f"warmup-{index}.json",
+                    )
+                )
+            for index in range(cell["recorded_runs"]):
+                before_metrics = _scrape_metrics(base_url)
+                trial = _run_benchmark(
+                    benchmark_argv,
+                    environment,
+                    float(cell["timeout_seconds"]),
+                    benchmark_results / f"trial-{index}.json",
+                    base_url=base_url,
+                )
+                trial["metrics"] = _metric_delta(
+                    before_metrics, _scrape_metrics(base_url)
+                )
+                trial["metrics"].update(trial.pop("peak_metrics"))
+                launch["trials"].append(trial)
+    except (OSError, RuntimeError, TimeoutError, subprocess.TimeoutExpired) as error:
+        launch["failure_reason"] = str(error)
+    except BaseException as error:
+        launch["failure_reason"] = str(error) or type(error).__name__
+        interrupted = error
+    finally:
+        if process is not None:
+            try:
+                _terminate(process)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                launch["failure_reason"] = launch["failure_reason"] or str(error)
+    logs = ""
+    for path in (stdout_path, stderr_path):
+        if path.exists():
+            logs += path.read_text(errors="replace")
+    if contains_error_signature(logs):
+        launch["failure_reason"] = (
+            launch["failure_reason"] or "fatal server error signature"
+        )
+    if launch["failure_reason"] is None:
+        output = [trial["result"] for trial in launch["trials"]]
+        if any(result.get("failed", 0) for result in output):
+            launch["failure_reason"] = "benchmark reported failed requests"
+        else:
+            missing_metrics = _missing_required_metrics(
+                cell["required_metrics"], launch["trials"]
+            )
+            if missing_metrics:
+                launch["failure_reason"] = (
+                    "required metrics unavailable: "
+                    f"{', '.join(missing_metrics)}"
+                )
+    launch["aggregate"] = _aggregate_trials(launch["trials"])
+    if launch["failure_reason"] is None:
+        launch["status"] = "PASS"
+    return launch, interrupted
+
+
+def _new_confirm_artifact(
+    *,
+    cell: Mapping[str, Any],
+    cell_id: str,
+    manifest: Mapping[str, Any],
+    resolved: Mapping[str, Any],
+    launch_argv: list[str],
+    benchmark_argv: list[str],
+) -> dict[str, Any]:
+    """Create the incrementally persisted artifact for a confirm cell."""
+    return {
+        "schema_version": 1,
+        "identity": {
+            "cell_id": cell_id,
+            "phase": cell["phase"],
+            "started_at": utc_now(),
+        },
+        "provenance": {
+            "manifest_sha256": manifest["manifest_sha256"],
+            "platform_sha256": manifest["platform_sha256"],
+        },
+        "configuration": {
+            "resolved_digest": resolved["configuration_digest"],
+            "launch_argv": launch_argv,
+            "benchmark_argv": benchmark_argv,
+            "environment": redact_environment(resolved["environment"]),
+        },
+        "workload": cell["workload"],
+        "trials": [],
+        "aggregate": {},
+        "confirm": {
+            "launch_count": cell["confirm_launches"],
+            "warmup_runs_per_launch": cell["warmup_runs"],
+            "recorded_runs_per_launch": cell["recorded_runs"],
+            "launches": [],
+            "launch_medians": [],
+            "reduction": None,
+        },
+        "verdict": {"status": "FAILED", "failure_reason": "confirm incomplete"},
+    }
+
+
+def _refresh_confirm_artifact(artifact: dict[str, Any]) -> None:
+    """Refresh derived confirm fields after every preserved launch attempt."""
+    confirm = artifact["confirm"]
+    launches = confirm["launches"]
+    artifact["trials"] = [
+        trial for launch in launches for trial in launch.get("trials", [])
+    ]
+    completed = [launch for launch in launches if launch["status"] == "PASS"]
+    confirm["launch_medians"] = [
+        {
+            "launch_index": launch["launch_index"],
+            "attempt": launch["attempt"],
+            "aggregate": launch["aggregate"],
+        }
+        for launch in completed
+    ]
+    if len(completed) == confirm["launch_count"]:
+        artifact["aggregate"] = _confirmed_aggregate(completed)
+        confirm["reduction"] = {
+            "method": "median_of_launch_medians",
+            "metrics": artifact["aggregate"],
+        }
+        artifact["verdict"] = {"status": "PASS", "failure_reason": None}
+    else:
+        artifact["aggregate"] = {}
+        confirm["reduction"] = None
+        artifact["verdict"] = {
+            "status": "FAILED",
+            "failure_reason": "confirm incomplete",
+        }
+
+
+def _run_confirm_cell(
+    *,
+    cell: Mapping[str, Any],
+    cell_id: str,
+    cell_dir: Path,
+    result_path: Path,
+    manifest: Mapping[str, Any],
+    resolved: Mapping[str, Any],
+    launch_argv: list[str],
+    benchmark_argv: list[str],
+    base_url: str,
+) -> dict[str, Any]:
+    """Resume and execute only confirm launches lacking a terminal result."""
+    if result_path.exists():
+        artifact = json.loads(result_path.read_text())
+        if artifact.get("verdict", {}).get("status") == "PASS":
+            return artifact
+        if "confirm" not in artifact:
+            raise RuntimeError("confirm resume artifact lacks confirm launch evidence")
+        if (
+            artifact.get("configuration", {}).get("resolved_digest")
+            != resolved["configuration_digest"]
+        ):
+            raise RuntimeError(
+                "confirm resume configuration does not match existing artifact"
+            )
+    else:
+        artifact = _new_confirm_artifact(
+            cell=cell,
+            cell_id=cell_id,
+            manifest=manifest,
+            resolved=resolved,
+            launch_argv=launch_argv,
+            benchmark_argv=benchmark_argv,
+        )
+        write_json(result_path, artifact)
+    confirm = artifact["confirm"]
+    if confirm["launch_count"] != cell["confirm_launches"]:
+        raise RuntimeError("confirm launch count does not match existing artifact")
+    completed_indices = {
+        launch["launch_index"]
+        for launch in confirm["launches"]
+        if launch["status"] == "PASS"
+    }
+    for launch_index in range(cell["confirm_launches"]):
+        if launch_index in completed_indices:
+            continue
+        attempt = 1 + sum(
+            launch["launch_index"] == launch_index
+            for launch in confirm["launches"]
+        )
+        launch, interrupted = _run_confirm_launch(
+            cell=cell,
+            cell_dir=cell_dir,
+            launch_argv=launch_argv,
+            benchmark_argv=benchmark_argv,
+            environment=resolved["environment"],
+            base_url=base_url,
+            model_id=resolved["model"]["id"],
+            launch_index=launch_index,
+            attempt=attempt,
+        )
+        confirm["launches"].append(launch)
+        _refresh_confirm_artifact(artifact)
+        if launch["status"] != "PASS":
+            artifact["verdict"]["failure_reason"] = launch["failure_reason"]
+        write_json(result_path, artifact)
+        if interrupted is not None:
+            raise interrupted
+        if launch["status"] != "PASS":
+            return artifact
+    _refresh_confirm_artifact(artifact)
+    write_json(result_path, artifact)
+    return artifact
 
 def resolve_cell(
     profile: Mapping[str, Any], matrix: Mapping[str, Any], cell_id: str
@@ -258,7 +568,7 @@ def run_cell(
     cell = resolved["cell"]
     cell_dir = output_dir / "cells" / cell_id
     result_path = cell_dir / "cell.json"
-    if result_path.exists():
+    if result_path.exists() and cell["trial_policy"] != "confirm":
         existing = json.loads(result_path.read_text())
         if existing.get("verdict", {}).get("status") in TERMINAL_STATUSES:
             return existing
@@ -285,6 +595,18 @@ def run_cell(
         resolved["model"]["id"],
         *cell["benchmark_argv"],
     ]
+    if cell["trial_policy"] == "confirm":
+        return _run_confirm_cell(
+            cell=cell,
+            cell_id=cell_id,
+            cell_dir=cell_dir,
+            result_path=result_path,
+            manifest=manifest,
+            resolved=resolved,
+            launch_argv=launch_argv,
+            benchmark_argv=benchmark_argv,
+            base_url=base_url,
+        )
     process: subprocess.Popen[str] | None = None
     trials: list[dict[str, Any]] = []
     status = "FAILED"
