@@ -12,24 +12,25 @@ efficient operating point?"
 > `scripts/gfx900`, retain raw trials, and reject different `platform_sha256`
 > values; the harness records thermal telemetry but does not change power caps.
 
-## 2026-07 c4130-2 reproducible campaign addendum
+## 2026-07 c4130-2 reproducibility campaign addendum
 
-This addendum is the chronological evidence for the accepted manifest
-`9ffd3ab1d71629984918598f06901bfcbb457925a044c78048ee30942f6bc81d`
-(platform digest
-`61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`).
-It supersedes none of the historical sections below.
+The historical measurements below share platform digest
+`61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`.
+The clean, commit-validated campaign source is
+`689cbbba3ae5400bd583e1435177464e48f1f94a`. Its one-pass dense-graph and
+TurboQuant screens are evidence only until independently launched confirmation
+trials complete; they do not promote a profile.
 
 | Screen | Measured result | Decision |
 |---|---|---|
 | RCCL TP4/TP8, 1 KiB–8 MiB, default/Ring/Tree/LL/Simple | Default RCCL 2.27.7 was the only no-regression choice | No static RCCL override. |
 | FP16 topology, 4,096/256, c=8 | TP8: 26.476 output tok/s; TP4: 20.895; TP4×PP2: 26.304 | Keep separate topology observations; no universal replacement for TP8 eager. |
 | `FULL_DECODE_ONLY`, 4,096/256, c=8 | 26.551 versus 26.476 output tok/s eager (+0.28%) | Declined for the prefill-heavy reference workload. |
-| `FULL_DECODE_ONLY`, 512/512, c=1 | 58.18 versus 12.73 output tok/s eager (+357.1%); p99 TPOT 15.78 versus 78.15 ms | Promote as a low-concurrency, decode-dominant profile option. |
+| `FULL_DECODE_ONLY`, 512/512, c=1 | Historical: 58.18 versus 12.73 output tok/s eager (+357.1%); clean screen: 57.651 versus 12.707 | Pending independent-launch confirmation; do not promote yet. |
 | `FULL_DECODE_ONLY`, 512/512, c=32 | 190.51 versus 188.33 output tok/s eager (+1.16%); p99 TPOT 163.09 versus 165.01 ms | Do not enable for throughput batching alone. Repeated scheduler rows show an unpadded size-32 `FULL` graph, so this is not a fallback artifact. |
-| AWQ TP4, `FULL_DECODE_ONLY`, 512/512, c=1 | 39.637 versus 10.629 output tok/s (+272.9%); p99 TPOT 18.21 versus 88.01 ms | Graph profile passes the AWQ low-concurrency cell but remains model/host-specific. |
+| AWQ TP4, `FULL_DECODE_ONLY`, 512/512, c=1 | Historical: graph 39.637 versus eager 10.629 output tok/s. On clean source, eager started only with text-only multimodal limits and `--max-num-batched-tokens 512` (10.677 output tok/s); tested VLLM_COMPILE paths hung during warmup. | Do not enable AWQ graphs on gfx900. |
 | TP8 DecodeBenchConnector burst, 4,096/256, 0.0827 RPS, burstiness 0.25 | Graph 18.119 versus eager 18.064 output tok/s (+0.31%); p99 TPOT 126.93 versus 129.48 ms; p99 TTFT 2,431 versus 1,621 ms | Do not enable graph mode for burst/open-loop traffic: p99 TTFT fails the +2% gate. |
-| TurboQuant versus auto, 8,192/256, c=32 | 22.092 versus 18.450 output tok/s (+19.7%); both 0 preemptions; peak KV use 23.6% versus 54.6% | Promote `turboquant_k8v4` as a capacity-oriented Qwen3.5-9B TP8 profile; it is not a global default. |
+| TurboQuant versus auto, 8,192/256, c=32 | Historical: 22.092 versus 18.450 output tok/s (+19.7%). Clean screen: 20.521 versus 18.583 (+10.4%), both with zero request failures. | Pending independent-launch confirmation; do not promote `turboquant_k8v4` yet. |
 | Prefix-repetition, TurboQuant, c=8 | Cache-on 36.029 output tok/s, 82.8% hit; cache-off 12.740 | Promote prefix caching only for repeated-prefix workloads. |
 | MTP K=1 / CPU ngram K=4 | 22.376 / 24.007 output tok/s versus 26.476 eager | `DECLINED_NO_END_TO_END_WIN`. |
 

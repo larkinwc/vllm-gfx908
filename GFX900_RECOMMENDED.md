@@ -1,25 +1,31 @@
 # Recommended inference setup — gfx900 (V340 / Vega10)
 
 The historical sections cover **Qwen3.5-9B** (dense hybrid) and
-**Qwen3-Coder-Next-AWQ-4bit** (sparse MoE). The accepted 2026-07-13 reference
-below covers only Qwen3.5-9B FP16 on the selected c4130-2 eight-die group.
+**Qwen3-Coder-Next-AWQ-4bit** (sparse MoE). The clean-source campaign below
+uses the selected c4130-2 eight-die group; its results remain
+workload-specific.
 
-This file preserves the historical "how to run" record from
-`PERF_GFX900.md`; it is not a claim that historical V340 inventory, topology,
-graphs, RCCL variables, or quantization defaults are current recommendations.
+> **Current verification status (2026-07-19):** the clean, commit-validated
+> substrate has platform digest
+> `61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`
+> at source commit `689cbbba3ae5400bd583e1435177464e48f1f94a`. One matched
+> TurboQuant c=32 screen and one dense c=1 graph/eager screen completed, but
+> neither has the required independent-launch confirmation. They do not
+> promote a default or profile. The prior AWQ graph result is historical only:
+> on this substrate, AWQ requires `--max-num-batched-tokens 512` for eager
+> startup, while every tested VLLM_COMPILE configuration hangs during warmup
+> after compiling. Do not enable AWQ graphs on gfx900 from the historical
+> figure.
+> **Recommendation gate:** do not apply historical V340 count, per-die VRAM,
+> topology, RCCL variables, graph buckets, quantization defaults, or
+> performance figures to another host. First run the versioned `scripts.gfx900`
+> manifest and matrix workflow; publish a recipe only after its matching
+> `platform_sha256` passes the topology, graph, KV/prefix, speculation, and
+> quality gates.
 
-> **Current recommendation gate:** except for the c4130-2 reference section
-> below, the commands and figures in this document are historical measurements.
-> Do not apply their V340 count, per-die VRAM, topology, RCCL variables, graph
-> buckets, or power assumptions to another host. First run the versioned
-> `scripts.gfx900` manifest and matrix workflow; publish a recipe only when its
-> matching `platform_sha256` passes the topology, graph, KV/prefix, speculation,
-> and quality gates. The c4130-2 reference is authoritative only for its stated
-> workload; all remaining sections are historical.
+## Historical c4130-2 reference record (2026-07-13)
 
-## Current c4130-2 reference status (2026-07-13)
-
-The accepted manifest is
+The historical manifest is
 `/home/larkinwc/gfx900-runs/reference-3/manifest.json`
 (`platform_sha256`
 `61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`,
@@ -31,14 +37,14 @@ NUMA node 0 and connected by PCIe. The source was clean commit
 
 - `topology-fp16-tp8` — Qwen3.5-9B FP16, TP8, eager, 4,096 input / 256
   output, c=8: 26.476 output tok/s, p99 TPOT 279.810 ms, p99 TTFT
-  39,304.785 ms, and 0 failures. This is the accepted eager reference for this
+  39,304.785 ms, and 0 failures. This is a historical eager reference for this
   exact workload. Artifact:
   `/home/larkinwc/gfx900-runs/topology/cells/topology-fp16-tp8/cell.json`.
 - `capacity-turboquant` — TP8 eager, `turboquant_k8v4`, 8,192 input / 256
   output, c=8: 18.078 output tok/s, p99 TPOT 402.193 ms, p99 TTFT
-  71,276.167 ms, and 0 failures. This was the initial capacity screen; the
-  matched c=32 control and valid cache-read quality gate below qualify it as a
-  capacity-oriented profile option, not a global default. Artifact:
+  71,276.167 ms, and 0 failures. This was the initial capacity screen; its
+  cache-read quality gate did not replace the pending capacity confirmation.
+  Artifact:
   `/home/larkinwc/gfx900-runs/capacity/cells/capacity-turboquant/cell.json`.
 - `speculation-mtp-k1` — TP8 eager, native MTP K=1, 4,096 input / 256 output,
   c=8: 22.376 output tok/s, p99 TPOT 422.173 ms, p99 TTFT 41,651.013 ms, 0
@@ -47,16 +53,13 @@ NUMA node 0 and connected by PCIe. The source was clean commit
   is +5.969%; all exceed the promotion policy. Artifact:
   `/home/larkinwc/gfx900-runs/speculation/cells/speculation-mtp-k1/cell.json`.
 
-No RCCL tuning variable or speculative-decoding configuration is a global
-gfx900 default from this campaign. CUDAGraphs are a **workload-specific profile
-option**: they are strongly beneficial for low-concurrency decode-dominant
-serving but not for the prefill-heavy or already-full c=32 serving controls.
-`turboquant_k8v4` is a **capacity-oriented profile option** for the measured
-Qwen3.5-9B TP8 workload, not a general KV-cache default. Its matched
-teacher-forced cache-read perplexity result is quality-neutral within
-measurement noise and below the +1% promotion gate.
+No RCCL tuning variable, speculative-decoding configuration, CUDAGraph
+profile, or `turboquant_k8v4` configuration is a current gfx900 default from
+this campaign. The cache-read perplexity control remains quality-neutral
+within measurement noise, but quality alone does not satisfy the pending
+capacity confirmation.
 
-For the accepted eager reference only, use the exact matrix-controlled options:
+For the historical eager reference only, use the exact matrix-controlled options:
 
 ```bash
 HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 VLLM_USE_V1=1 \
@@ -70,25 +73,26 @@ vllm serve Qwen/Qwen3.5-9B \
 This is a reproducible benchmark control, not a general production prescription:
 retain explicit workload, capacity, and quality gates before changing it.
 
-### Completed workload results and guarded recommendations
+### Historical workload results and guarded recommendations
 
-The accepted-manifest rows below use source commit
+The rows below record the earlier source commit
 `3973e0ec9cd10b95f4663096237c025806efdfdb` and model revision
-`c202236235762e1c871ad0ccb60c8ee5ba337b9a`. The follow-up AWQ and
-decode-isolated burst screens are live-run artifacts using the same model
-revisions and explicit settings shown below. All evidence is profile-specific,
-not a global gfx900 source default.
+`c202236235762e1c871ad0ccb60c8ee5ba337b9a`. They are not promotion evidence
+for the clean `689cbbba3` campaign. The 2026-07-19 dense c=1 screen measured
+57.651 versus 12.707 output tok/s (graph versus eager); the matched TurboQuant
+c=32 screen measured 20.521 versus 18.583 output tok/s (TurboQuant versus
+auto). Both require independent-launch confirmation.
 
 | Workload / decision | Result | Recommendation |
 |---|---|---|
 | TP8 FP16 eager, 4,096/256, c=8 | 26.476 output tok/s | Retain as the general c4130-2 control. TP4 and TP4×PP2 did not meet a universal topology-promotion gate. |
 | `FULL_DECODE_ONLY`, 4,096/256, c=8 | 26.551 output tok/s, +0.28% versus eager | Declined for this prefill-heavy reference workload; retain `--enforce-eager` for that control. |
-| `FULL_DECODE_ONLY`, 512/512, c=1 | 58.18 versus 12.73 output tok/s eager (+357.1%); p99 TPOT 15.78 versus 78.15 ms | Promote as a profile-level option for latency-sensitive, decode-dominant, low-concurrency serving. |
+| `FULL_DECODE_ONLY`, 512/512, c=1 | Historical result: 58.18 versus 12.73 output tok/s eager (+357.1%); the clean screen was 57.651 versus 12.707 | Pending independent-launch confirmation; do not promote yet. |
 | `FULL_DECODE_ONLY`, 512/512, c=32 | 190.51 versus 188.33 output tok/s eager (+1.16%); full 32-token graph steps, no steady-state padding | Do not enable solely for high-throughput batching; graph launch savings are amortized at the full batch. |
-| AWQ TP4, `FULL_DECODE_ONLY`, 512/512, c=1 | Graph: 39.637 versus eager 10.629 output tok/s (+272.9%); p99 TPOT 18.21 versus 88.01 ms | The low-concurrency graph profile also works for `QuantTrio/Qwen3.5-9B-AWQ`; retain it as a host/model option, not a platform default. |
+| AWQ TP4, `FULL_DECODE_ONLY`, 512/512, c=1 | Historical result: graph 39.637 versus eager 10.629 output tok/s. Clean source required `--max-num-batched-tokens 512` even for eager; VLLM_COMPILE warmup hung with and without CUDAGraphs. | Do not enable AWQ graphs on gfx900. The only successful clean screen is eager, text-only AWQ at a 512-token batch cap (10.677 output tok/s). |
 | TP8 decode-isolated burst, 4,096/256, 0.0827 RPS, burstiness 0.25 | Graph: 18.119 versus eager 18.064 output tok/s (+0.31%); p99 TPOT 126.93 versus 129.48 ms; p99 TTFT 2,431 versus 1,621 ms | Do not promote graph mode for burst/open-loop serving: it misses the p99 TTFT gate despite zero failures and a small TPOT reduction. |
 | Repeated-prefix workload, TurboQuant, c=8 | 4,096 shared-prefix / 256 suffix / 128 output; prefix cache on: 36.029 output tok/s, 82.8% hit rate; off: 12.740 output tok/s | Enable `--enable-prefix-caching` only when the application has demonstrably repeated prefixes. The observed +182.8% output goodput and -77.1% mean TTFT exceed the workload-specific gate; it is not a generic latency claim. |
-| Long input, c=32 capacity screen | TurboQuant: 22.092 output tok/s, 0 preemptions, 23.6% peak KV use; auto: 18.450 output tok/s, 0 preemptions, 54.6% peak KV use | Promote `turboquant_k8v4` as a capacity-oriented Qwen3.5-9B TP8 profile: +19.7% output goodput with no latency regression and a quality-neutral cache-read PPL delta of -0.105%, below the +1% gate. It is not a global default. |
+| Long input, c=32 capacity screen | Historical result: TurboQuant 22.092 versus auto 18.450 output tok/s (+19.7%). Clean screen: TurboQuant 20.521 versus auto 18.583 (+10.4%), both with zero request failures. | Pending independent-launch confirmation; do not promote `turboquant_k8v4` yet. |
 | Native MTP K=1 and CPU ngram K=4 | MTP: 22.376 output tok/s; ngram: 24.007 output tok/s, versus eager 26.476 | `DECLINED_NO_END_TO_END_WIN`: retain non-speculative serving. |
 
 For the graph-promoted c=1 workload class, replace `--enforce-eager` with:

@@ -20,24 +20,23 @@ This branch (`gfx900-support`) extends the MI100/gfx908 fork to AMD **gfx900**
 > normalized performance comparison. The capture intentionally fails closed
 > unless `amdgpu.reset_method=2`; it does not change host settings.
 
-## Accepted c4130-2 reference (2026-07-13)
+## Historical c4130-2 reference record (2026-07-13)
 
 Historical system note: earlier testing described 8 Radeon Pro V340 cards
-(16 gfx900 dies) on dual Xeon E5-2640 v3 with ROCm 7.2.4. The accepted
-2026-07-13 capture selects the eight-die c4130-2 group recorded above; do not
-infer unselected inventory, VRAM, or topology from the historical description.
-It was captured from clean source commit
-`3973e0ec9cd10b95f4663096237c025806efdfdb` with vLLM
+(16 gfx900 dies) on dual Xeon E5-2640 v3 with ROCm 7.2.4. The selected
+2026-07-13 capture used the eight-die c4130-2 group; do not infer unselected
+inventory, VRAM, or topology from the historical description. It was captured
+from clean source commit `3973e0ec9cd10b95f4663096237c025806efdfdb` with vLLM
 `0.1.dev17289+g3973e0ec9`, ROCm 7.2.4, PyTorch 2.12.1+rocm7.2, and Triton
 3.7.0. The selected group is eight 56-CU gfx900 dies (8,573,157,376 bytes
 each), all PCIe-attached on NUMA node 0. Its compatibility digest is
-`61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`;
-its complete manifest digest is
-`9ffd3ab1d71629984918598f06901bfcbb457925a044c78048ee30942f6bc81d`.
+`61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`.
 
-The host has `amdgpu.reset_method=2`, verified after reboot. Treat this
-reference as the only comparable substrate for the run artifacts named in
-`GFX900_RECOMMENDED.md`; recapture rather than reusing its figures after any
+The 2026-07-19 clean source commit
+`689cbbba3ae5400bd583e1435177464e48f1f94a` reproduced that platform digest,
+but its capacity and dense-graph screens are awaiting independent-launch
+confirmation. Treat the historical figures as comparable context, not an
+accepted recommendation. Recapture rather than reusing any figure after a
 hardware, ROCm, library, rank-order, or topology change.
 
 ### Reproducing the completed c4130-2 campaign
@@ -57,11 +56,14 @@ tokens, 128 requested output tokens, four prefixes, 32 prompts, and c=8. The
 reproducible option is `--enable-prefix-caching`; do not infer a benefit for
 unrelated prompt distributions.
 
-For latency-sensitive decode-dominant serving, the TP8 graph profile uses
-`FULL_DECODE_ONLY` with capture sizes `[1,2,4,8,16,32]`. It improved a
-512-input / 512-output c=1 run from 12.73 to 58.18 output tok/s and reduced p99
-TPOT from 78.15 to 15.78 ms. The matched AWQ TP4 c=1 control also improved from
-10.629 to 39.637 output tok/s, with p99 TPOT from 88.01 to 18.21 ms.
+For latency-sensitive decode-dominant serving, the TP8
+`FULL_DECODE_ONLY` graph result is historical pending independent-launch
+confirmation. The clean c=1 screen measured 57.651 output tok/s in graph mode
+versus 12.707 eager, with p99 TPOT 15.939 versus 79.490 ms; it is not yet a
+recommended profile. Do not apply the historical AWQ graph result: on the
+clean substrate AWQ only reached eager readiness with text-only multimodal
+limits and `--max-num-batched-tokens 512`. Every tested VLLM_COMPILE mode
+hung during warmup, with and without CUDAGraph capture.
 
 This is not a burst/open-loop default. In the TP8 DecodeBenchConnector
 4,096-input / 256-output burst control at 0.0827 RPS and burstiness 0.25, graph
@@ -93,11 +95,12 @@ The valid cache-read perplexity gate is
 `.venv/bin/python -m scripts.gfx900.cache_read_ppl`: it prefills 256 tokens
 from each fixed 512-token chunk, teacher-forces the remaining 256 corpus tokens
 through actual decode steps, and records raw target logits before masking the
-sampled output. Across 50 chunks (12,800 scored tokens), auto PPL was 7.7323505
-and `turboquant_k8v4` PPL was 7.7242287 (-0.105%). That difference is
-quality-neutral within measurement noise, not a quality gain, and is below the
-+1% gate. `turboquant_k8v4` is therefore a capacity-oriented Qwen3.5-9B TP8
-profile option, not a global KV-cache default.
+sampled output. Across 50 chunks (12,800 scored tokens), auto PPL was
+7.7323505 and `turboquant_k8v4` PPL was 7.7242287 (-0.105%). That difference
+is quality-neutral within measurement noise, not a quality gain, and is below
+the +1% gate. The clean c=32 screen measured 20.521 output tok/s for
+`turboquant_k8v4` versus 18.583 for auto, with zero request failures; it still
+requires independent-launch confirmation before becoming a profile option.
 See `GFX900_RECOMMENDED.md` for measured launch recommendations and
 `PERF_GFX900.md` for the chronological campaign evidence.
 
