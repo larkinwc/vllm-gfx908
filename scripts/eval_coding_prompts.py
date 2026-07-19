@@ -37,12 +37,16 @@ REPO = Path(
 )  # noqa: E501
 DEFAULT_PROMPTS = REPO / "tests" / "eval" / "coding_prompts.json"
 DEFAULT_OUT_DIR = Path("/root/bench-int8-w4a16/final")
-SERVER = "http://127.0.0.1:8000"
+DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 
 
 def chat(
-    prompt: str, model: str, max_tokens: int = 2048, timeout: float = 600.0
-) -> str:  # noqa: E501
+    base_url: str,
+    prompt: str,
+    model: str,
+    max_tokens: int = 2048,
+    timeout: float = 600.0,
+) -> str:
     body = json.dumps(
         {
             "model": model,
@@ -53,7 +57,7 @@ def chat(
         }
     ).encode()
     req = urllib.request.Request(
-        f"{SERVER}/v1/chat/completions",
+        f"{base_url.rstrip('/')}/v1/chat/completions",
         data=body,
         headers={"Content-Type": "application/json"},
     )
@@ -256,6 +260,7 @@ def main() -> int:
         help="Model id served by vLLM; if omitted, picked from /v1/models.",
     )
     ap.add_argument("--label", type=str, default="m6")
+    ap.add_argument("--base-url", type=str, default=DEFAULT_BASE_URL)
     args = ap.parse_args()
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
@@ -265,14 +270,16 @@ def main() -> int:
     model = args.model
     if model is None:
         try:
-            with urllib.request.urlopen(f"{SERVER}/v1/models", timeout=5.0) as resp:
+            models_url = f"{args.base_url.rstrip('/')}/v1/models"
+            with urllib.request.urlopen(models_url, timeout=5.0) as resp:
                 blob = json.loads(resp.read())
                 model = blob["data"][0]["id"]
         except (urllib.error.URLError, KeyError, IndexError) as exc:
             print(
-                f"ERROR: cannot reach vLLM at {SERVER} or /v1/models malformed: {exc}",
+                "ERROR: cannot reach vLLM at "
+                f"{args.base_url} or /v1/models malformed: {exc}",
                 file=sys.stderr,
-            )  # noqa: E501
+            )
             return 2
 
     grades = []
@@ -281,7 +288,7 @@ def main() -> int:
     for p in spec["prompts"]:
         print(f"  [eval] {p['id']} ({p['language']}) … ", end="", flush=True)
         try:
-            response = chat(p["prompt"], model)
+            response = chat(args.base_url, p["prompt"], model)
         except Exception as exc:
             print(f"FAIL ({exc})")
             grades.append(

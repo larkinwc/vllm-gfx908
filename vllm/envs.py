@@ -106,6 +106,7 @@ if TYPE_CHECKING:
     VLLM_FORCE_AOT_LOAD: bool = False
     VLLM_USE_MEGA_AOT_ARTIFACT: bool = False
     VLLM_USE_TRITON_AWQ: bool = False
+    VLLM_GFX900_MOE_GEMV: bool = True
     VLLM_ALLOW_RUNTIME_LORA_UPDATING: bool = False
     VLLM_SKIP_P2P_CHECK: bool = False
     VLLM_DISABLED_KERNELS: list[str] = []
@@ -1047,6 +1048,9 @@ environment_variables: dict[str, Callable[[], Any]] = {
     "VLLM_LORA_RESOLVER_HF_REPO_LIST": lambda: os.getenv(
         "VLLM_LORA_RESOLVER_HF_REPO_LIST", None
     ),
+    # Enable the gfx900-specific W4A16 MoE GEMV decode path. Set to 0 to
+    # compare against the generic block-M path.
+    "VLLM_GFX900_MOE_GEMV": lambda: os.getenv("VLLM_GFX900_MOE_GEMV", "1") != "0",
     # If set, vLLM will use Triton implementations of AWQ.
     "VLLM_USE_TRITON_AWQ": lambda: bool(int(os.getenv("VLLM_USE_TRITON_AWQ", "0"))),
     # If set, allow loading or unloading lora adapters in runtime,

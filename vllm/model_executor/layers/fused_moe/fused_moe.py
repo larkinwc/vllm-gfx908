@@ -1254,17 +1254,21 @@ def get_default_config(
             config = {"BLOCK_SIZE_M": min(16, M), "SPLIT_K": 1}
         elif M <= 20:
             from vllm.platforms.rocm import on_gfx900
-            import os as _os
-            if on_gfx900() and M <= 2 and _os.environ.get("VLLM_GFX900_MOE_GEMV", "1") != "0":
+
+            if on_gfx900() and M <= 2 and envs.VLLM_GFX900_MOE_GEMV:
                 # gfx900 has no MFMA: a 16-row tl.dot wastes ~16x on a 1-token
                 # decode. Use a real per-token GEMV (BLOCK_SIZE_M=1 + tl.sum).
                 # Small BLOCK_SIZE_N maximizes CU occupancy for the M=1 GEMV
                 # (swept: N=8,K=128 optimal on Vega10, 56 CUs).
                 config = {
-                    "BLOCK_SIZE_M": 1, "GROUP_SIZE_M": 1, "SPLIT_K": 1,
+                    "BLOCK_SIZE_M": 1,
+                    "GROUP_SIZE_M": 1,
+                    "SPLIT_K": 1,
                     "GEMV_MODE": True,
-                    "BLOCK_SIZE_N": 8, "BLOCK_SIZE_K": 128,
-                    "num_warps": 4, "num_stages": 2,
+                    "BLOCK_SIZE_N": 8,
+                    "BLOCK_SIZE_K": 128,
+                    "num_warps": 4,
+                    "num_stages": 2,
                 }
             else:
                 config = {"BLOCK_SIZE_M": 16, "GROUP_SIZE_M": 1, "SPLIT_K": 1}

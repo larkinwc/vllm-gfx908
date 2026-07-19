@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "host_id", "executables", "models", "expected_platform", "device_groups", "numa_bindings", "telemetry_limits", "baseline_environment", "ports", "timeouts"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "host_id": {"type": "string", "minLength": 1},
+    "executables": {"type": "object", "additionalProperties": false, "required": ["vllm"], "properties": {"vllm": {"type": "string", "pattern": "^/"}}},
+    "models": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "object", "additionalProperties": false, "required": ["id", "revision", "tokenizer", "tokenizer_revision", "allowed_dtypes"], "properties": {"id": {"type": "string"}, "revision": {"type": "string"}, "tokenizer": {"type": "string"}, "tokenizer_revision": {"type": "string"}, "allowed_dtypes": {"type": "array", "items": {"type": "string"}}, "environment": {"type": "object", "additionalProperties": {"type": "string"}}}}},
+    "expected_platform": {"type": "object", "required": ["reset_method", "devices"], "properties": {"reset_method": {"const": 2}, "devices": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["arch"], "properties": {"arch": {"const": "gfx900"}}}}, "topology": {"type": "object"}, "power": {"type": "object"}}},
+    "device_groups": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "object", "additionalProperties": false, "required": ["id", "visible_indices", "numa_binding", "layouts"], "properties": {"id": {"type": "string"}, "visible_indices": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 0}}, "stable_device_ids": {"type": "array", "items": {"type": "string"}}, "numa_binding": {"type": "string"}, "layouts": {"type": "array", "items": {"type": "string"}}}}},
+    "numa_bindings": {"type": "object", "minProperties": 1, "additionalProperties": {"type": "object"}},
+    "telemetry_limits": {"type": "object", "required": ["junction_temperature_c", "throttle_clock_mhz", "minimum_disk_gib", "profiler_output_gib"], "properties": {"junction_temperature_c": {"type": "number"}, "throttle_clock_mhz": {"type": "number"}, "minimum_disk_gib": {"type": "integer", "minimum": 1}, "profiler_output_gib": {"type": "integer", "minimum": 1}}},
+    "baseline_environment": {"type": "object", "additionalProperties": {"type": "string"}},
+    "ports": {"type": "object", "required": ["first"], "properties": {"first": {"type": "integer", "minimum": 1, "maximum": 65535}}},
+    "timeouts": {"type": "object", "required": ["server_seconds", "benchmark_seconds"], "properties": {"server_seconds": {"type": "number", "exclusiveMinimum": 0}, "benchmark_seconds": {"type": "number", "exclusiveMinimum": 0}}},
+    "default_device_group": {"type": "string"}
+  }
+}

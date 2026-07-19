@@ -6,6 +6,72 @@ how it **aggregates across the 16 GPUs**, and how it responds to **power-cap
 tuning** — to answer "what do I actually get in aggregate, and what's the
 efficient operating point?"
 
+> **Historical evidence notice:** this report predates the reproducible gfx900
+> manifest/matrix harness. Its power, topology, eager/graph, and TP/PP conclusions
+> are tied to the recorded host and code era. New comparisons must use
+> `scripts/gfx900`, retain raw trials, and reject different `platform_sha256`
+> values; the harness records thermal telemetry but does not change power caps.
+
+## 2026-07 c4130-2 reproducible campaign addendum
+
+This addendum is the chronological evidence for the accepted manifest
+`9ffd3ab1d71629984918598f06901bfcbb457925a044c78048ee30942f6bc81d`
+(platform digest
+`61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`).
+It supersedes none of the historical sections below.
+
+| Screen | Measured result | Decision |
+|---|---|---|
+| RCCL TP4/TP8, 1 KiB–8 MiB, default/Ring/Tree/LL/Simple | Default RCCL 2.27.7 was the only no-regression choice | No static RCCL override. |
+| FP16 topology, 4,096/256, c=8 | TP8: 26.476 output tok/s; TP4: 20.895; TP4×PP2: 26.304 | Keep separate topology observations; no universal replacement for TP8 eager. |
+| `FULL_DECODE_ONLY`, 4,096/256, c=8 | 26.551 versus 26.476 output tok/s eager (+0.28%) | Declined for the prefill-heavy reference workload. |
+| `FULL_DECODE_ONLY`, 512/512, c=1 | 58.18 versus 12.73 output tok/s eager (+357.1%); p99 TPOT 15.78 versus 78.15 ms | Promote as a low-concurrency, decode-dominant profile option. |
+| `FULL_DECODE_ONLY`, 512/512, c=32 | 190.51 versus 188.33 output tok/s eager (+1.16%); p99 TPOT 163.09 versus 165.01 ms | Do not enable for throughput batching alone. Repeated scheduler rows show an unpadded size-32 `FULL` graph, so this is not a fallback artifact. |
+| AWQ TP4, `FULL_DECODE_ONLY`, 512/512, c=1 | 39.637 versus 10.629 output tok/s (+272.9%); p99 TPOT 18.21 versus 88.01 ms | Graph profile passes the AWQ low-concurrency cell but remains model/host-specific. |
+| TP8 DecodeBenchConnector burst, 4,096/256, 0.0827 RPS, burstiness 0.25 | Graph 18.119 versus eager 18.064 output tok/s (+0.31%); p99 TPOT 126.93 versus 129.48 ms; p99 TTFT 2,431 versus 1,621 ms | Do not enable graph mode for burst/open-loop traffic: p99 TTFT fails the +2% gate. |
+| TurboQuant versus auto, 8,192/256, c=32 | 22.092 versus 18.450 output tok/s (+19.7%); both 0 preemptions; peak KV use 23.6% versus 54.6% | Promote `turboquant_k8v4` as a capacity-oriented Qwen3.5-9B TP8 profile; it is not a global default. |
+| Prefix-repetition, TurboQuant, c=8 | Cache-on 36.029 output tok/s, 82.8% hit; cache-off 12.740 | Promote prefix caching only for repeated-prefix workloads. |
+| MTP K=1 / CPU ngram K=4 | 22.376 / 24.007 output tok/s versus 26.476 eager | `DECLINED_NO_END_TO_END_WIN`. |
+
+The matched 32,768-context needle control passed all five depths for both auto
+and TurboQuant. It used a 34,816-token single-sequence server with
+`--max-num-batched-tokens 4096` and `--gpu-memory-utilization 0.75`; an initial
+0.85 TurboQuant attempt failed with `torch.OutOfMemoryError` during the prefill
+attention activation. The matched coding suite was 8/10 in both modes with the
+same two environmental/extractor failures, so it found no new TurboQuant
+failure.
+
+The pinned WikiText-2 cache-read control used 50 fixed 512-token chunks:
+256-token prefills followed by 256 teacher-forced corpus decode tokens, with
+raw target logits recorded before masking forced outputs. It scored 12,800
+tokens and measured auto PPL 7.7323505 versus `turboquant_k8v4` PPL 7.7242287
+(-0.105%). Because this delta is below per-chunk variation, it is
+quality-neutral within measurement noise rather than evidence of a quality
+improvement; it is below the +1% promotion gate. The prefill-only
+`echo=true` prompt-logprob test remains a loader/numerics smoke because it
+intentionally skips prefix-cache reads.
+
+The burst screen exposed a hybrid-cache compatibility defect in
+`DecodeBenchConnector`: Qwen3.5 Mamba cache entries are lists of state tensors,
+not a single tensor. The connector now maps each configured KV-cache group to
+its layers and fills every physical tensor in a list-backed entry. The initial
+isolated graph launch failed with the old `AttributeError`; only the subsequent
+fixed graph/eager cells above are valid evidence. Both completed 16/16 requests
+with the connector active.
+
+### Promoted-workload profile
+
+A bounded server-side PyTorch profiler captured the TurboQuant
+prefix-repetition stack (16 prompts, c=8) at
+`/home/larkinwc/gfx900-runs/profile-turboquant-prefix/`. The rank-0 summary
+reports aggregate GPU time of 54.05% in RCCL generic all-reduce, 36.96% in
+`aten::mm`, and 23.58% in the leading `Cijk_*MT64x64x16*` hipBLASLt GEMM
+kernel. This authorizes further kernel investigation only with a concrete
+shape-bounded proposal and a full microbenchmark/end-to-end gate; no source
+kernel change is made from this aggregate observation alone. The older
+rocprofv3 wrapper attempt aborted during rocprofiler configuration, so the
+built-in server profiler is the retained capture.
+
 Microbenchmarks: `/tmp/gpu_peak.py` (matmul TFLOPS + `copy_` bandwidth, one
 process per GPU run concurrently), `/tmp/power_bench.py` + `/tmp/power_scan.sh`
 (sustained load while sweeping the power cap). Harness output in
@@ -233,7 +299,6 @@ python3 bench_scripts/realistic.py   # back-of-envelope from BENCH_GFX900 number
 
 ---
 
-
 ---
 
 # HIP CUDA-graph investigation (the `enforce_eager` question) — RESOLVED
@@ -274,6 +339,7 @@ validated in `BENCH_GFX900.md`.
 ## What it took to get graphs working (three real blockers)
 
 ### Blocker A — torch.compile/Inductor is the wrong target (don't bother)
+
 With graphs left fully on, vLLM defaults to `mode=VLLM_COMPILE` (Inductor) +
 `FULL_AND_PIECEWISE`. Inductor crashes on ROCm:
 `torch.* op returned non-Tensor bool, target: is_current_stream_capturing`. This
@@ -283,6 +349,7 @@ shows pure HIP graphs (no Inductor) already give no speedup. The correct config
 is `mode=NONE` (compile off) + `cudagraph_mode=FULL_DECODE_ONLY` (HIP graphs on).
 
 ### Blocker B — graph-capture hang + the REAL fix (`reset_method`, not firmware)
+
 An early TP8 capture hung **two** GPUs at once (PCI 22:00.0 and 25:00.0, both
 socket0). The driver's auto reset chose **BACO** (`reset_method=-1` → BACO),
 which "succeeded" but **lost VRAM** and left one GPU's SMU wedged
@@ -306,6 +373,7 @@ place, subsequent capture experiments never lost a GPU again (driver can
 actually recover instead of corrupting VRAM via BACO).
 
 ### Blocker C — one-time Triton autotune during capture warmup is very slow
+
 `mode=NONE + FULL_DECODE_ONLY` triggers `_warmup_prefill_kernels`
 (`qwen_gdn_linear_attn.py:1152`) → `recompute_w_u_fwd` (`wy_fast.py:156`) →
 `chunk_gated_delta_rule_fwd`, which `@triton.autotune`s the GDN/FLA kernels.
@@ -318,6 +386,7 @@ the one `num_warps=32` config in `l2norm.py:23` is invalid on wave64 but isn't
 on this hot path.)
 
 ## Bottom line / guidance
+
 - Keep **`enforce_eager=True`** for serving on gfx900 — graphs add a long cold
   autotune and buy nothing.
 - If you must experiment with graphs: set `amdgpu.reset_method=2` first (mode1),
@@ -399,10 +468,12 @@ which has no MFMA/Marlin). Correct output, TP2.
 | 96 | 52.50 | 1829 |
 
 **AWQ INT4 is SLOWER than FP16 on both latency and throughput:**
+
 - bs=1: 200 ms/tok (AWQ TP2) vs 147 ms/tok (FP16 TP4) — **36% slower**.
 - peak throughput: ~56 tok/s (plateaus at B=32) vs ~300–500 tok/s (FP16) — **~6–9x worse**.
 
 **Why (the key lesson):**
+
 1. gfx900 has **no native INT4/dequant hardware**, so `TritonW4A16` must
    dequantize INT4→FP16 in software every forward, then do the FP16 matmul. That
    dequant is **pure added compute**, not hidden behind anything.
@@ -424,6 +495,7 @@ model* in limited VRAM — but not for speed.)
 
 Since both batching headroom and the all-reduce floor dominate, the productive
 directions are:
+
 - **#55 PP-over-TP under concurrency** — pipeline parallel swaps per-layer
   all-reduce for point-to-point sends; should cut the per-step overhead that
   caps the batch-sweep ceiling.
@@ -504,6 +576,7 @@ in-tree implementation (`vllm/model_executor/layers/quantization/turboquant/`,
 via `--kv-cache-dtype turboquant_*`.
 
 ### Why it works on gfx900 (where the llama.cpp HIP port does not)
+
 The reference llama.cpp-turboquant-hip port **explicitly blocks wave64 hardware
 (Vega/GCN/CDNA)**: its codebook lookup uses `__shfl_sync(width=32)`, which returns
 garbage on 64-wide wavefronts. vLLM's TurboQuant kernels are **pure Triton** — no
@@ -515,6 +588,7 @@ kernel changes were needed. Prefill uses the `F.scaled_dot_product_attention`
 fallback since gfx900 has no flash-attn.
 
 ### Preset choice: Qwen3.5 is "quirky-K"
+
 Per the ollama#15051 sweep, the Qwen3 family is extremely sensitive to *key*-side
 quantization (tq2k = +150% PPL on qwen3:8b — output destroyed), while tolerant of
 value quantization. So on Qwen3.5-9B use **`turboquant_k8v4`** (FP8 keys + 4-bit
@@ -522,6 +596,7 @@ values) — it leaves keys effectively unquantized and only compresses values. V
 presets are mandatory here; aggressive K presets (`turboquant_3bit_nc`) are unsafe.
 
 ### Measured — Qwen3.5-9B, TP=4 gfx900, fp16 weights, max_model_len=16384
+
 | Metric | FP16 KV (`auto`) | `turboquant_k8v4` | Δ |
 |---|---|---|---|
 | GPU KV cache size | 194,267 tokens | **454,382 tokens** | **2.34×** |
@@ -549,6 +624,7 @@ they live in different parts of the stack (attention-backend KV path vs the
 
 Verified on `QuantTrio/Qwen3.5-9B-AWQ` (int4 MLP weights, exercises the gfx900 GEMV)
 loaded with `--kv-cache-dtype turboquant_k8v4`, TP2, gfx900:
+
 - Both paths active simultaneously: log shows `quantization=awq_marlin` +
   `_w4a16_gemv_splitk_kernel` JIT (our GEMV) **and** `Overriding with TURBOQUANT`.
 - Coherent output ("...is Paris").
@@ -559,17 +635,25 @@ loaded with `--kv-cache-dtype turboquant_k8v4`, TP2, gfx900:
 
 Caveat — VRAM ceiling: these V340 dies are ~8 GiB each. AWQ(TP2) + 16k-token KV
 exhausts memory at batch>1 (`torch.OutOfMemoryError`, 16 MiB free). For long context
-+ batching with the AWQ model, use TP4 (more aggregate VRAM) or a shorter
+
+- batching with the AWQ model, use TP4 (more aggregate VRAM) or a shorter
 max_model_len. The compression itself is what lets you push context further per GiB;
 it doesn't remove the hard per-die cap.
 
 Repro: `bench_scripts/combo_dec.py turboquant_k8v4` (AWQ TP2, short-ctx decode).
 
-### Quality: WikiText-2 reference perplexity
-Measured PPL (12,264 tokens, 24x512 windows, prefill logprobs), Qwen3.5-9B TP4:
-FP16 KV = 9.8885; turboquant_k8v4 = 9.8879 (delta -0.006%, lossless within noise).
-Confirms the FP8-key choice avoids the quirky-K catastrophe at zero quality cost.
-Repro: bench_scripts/ppl.py {auto|turboquant_k8v4}.
+### Quality: teacher-forced WikiText-2 cache-read perplexity
+
+The older 24-window prefill-logprob numbers are a loader/numerics smoke only:
+the API skips prefix-cache reads. The valid c4130-2 TP8 Qwen3.5-9B control
+prefills 256 tokens and teacher-forces the next 256 corpus tokens from each of
+50 fixed WikiText-2 chunks, recording raw target logits before masking forced
+outputs. Across 12,800 scored tokens, auto PPL was 7.7323505 and
+`turboquant_k8v4` PPL was 7.7242287 (-0.105%). The delta is quality-neutral
+within measurement noise rather than a quality improvement, and falls below
+the +1% gate. It supports the capacity-oriented profile decision; it does not
+make TurboQuant a global default. Repro:
+`.venv/bin/python -m scripts.gfx900.cache_read_ppl {auto|turboquant_k8v4}`.
 
 # UPDATE: HIP CUDA graphs now give 3.6x decode (revisit after LLMM1) — issue #63
 
@@ -581,6 +665,7 @@ the host dispatch gap was a small slice), but the LLMM1 win (#59) cut GPU-busy t
 exactly that gap.
 
 ## Re-test (Qwen3.5-9B TP4, FP16, bs=1 decode, best of 3 x 160 tok)
+
 | Mode | ms/tok | tok/s |
 |---|---:|---:|
 | Eager (LLMM1) | 67.0 | 14.93 |
@@ -591,6 +676,7 @@ exactly that gap.
 compile stays OFF — only HIP graph capture; Inductor still crashes on ROCm).
 
 ## Full decode progression (Qwen3.5-9B, bs=1)
+
 | Config | tok/s | vs original |
 |---|---:|---:|
 | FP16 TP4 eager (original) | 6.65 | 1.0x |
@@ -601,6 +687,7 @@ Full stack (AWQ int4 + TurboQuant KV + LLMM1 + graphs), TP2 on half the GPUs:
 14.12 -> **37.71 tok/s**, coherent.
 
 ## Gotcha: hybrid (Mamba/GDN) graph capture needs max_num_seqs <= Mamba cache blocks
+
 Qwen3.5 is hybrid; each decode sequence needs one Mamba/GDN state cache block. Graph
 capture fails if `max_num_seqs` exceeds the available blocks:
 `max_num_seqs (256) exceeds available Mamba cache blocks (N) ... CUDA graph capture
@@ -608,6 +695,7 @@ cannot proceed`. Fix: set `--max-num-seqs <= N` (N depends on
 gpu_memory_utilization and model; was 42 for AWQ TP2 on 8 GiB dies — use 32).
 
 ## New guidance
+
 **Use CUDA graphs for gfx900 decode** (do NOT pass `enforce_eager`). Set
 `compilation_config(mode=NONE, cudagraph_mode=FULL_DECODE_ONLY, capture_sizes=[1])`
 and `max_num_seqs` within the Mamba-block budget. Cold start still pays the
@@ -628,6 +716,7 @@ inefficient slice of a matrix-core-less FP16 GEMM. **Both reasons were undermine
 later work**, so we re-measured.
 
 ## What changed since the original PP benchmark
+
 - **#56 profile**: RCCL all-reduce is only ~2% of the decode step, not the dominant
   cost the PP motivation assumed.
 - **#59 LLMM1**: decode GEMMs are now real GEMVs, not padded macrotile matmuls. A
@@ -636,6 +725,7 @@ later work**, so we re-measured.
   now removed for everyone.
 
 ## Head-to-head, 4 GPUs, one socket, LLMM1 + CUDA graphs, Qwen3.5-9B
+
 Offline `LLM.generate`, decode out tok/s (aggregate), max_num_seqs=32.
 
 | concurrency | TP4 | TP2xPP2 | winner |
@@ -650,6 +740,7 @@ narrow mid-concurrency band (c~8) where its pipeline fills but TP hasn't yet rea
 its batched sweet spot.
 
 ### Why TP flipped to winning
+
 - TP4 c=1 went from ~4.6 tok/s (old eager) to **52.3** (LLMM1 + graphs) = ~11x. The
   things that made TP slow (padded GEMM slices, per-step dispatch) are exactly what
   LLMM1 + graphs fixed, so TP no longer needs PP to hide them.
@@ -657,6 +748,7 @@ its batched sweet spot.
   negative because there's no longer a big per-layer overhead for it to amortize.
 
 ## 8-GPU PP not usable here (offline)
+
 TP2xPP4 (8 GPUs) crashes during init on the offline `LLM.generate` path in this build
 — `hipErrorLaunchFailure` across all PP ranks, in **both** eager and graph modes
 (GPUs recover via reset_method=2). The old TP2xPP4 numbers came from server mode with
@@ -664,6 +756,7 @@ TP2xPP4 (8 GPUs) crashes during init on the offline `LLM.generate` path in this 
 the 4-GPU result already answers the question, and TP4 is the better config anyway.
 
 ## Recommendation (updated)
+
 **Use TP (TP4 within one socket), not PP, for gfx900 decode now that LLMM1 + CUDA
 graphs are in.** PP was the right call in the eager/padded-GEMM era; it is no longer.
 The remaining decode levers are batching/concurrency (TP4 scales to ~220 tok/s at
@@ -682,6 +775,7 @@ All runs below use the recommended decode stack: LLMM1 skinny GEMV (#59) + FULL_
 CUDA graphs (#63), Qwen3.5-9B FP16, `max_num_seqs=32`, offline `LLM.generate`, out tok/s.
 
 ## Results
+
 | Layout | GPUs | Socket(s) | c=1 | c=8 | c=32 | Outcome |
 |---|---:|---|---:|---:|---:|---|
 | **TP4** | 4 | one (0-3) | **52.3** | 48.9 | **220.0** | **best** |
@@ -690,7 +784,9 @@ CUDA graphs (#63), Qwen3.5-9B FP16, `max_num_seqs=32`, offline `LLM.generate`, o
 | TP8xPP2 | 16 | both | (inconclusive) | - | - | needs clean revisit |
 
 ## TP8 (one socket) is much WORSE than TP4 — more TP hurts here
+
 TP8 c=1 = 14.7 tok/s, *worse than TP4 running eager* (14.9). Doubling TP from 4 to 8:
+
 - doubles the per-layer all-reduce participant count (8-way collective over PCIe), and
 - halves each die's GEMV slice. With LLMM1 the decode matmul is already a skinny GEMV;
   splitting an M=1 GEMV 8 ways makes each slice too small to amortize launch overhead,
@@ -700,6 +796,7 @@ TP8 c=1 = 14.7 tok/s, *worse than TP4 running eager* (14.9). Doubling TP from 4 
 **Takeaway: TP4 is the sweet spot. Going past TP4 on this box is a net loss for decode.**
 
 ## TP16 (cross-socket TP) is catastrophic
+
 Init completed but the first decode step stalled 20+ min and never returned. py-spy
 showed every worker blocked in `all_gather_into_tensor` inside
 `logits_processor._gather_logits` -- the lm_head logits all-gather (vocab=248320)
@@ -709,6 +806,7 @@ makes a single decode step effectively never finish. Killed; GPUs recovered via
 reset_method=2. **Cross-socket pure TP is unusable -- do not span sockets with TP.**
 
 ## TP8xPP2 (cross-socket PP) -- inconclusive, flagged for clean revisit
+
 The theoretically-correct way to use all 16 GPUs: TP8 *within* each socket (intra-socket
 all-reduce only) with the PP stage boundary crossing QPI as cheap point-to-point sends.
 It initialized and started decoding (8 active requests reached the decode loop), then
@@ -722,6 +820,7 @@ proper, isolated retry on a quiet box, NOT a recorded negative result.** See "Re
 below.
 
 ## Conclusion / recommendation
+
 - **Use TP4 on one socket for decode.** It wins single-stream (52.3 tok/s) and peak
   throughput (220 tok/s at c=32), and avoids every cross-socket pitfall.
 - More TP than 4 hurts (TP8 ~3.5x worse); cross-socket TP (TP16) is unusable.
@@ -732,6 +831,7 @@ below.
   than one model spanning sockets.
 
 ## Revisit later: TP8xPP2 on a quiet box
+
 Retry `bench_scripts/run_topo.sh tp8pp2 eager 16` (and `graph 16`) only when (a) all 16
 GPUs are healthy after a cold power cycle, (b) the host is idle, and (c) consider raising
 the distributed collective timeout (`--distributed-timeout` / `TORCH_NCCL_*` env) so the
@@ -741,3 +841,33 @@ boundary, and is the resulting tok/s competitive with two independent TP4 engine
 
 Scripts: `bench_scripts/topo_bench.py {tp4|tp8|tp16|tp8pp2} {graph|eager}` via
 `bench_scripts/run_topo.sh <layout> <mode> <num_gpus>`.
+
+---
+
+## 2026-07-13 reusable-platform evidence — c4130-2
+
+This entry supersedes none of the historical topology conclusions above; it is
+the first schema-valid reusable-platform reference. The clean source commit is
+`3973e0ec9cd10b95f4663096237c025806efdfdb`. The accepted manifest is
+`/home/larkinwc/gfx900-runs/reference-3/manifest.json` with
+`platform_sha256`
+`61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36` and
+`manifest_sha256`
+`9ffd3ab1d71629984918598f06901bfcbb457925a044c78048ee30942f6bc81d`.
+
+The selected eight gfx900 dies are 56 CU / 8,573,157,376 bytes each, all on
+NUMA node 0 with PCIe links, and `amdgpu.reset_method=2` was verified. The
+screened TP8 FP16 eager cell (4,096 input / 256 output / c=8) produced 26.476
+output tok/s with p99 TPOT 279.810 ms, p99 TTFT 39,304.785 ms, and no failed
+requests. The 8,192-token TurboQuant capacity screen also had no failed
+requests (18.078 output tok/s), but it lacks the auto-KV control, capacity
+frontier, and quality evidence required for promotion. Native MTP K=1 was
+declined: compared with that eager reference it reduced output throughput by
+15.485%, increased p99 TPOT by 50.879%, and increased p99 TTFT by 5.969%.
+
+The artifacts are
+`/home/larkinwc/gfx900-runs/topology/cells/topology-fp16-tp8/cell.json`,
+`/home/larkinwc/gfx900-runs/capacity/cells/capacity-turboquant/cell.json`,
+and
+`/home/larkinwc/gfx900-runs/speculation/cells/speculation-mtp-k1/cell.json`.
+Do not set RCCL, graph, TurboQuant, or MTP defaults from these screens.

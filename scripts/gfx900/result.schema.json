@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "identity", "provenance", "configuration", "workload", "trials", "aggregate", "verdict"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "identity": {"type": "object", "required": ["cell_id", "phase", "started_at"]},
+    "provenance": {"type": "object", "required": ["manifest_sha256", "platform_sha256"]},
+    "configuration": {"type": "object", "required": ["resolved_digest", "launch_argv", "benchmark_argv", "environment"]},
+    "workload": {"type": "string"},
+    "trials": {"type": "array"},
+    "aggregate": {"type": "object"},
+    "verdict": {"type": "object", "required": ["status"], "properties": {"status": {"enum": ["PASS", "IMPROVEMENT", "REGRESSION", "INCOMPARABLE", "UNSUPPORTED", "FAILED"]}, "failure_reason": {"type": ["string", "null"]}}}
+  }
+}

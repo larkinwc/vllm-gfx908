@@ -1,0 +1,639 @@
+{
+  "cells": {
+    "capacity-turboquant": {
+      "benchmark_argv": [
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "8192",
+        "--random-output-len",
+        "256",
+        "--num-prompts",
+        "128",
+        "--max-concurrency",
+        "8"
+      ],
+      "device_group": "single_socket_8",
+      "environment": {},
+      "model_alias": "qwen35_fp16",
+      "phase": "capacity",
+      "port": 8003,
+      "predecessor": "topology-fp16-tp8",
+      "promotion_policy": "capacity",
+      "recorded_runs": 3,
+      "required_metrics": [
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms",
+        "kv_cache_usage_perc",
+        "preemptions"
+      ],
+      "server_argv": [
+        "--tensor-parallel-size",
+        "8",
+        "--dtype",
+        "float16",
+        "--revision",
+        "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "--kv-cache-dtype",
+        "turboquant_k8v4",
+        "--language-model-only",
+        "--max-model-len",
+        "8448",
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.85",
+        "--enforce-eager"
+      ],
+      "timeout_seconds": 7200,
+      "trial_policy": "screen",
+      "variant_keys": [
+        "server_argv"
+      ],
+      "warmup_runs": 1,
+      "workload": "long_context"
+    },
+    "capacity-auto": {
+      "benchmark_argv": [
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "8192",
+        "--random-output-len",
+        "256",
+        "--num-prompts",
+        "128",
+        "--max-concurrency",
+        "8"
+      ],
+      "device_group": "single_socket_8",
+      "environment": {},
+      "model_alias": "qwen35_fp16",
+      "phase": "capacity",
+      "port": 8007,
+      "predecessor": "topology-fp16-tp8",
+      "promotion_policy": "capacity",
+      "recorded_runs": 3,
+      "required_metrics": [
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms",
+        "kv_cache_usage_perc",
+        "preemptions"
+      ],
+      "server_argv": [
+        "--tensor-parallel-size",
+        "8",
+        "--dtype",
+        "float16",
+        "--revision",
+        "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "--kv-cache-dtype",
+        "auto",
+        "--language-model-only",
+        "--max-model-len",
+        "8448",
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.85",
+        "--enforce-eager"
+      ],
+      "timeout_seconds": 7200,
+      "trial_policy": "screen",
+      "variant_keys": [
+        "server_argv"
+      ],
+      "warmup_runs": 1,
+      "workload": "long_context"
+    },
+    "capacity-turboquant-c16": {
+      "benchmark_argv": [
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "8192",
+        "--random-output-len",
+        "256",
+        "--num-prompts",
+        "128",
+        "--max-concurrency",
+        "16"
+      ],
+      "device_group": "single_socket_8",
+      "environment": {},
+      "model_alias": "qwen35_fp16",
+      "phase": "capacity",
+      "port": 8009,
+      "predecessor": "topology-fp16-tp8",
+      "promotion_policy": "capacity",
+      "recorded_runs": 3,
+      "required_metrics": [
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms",
+        "kv_cache_usage_perc",
+        "preemptions"
+      ],
+      "server_argv": [
+        "--tensor-parallel-size",
+        "8",
+        "--dtype",
+        "float16",
+        "--revision",
+        "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "--kv-cache-dtype",
+        "turboquant_k8v4",
+        "--language-model-only",
+        "--max-model-len",
+        "8448",
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.85",
+        "--enforce-eager"
+      ],
+      "timeout_seconds": 7200,
+      "trial_policy": "screen",
+      "variant_keys": [
+        "benchmark_argv"
+      ],
+      "warmup_runs": 1,
+      "workload": "long_context"
+    },
+    "capacity-turboquant-c32": {
+      "benchmark_argv": [
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "8192",
+        "--random-output-len",
+        "256",
+        "--num-prompts",
+        "128",
+        "--max-concurrency",
+        "32"
+      ],
+      "device_group": "single_socket_8",
+      "environment": {},
+      "model_alias": "qwen35_fp16",
+      "phase": "capacity",
+      "port": 8013,
+      "predecessor": "topology-fp16-tp8",
+      "promotion_policy": "capacity",
+      "recorded_runs": 3,
+      "required_metrics": [
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms",
+        "kv_cache_usage_perc",
+        "preemptions"
+      ],
+      "server_argv": [
+        "--tensor-parallel-size",
+        "8",
+        "--dtype",
+        "float16",
+        "--revision",
+        "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "--kv-cache-dtype",
+        "turboquant_k8v4",
+        "--language-model-only",
+        "--max-model-len",
+        "8448",
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.85",
+        "--enforce-eager"
+      ],
+      "timeout_seconds": 7200,
+      "trial_policy": "screen",
+      "variant_keys": [
+        "benchmark_argv"
+      ],
+      "warmup_runs": 1,
+      "workload": "long_context"
+    },
+    "topology-fp4-pp2": {
+      "benchmark_argv": [
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "4096",
+        "--random-output-len",
+        "256",
+        "--num-prompts",
+        "128",
+        "--max-concurrency",
+        "8"
+      ],
+      "device_group": "single_socket_8",
+      "environment": {},
+      "model_alias": "qwen35_fp16",
+      "phase": "topology",
+      "port": 8006,
+      "predecessor": "smoke-fp16-tp8",
+      "promotion_policy": "promotion",
+      "recorded_runs": 3,
+      "required_metrics": [
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms"
+      ],
+      "server_argv": [
+        "--tensor-parallel-size",
+        "4",
+        "--pipeline-parallel-size",
+        "2",
+        "--no-async-scheduling",
+        "--dtype",
+        "float16",
+        "--revision",
+        "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "--language-model-only",
+        "--max-model-len",
+        "4352",
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.85",
+        "--enforce-eager"
+      ],
+      "timeout_seconds": 7200,
+      "trial_policy": "screen",
+      "variant_keys": [
+        "server_argv"
+      ],
+      "warmup_runs": 1,
+      "workload": "decode_isolated"
+    },
+    "topology-fp16-tp4": {
+      "benchmark_argv": [
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "4096",
+        "--random-output-len",
+        "256",
+        "--num-prompts",
+        "128",
+        "--max-concurrency",
+        "8"
+      ],
+      "device_group": "single_socket_4",
+      "environment": {},
+      "model_alias": "qwen35_fp16",
+      "phase": "topology",
+      "port": 8005,
+      "predecessor": "smoke-fp16-tp8",
+      "promotion_policy": "promotion",
+      "recorded_runs": 3,
+      "required_metrics": [
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms"
+      ],
+      "server_argv": [
+        "--tensor-parallel-size",
+        "4",
+        "--dtype",
+        "float16",
+        "--revision",
+        "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "--language-model-only",
+        "--max-model-len",
+        "4352",
+        "--max-num-seqs",
+        "8",
+        "--gpu-memory-utilization",
+        "0.85",
+        "--enforce-eager"
+      ],
+      "timeout_seconds": 7200,
+      "trial_policy": "screen",
+      "variant_keys": [
+        "server_argv"
+      ],
+      "warmup_runs": 1,
+      "workload": "decode_isolated"
+    },
+    "graphs-fp16-tp8": {
+      "benchmark_argv": [
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "4096",
+        "--random-output-len",
+        "256",
+        "--num-prompts",
+        "128",
+        "--max-concurrency",
+        "8"
+      ],
+      "device_group": "single_socket_8",
+      "environment": {},
+      "model_alias": "qwen35_fp16",
+      "phase": "graphs",
+      "port": 8002,
+      "predecessor": "topology-fp16-tp8",
+      "promotion_policy": "promotion",
+      "recorded_runs": 3,
+      "required_metrics": [
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms"
+      ],
+      "server_argv": [
+        "--tensor-parallel-size",
+        "8",
+        "--dtype",
+        "float16",
+        "--revision",
+        "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "--compilation-config",
+        "{\"mode\":0,\"cudagraph_mode\":\"FULL_DECODE_ONLY\",\"cudagraph_capture_sizes\":[1,2,4,8,16,32,64,96]}",
+        "--language-model-only",
+        "--max-model-len",
+        "4352",
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.85"
+      ],
+      "timeout_seconds": 7200,
+      "trial_policy": "screen",
+      "variant_keys": [
+        "server_argv"
+      ],
+      "warmup_runs": 1,
+      "workload": "decode_isolated"
+    },
+    "smoke-fp16-tp8": {
+      "benchmark_argv": [
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "16",
+        "--random-output-len",
+        "16",
+        "--num-prompts",
+        "1",
+        "--max-concurrency",
+        "1"
+      ],
+      "device_group": "single_socket_8",
+      "environment": {},
+      "model_alias": "qwen35_fp16",
+      "phase": "smoke",
+      "port": 8000,
+      "promotion_policy": "smoke",
+      "recorded_runs": 1,
+      "required_metrics": [
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms"
+      ],
+      "server_argv": [
+        "--tensor-parallel-size",
+        "8",
+        "--dtype",
+        "float16",
+        "--revision",
+        "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "--language-model-only",
+        "--max-model-len",
+        "2048",
+        "--max-num-seqs",
+        "1",
+        "--gpu-memory-utilization",
+        "0.85",
+        "--enforce-eager"
+      ],
+      "timeout_seconds": 600,
+      "trial_policy": "smoke",
+      "variant_keys": [],
+      "warmup_runs": 1,
+      "workload": "short"
+    },
+    "speculation-mtp-k1": {
+      "benchmark_argv": [
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "4096",
+        "--random-output-len",
+        "256",
+        "--num-prompts",
+        "128",
+        "--max-concurrency",
+        "8"
+      ],
+      "device_group": "single_socket_8",
+      "environment": {},
+      "model_alias": "qwen35_fp16",
+      "phase": "speculation",
+      "port": 8004,
+      "predecessor": "capacity-turboquant",
+      "promotion_policy": "promotion",
+      "recorded_runs": 3,
+      "required_metrics": [
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms",
+        "spec_decode_num_drafts",
+        "spec_decode_num_accepted_tokens"
+      ],
+      "server_argv": [
+        "--tensor-parallel-size",
+        "8",
+        "--dtype",
+        "float16",
+        "--revision",
+        "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "--enforce-eager",
+        "--speculative-config",
+        "{\"method\":\"mtp\",\"num_speculative_tokens\":1}",
+        "--language-model-only",
+        "--max-model-len",
+        "4352",
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.85"
+      ],
+      "timeout_seconds": 7200,
+      "trial_policy": "screen",
+      "variant_keys": [
+        "server_argv"
+      ],
+      "warmup_runs": 1,
+      "workload": "decode_isolated"
+    },
+    "speculation-ngram-cpu-k4": {
+      "benchmark_argv": [
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "4096",
+        "--random-output-len",
+        "256",
+        "--num-prompts",
+        "128",
+        "--max-concurrency",
+        "8"
+      ],
+      "device_group": "single_socket_8",
+      "environment": {},
+      "model_alias": "qwen35_fp16",
+      "phase": "speculation",
+      "port": 8008,
+      "predecessor": "capacity-turboquant",
+      "promotion_policy": "promotion",
+      "recorded_runs": 3,
+      "required_metrics": [
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms",
+        "spec_decode_num_drafts",
+        "spec_decode_num_accepted_tokens"
+      ],
+      "server_argv": [
+        "--tensor-parallel-size",
+        "8",
+        "--dtype",
+        "float16",
+        "--revision",
+        "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "--enforce-eager",
+        "--speculative-config",
+        "{\"method\":\"ngram\",\"num_speculative_tokens\":4,\"prompt_lookup_min\":2,\"prompt_lookup_max\":5}",
+        "--language-model-only",
+        "--max-model-len",
+        "4352",
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.85"
+      ],
+      "timeout_seconds": 7200,
+      "trial_policy": "screen",
+      "variant_keys": [
+        "server_argv"
+      ],
+      "warmup_runs": 1,
+      "workload": "decode_isolated"
+    },
+    "topology-fp16-tp8": {
+      "benchmark_argv": [
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "4096",
+        "--random-output-len",
+        "256",
+        "--num-prompts",
+        "128",
+        "--max-concurrency",
+        "8"
+      ],
+      "device_group": "single_socket_8",
+      "environment": {},
+      "model_alias": "qwen35_fp16",
+      "phase": "topology",
+      "port": 8001,
+      "predecessor": "smoke-fp16-tp8",
+      "promotion_policy": "promotion",
+      "recorded_runs": 3,
+      "required_metrics": [
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms"
+      ],
+      "server_argv": [
+        "--tensor-parallel-size",
+        "8",
+        "--dtype",
+        "float16",
+        "--revision",
+        "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "--language-model-only",
+        "--max-model-len",
+        "4352",
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.85",
+        "--enforce-eager"
+      ],
+      "timeout_seconds": 7200,
+      "trial_policy": "screen",
+      "variant_keys": [
+        "server_argv"
+      ],
+      "warmup_runs": 1,
+      "workload": "decode_isolated"
+    }
+  },
+  "phases": [
+    "smoke",
+    "communication",
+    "topology",
+    "graphs",
+    "capacity",
+    "speculation",
+    "profile"
+  ],
+  "policies": {
+    "capacity": {
+      "minimum_capacity_improvement_pct": 10,
+      "quality_perplexity_regression_pct": 1
+    },
+    "promotion": {
+      "latency_regression_pct": 2,
+      "throughput_improvement_pct": 3
+    },
+    "smoke": {
+      "latency_regression_pct": 2,
+      "throughput_regression_pct": -3
+    }
+  },
+  "schema_version": 1,
+  "workloads": {
+    "decode_isolated": {
+      "concurrency": 8,
+      "dataset": "random",
+      "input_len": 4096,
+      "kv_connector": "DecodeBenchConnector",
+      "num_prompts": 128,
+      "output_len": 256,
+      "seed": 42
+    },
+    "long_context": {
+      "concurrency": 8,
+      "dataset": "random",
+      "input_len": 8192,
+      "num_prompts": 128,
+      "output_len": 256,
+      "seed": 42
+    },
+    "prefix_repetition": {
+      "concurrency": 8,
+      "dataset": "prefix_repetition",
+      "num_prompts": 128,
+      "output_len": 128,
+      "seed": 42,
+      "shared_prefix_len": 4096,
+      "unique_suffix_len": 256
+    },
+    "short": {
+      "concurrency": 1,
+      "dataset": "random",
+      "input_len": 512,
+      "num_prompts": 128,
+      "output_len": 256,
+      "seed": 42
+    }
+  }
+}

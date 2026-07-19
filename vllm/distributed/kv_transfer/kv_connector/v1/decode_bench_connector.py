@@ -97,13 +97,17 @@ class DecodeBenchConnector(KVConnectorBase_V1, SupportsHMA):
         if role == KVConnectorRole.SCHEDULER:
             self.connector_scheduler = DecodeBenchConnectorScheduler(vllm_config)
         elif role == KVConnectorRole.WORKER:
-            self.connector_worker = DecodeBenchConnectorWorker(vllm_config)
+            self.connector_worker = DecodeBenchConnectorWorker(
+                vllm_config, kv_cache_config
+            )
 
     # ==============================
     # Worker-side methods
     # ==============================
 
-    def register_kv_caches(self, kv_caches: dict[str, torch.Tensor]):
+    def register_kv_caches(
+        self, kv_caches: dict[str, torch.Tensor | list[torch.Tensor]]
+    ):
         assert self.connector_worker is not None
         self.connector_worker.register_kv_caches(kv_caches)
 
@@ -300,8 +304,11 @@ class DecodeBenchConnectorScheduler:
 class DecodeBenchConnectorWorker:
     """Worker-side implementation for DecodeBenchConnector."""
 
-    def __init__(self, vllm_config: "VllmConfig"):
+    def __init__(
+        self, vllm_config: "VllmConfig", kv_cache_config: "KVCacheConfig"
+    ):
         self.vllm_config = vllm_config
+        self.kv_cache_config = kv_cache_config
         self.block_size = vllm_config.cache_config.block_size
 
         # Get fill parameters from extra config
@@ -311,19 +318,24 @@ class DecodeBenchConnectorWorker:
         self.fill_std = kv_transfer_config.get_from_extra_config("fill_std", 0.0)
 
         # Will be populated via register_kv_caches
-        self.kv_caches: dict[str, torch.Tensor] | None = None
+        self.kv_caches: dict[str, torch.Tensor | list[torch.Tensor]] | None = None
 
         # Mapping from KV cache group index to list of layer names in that group
         self.group_to_layers: dict[int, list[str]] | None = None
 
-    def register_kv_caches(self, kv_caches: dict[str, torch.Tensor]):
+    def register_kv_caches(
+        self, kv_caches: dict[str, torch.Tensor | list[torch.Tensor]]
+    ):
         """Store references to the KV cache tensors and build group mapping."""
         self.kv_caches = kv_caches
 
-        # For simplicity, assume all layers belong to group 0 (standard attention)
-        # For MLA models with multiple groups, the metadata will handle the mapping
-        # We just need to fill the blocks specified in the metadata
-        self.group_to_layers = {0: list(kv_caches.keys())}
+        # KVCacheBlocks and the registered layer caches share the config's
+        # group order. Hybrid Mamba models therefore need their Mamba-state
+        # caches associated with their own block-id group rather than group 0.
+        self.group_to_layers = {
+            group_idx: list(group.layer_names)
+            for group_idx, group in enumerate(self.kv_cache_config.kv_cache_groups)
+        }
 
         logger.debug(
             "DecodeBenchConnector: Registered %d KV cache layers",
@@ -385,42 +397,47 @@ class DecodeBenchConnectorWorker:
                 )
                 continue
 
-            kv_cache = self.kv_caches[layer_name]
-
-            # Convert block_ids to tensor on device
-            block_ids_tensor = torch.tensor(
-                block_ids, dtype=torch.long, device=kv_cache.device
+            registered_cache = self.kv_caches[layer_name]
+            kv_caches = (
+                registered_cache
+                if isinstance(registered_cache, list)
+                else [registered_cache]
             )
 
-            # Filter invalid block IDs
-            valid_mask = block_ids_tensor < kv_cache.shape[0]
-            valid_block_ids = block_ids_tensor[valid_mask]
-
-            if len(valid_block_ids) == 0:
-                continue
-
-            # Create fill values - either constant or random
-            block_shape = kv_cache.shape[1:]
-            if self.fill_std > 0:
-                # Random normal sampling
-                fill_values = torch.normal(
-                    mean=self.fill_mean,
-                    std=self.fill_std,
-                    size=(len(valid_block_ids),) + block_shape,
-                    dtype=kv_cache.dtype,
-                    device=kv_cache.device,
-                )
-            else:
-                # Constant fill value
-                fill_values = torch.full(
-                    (len(valid_block_ids),) + block_shape,
-                    self.fill_mean,
-                    dtype=kv_cache.dtype,
-                    device=kv_cache.device,
+            for kv_cache in kv_caches:
+                # Convert block_ids to tensor on device
+                block_ids_tensor = torch.tensor(
+                    block_ids, dtype=torch.long, device=kv_cache.device
                 )
 
-            # Batch fill operation
-            kv_cache[valid_block_ids] = fill_values
+                # Filter invalid block IDs
+                valid_mask = block_ids_tensor < kv_cache.shape[0]
+                valid_block_ids = block_ids_tensor[valid_mask]
+
+                if len(valid_block_ids) == 0:
+                    continue
+
+                # Create fill values - either constant or random
+                block_shape = kv_cache.shape[1:]
+                if self.fill_std > 0:
+                    # Random normal sampling
+                    fill_values = torch.normal(
+                        mean=self.fill_mean,
+                        std=self.fill_std,
+                        size=(len(valid_block_ids),) + block_shape,
+                        dtype=kv_cache.dtype,
+                        device=kv_cache.device,
+                    )
+                else:
+                    # Constant fill value
+                    fill_values = torch.full(
+                        (len(valid_block_ids),) + block_shape,
+                        self.fill_mean,
+                        dtype=kv_cache.dtype,
+                        device=kv_cache.device,
+                    )
+
+                kv_cache[valid_block_ids] = fill_values
 
         logger.debug(
             "DecodeBenchConnector: Filled %d blocks in group %d with %s values "

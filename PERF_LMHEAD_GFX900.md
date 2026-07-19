@@ -1,6 +1,12 @@
 
 # The biggest decode win: enable LLMM1 skinny GEMV for gfx900 (issue #59)
 
+> **Historical kernel evidence:** retain this LLMM1 result and the `wvSplitK`
+> failure as shape-specific gfx900 evidence. It is not authorization to widen the
+> dispatch gate: a future kernel change requires the post-systems profiler to show
+> at least 5% non-RCCL GPU time, a ≥10% microbenchmark win, and a confirmed ≥3%
+> end-to-end win through `scripts/gfx900`.
+
 The decode profile (#56, BENCH_DECODE_PROFILE.md) showed M=1 GEMMs were 43% of decode
 wall time, running at only 20% of the bandwidth roofline because rocBLAS pads a 1-row
 GEMV to a 64x64 macrotile (`Cijk_..MT64x64x4`). Root cause found:

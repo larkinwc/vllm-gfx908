@@ -7,7 +7,41 @@ arch; this grid therefore benchmarks the **FP16** model. It follows the same
 methodology: `vllm bench serve`, server + `--max-concurrency`, reporting output
 tok/s plus TTFT/TPOT p50/p99.
 
-## Hardware / software manifest
+> **Historical benchmark notice:** this fixed grid is retained as evidence only.
+> It is not an automated baseline because its host/version manifest is stale.
+> Reproduce new FP16, AWQ, DecodeBenchConnector, graph, and communicator results
+> with `scripts/gfx900`; only matching `platform_sha256` values may be compared.
+
+## Accepted reusable reference — c4130-2, 2026-07-13
+
+This is the first result set using `scripts.gfx900` rather than the historical
+fixed grid. The clean source commit is
+`3973e0ec9cd10b95f4663096237c025806efdfdb`; the accepted reference manifest
+is `/home/larkinwc/gfx900-runs/reference-3/manifest.json`
+(`platform_sha256`
+`61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`,
+`manifest_sha256`
+`9ffd3ab1d71629984918598f06901bfcbb457925a044c78048ee30942f6bc81d`).
+It identifies eight 56-CU gfx900 dies with 8,573,157,376 bytes each, on NUMA
+node 0 and PCIe-only topology.
+
+- `topology-fp16-tp8` (4,096 input / 256 output / c=8): 26.476 output tok/s,
+  p99 TPOT 279.810 ms, p99 TTFT 39,304.785 ms; PASS with 0 failed requests.
+- `capacity-turboquant` (8,192 input / 256 output / c=8): 18.078 output tok/s,
+  p99 TPOT 402.193 ms, p99 TTFT 71,276.167 ms; PASS with 0 failed requests,
+  but screen-only evidence.
+- `speculation-mtp-k1` (4,096 input / 256 output / c=8): 22.376 output tok/s,
+  p99 TPOT 422.173 ms, p99 TTFT 41,651.013 ms; execution PASS, but promotion
+  **declined** against `topology-fp16-tp8` (-15.485% output throughput; +50.879%
+  p99 TPOT).
+
+All three raw artifacts are in `/home/larkinwc/gfx900-runs/{topology,capacity,speculation}/cells/`.
+The TP8 topology cell is an eager FP16 reference (`--enforce-eager`,
+`--max-model-len 4352`, `--max-num-seqs 32`, `--gpu-memory-utilization 0.85`);
+it does not validate historical graph, TP4, PP, AWQ, quality, or capacity
+claims. No new host default follows from this result set.
+
+## Historical hardware / software manifest
 
 | | |
 |---|---|

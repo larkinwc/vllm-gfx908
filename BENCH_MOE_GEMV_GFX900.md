@@ -7,6 +7,11 @@ Validated on **Qwen3.5-35B-A3B-GPTQ-Int4** (256 experts / 8 active, 40 layers,
 hidden 2048, expert-intermediate 512, GPTQ int4 group_size 128 symmetric; attn +
 shared_expert + lm_head kept FP16), TP4 on one socket, FULL_DECODE_ONLY CUDA graphs.
 
+> **Runtime gate:** `VLLM_GFX900_MOE_GEMV` is now a registered vLLM environment
+> variable, defaulting to enabled. Set it to exactly `0` to select the generic
+> block-M path for an A/B comparison. Treat these figures as historical until the
+> reusable harness confirms the same manifest, quality, and end-to-end gates.
+
 ## TL;DR
 
 | config | c=1 | c=8 | c=32 |

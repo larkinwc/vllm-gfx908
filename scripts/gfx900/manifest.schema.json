@@ -1,0 +1,9 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "captured_at", "host", "source", "runtime", "libraries", "devices", "topology", "numa", "power", "kernel", "environment", "profile", "platform_compatibility_keys", "platform_sha256", "manifest_sha256"],
+  "properties": {
+    "schema_version": {"const": 1}, "captured_at": {"type": "string"}, "host": {"type": "object"}, "source": {"type": "object"}, "runtime": {"type": "object"}, "libraries": {"type": "object"}, "devices": {"type": "array"}, "topology": {"type": "object"}, "numa": {"type": "object"}, "power": {"type": "object"}, "kernel": {"type": "object"}, "environment": {"type": "object"}, "profile": {"type": "object"}, "platform_compatibility_keys": {"type": "object"}, "platform_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}, "manifest_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}
+  }
+}

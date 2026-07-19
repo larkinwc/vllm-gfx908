@@ -49,9 +49,13 @@ logger = init_logger(__name__)
 # Default sequence lengths to benchmark
 DEFAULT_SEQUENCE_LENGTHS = [16, 64, 128, 512, 1024, 2048, 4096, 8192]
 
-# Fixed hidden size and dtype for all benchmarks
-HIDDEN_SIZE = 8192
-BENCHMARK_DTYPE = torch.bfloat16
+# Default hidden size and dtype preserve the existing benchmark behavior.
+DEFAULT_HIDDEN_SIZE = 8192
+DTYPES = {
+    "float16": torch.float16,
+    "bfloat16": torch.bfloat16,
+    "float32": torch.float32,
+}
 
 # CUDA graph settings
 CUDA_GRAPH_CAPTURE_CYCLES = 10
@@ -66,17 +70,15 @@ class CommunicatorBenchmark:
         world_size: int,
         device: torch.device,
         cpu_group: ProcessGroup,
-        sequence_lengths: list[int],
+        tensor_elements: list[int],
+        dtype: torch.dtype,
     ):
         self.rank = rank
         self.world_size = world_size
         self.device = device
         self.cpu_group = cpu_group
-
-        # Calculate max_size_override based on largest sequence length
-        max_seq_len = max(sequence_lengths)
-        max_tensor_elements = max_seq_len * HIDDEN_SIZE
-        self.max_size_override = max_tensor_elements * BENCHMARK_DTYPE.itemsize + 1
+        self.dtype = dtype
+        self.max_size_override = max(tensor_elements) * dtype.itemsize + 1
 
         # Initialize communicators
         self.custom_allreduce = None
@@ -182,7 +184,7 @@ class CommunicatorBenchmark:
             self.fi_ar_comm = None
 
     def benchmark_allreduce(
-        self, sequence_length: int, num_warmup: int, num_trials: int
+        self, tensor_elements: int, num_warmup: int, num_trials: int
     ) -> dict[str, float]:
         """Benchmark allreduce operations for all available communicators."""
 
@@ -303,7 +305,7 @@ class CommunicatorBenchmark:
                 os.environ[key] = value
             try:
                 latency = self.benchmark_allreduce_single(
-                    sequence_length,
+                    tensor_elements,
                     allreduce_fn,
                     should_use_fn,
                     context,
@@ -326,19 +328,16 @@ class CommunicatorBenchmark:
 
     def benchmark_allreduce_single(
         self,
-        sequence_length: int,
+        tensor_elements: int,
         allreduce_fn: Callable[[torch.Tensor], torch.Tensor | None],
         should_use_fn: Callable[[torch.Tensor], bool],
         context,
         num_warmup: int,
         num_trials: int,
     ) -> float | None:
-        """Benchmark method with CUDA graph optimization."""
+        """Benchmark an exact one-dimensional tensor with CUDA graph replay."""
         try:
-            # Create test tensor (2D: sequence_length x hidden_size)
-            tensor = torch.randn(
-                sequence_length, HIDDEN_SIZE, dtype=BENCHMARK_DTYPE, device=self.device
-            )
+            tensor = torch.randn(tensor_elements, dtype=self.dtype, device=self.device)
             if not should_use_fn(tensor):
                 return None
 
@@ -404,165 +403,175 @@ def _calculate_speedup_info(comm_results: dict[str, float]) -> str:
         return f"{fastest_comm} (N/A)"
 
 
-def print_results(
-    results: dict[str, dict[str, float]], sequence_lengths: list[int], world_size: int
-):
-    """Print benchmark results in a formatted table."""
+def _flatten(values: list[list[int]] | None) -> list[int] | None:
+    if values is None:
+        return None
+    return [value for group in values for value in group]
 
+
+def resolve_tensor_elements(args) -> tuple[list[int], str]:
+    """Resolve exactly one sizing mode into exact tensor element counts."""
+    num_elements = _flatten(args.num_elements)
+    message_size_bytes = _flatten(args.message_size_bytes)
+    if num_elements is not None and message_size_bytes is not None:
+        raise ValueError(
+            "--num-elements and --message-size-bytes are mutually exclusive"
+        )
+    dtype = DTYPES[args.dtype]
+    if num_elements is not None:
+        if any(value <= 0 for value in num_elements):
+            raise ValueError("--num-elements values must be positive")
+        return num_elements, "elements"
+    if message_size_bytes is not None:
+        if any(value <= 0 or value % dtype.itemsize for value in message_size_bytes):
+            raise ValueError(
+                "--message-size-bytes values must be positive dtype multiples"
+            )
+        return [value // dtype.itemsize for value in message_size_bytes], "bytes"
+    if any(value <= 0 for value in args.sequence_lengths):
+        raise ValueError("--sequence-lengths values must be positive")
+    return [
+        length * args.hidden_size for length in args.sequence_lengths
+    ], "sequence_lengths"
+
+
+def print_results(
+    results: dict[int, dict[str, float]],
+    tensor_elements: list[int],
+    world_size: int,
+    dtype: torch.dtype,
+    hidden_size: int,
+    size_mode: str,
+) -> None:
+    """Print timings while retaining exact byte and element sizing."""
     print(f"\n{'=' * 130}")
     print("Device Communicator Benchmark Results")
-    print(
-        f"World Size: {world_size}, Data Type: {BENCHMARK_DTYPE}, "
-        f"Hidden Size: {HIDDEN_SIZE}"
-    )
+    print(f"World Size: {world_size}, Data Type: {dtype}, Hidden Size: {hidden_size}")
     print(f"{'=' * 130}")
-
-    # Get all communicator names
-    all_comms = set()
-    for size_results in results.values():
-        all_comms.update(size_results.keys())
-
-    all_comms = sorted(list(all_comms))
-
-    # Print header
-    header = f"{'Tensor Shape':<20}{'Tensor Size':<15}"
+    all_comms = sorted(
+        {comm for size_results in results.values() for comm in size_results}
+    )
+    header = f"{'Tensor Elements':<20}{'Tensor Size':<15}"
     for comm in all_comms:
         header += f"{comm:<20}"
     header += f"{'Best (Speedup vs PyNccl)':<30}"
     print(header)
     print("-" * len(header))
-
-    # Print results for each sequence length
-    for seq_len in sequence_lengths:
-        if seq_len in results:
-            # Calculate tensor size in elements and bytes
-            tensor_elements = seq_len * HIDDEN_SIZE
-            tensor_bytes = tensor_elements * BENCHMARK_DTYPE.itemsize
-
-            # Format tensor size (MB)
-            tensor_size_mb = tensor_bytes / (1024 * 1024)
-            tensor_size_str = f"{tensor_size_mb:.2f} MB"
-
-            # Format tensor shape
-            tensor_shape = f"({seq_len}, {HIDDEN_SIZE})"
-
-            row = f"{tensor_shape:<20}{tensor_size_str:<15}"
-            for comm in all_comms:
-                if comm in results[seq_len]:
-                    row += f"{results[seq_len][comm]:<20.3f}"
-                else:
-                    row += f"{'N/A':<20}"
-
-            # Calculate speedup information
-            speedup_info = _calculate_speedup_info(results[seq_len])
-            row += f"{speedup_info:<30}"
-
-            print(row)
-
+    for elements in tensor_elements:
+        if elements not in results:
+            continue
+        tensor_bytes = elements * dtype.itemsize
+        tensor_size_str = f"{tensor_bytes / (1024 * 1024):.2f} MB"
+        row = f"{elements:<20}{tensor_size_str:<15}"
+        for comm in all_comms:
+            row += (
+                f"{results[elements][comm]:<20.3f}"
+                if comm in results[elements]
+                else f"{'N/A':<20}"
+            )
+        row += f"{_calculate_speedup_info(results[elements]):<30}"
+        print(row)
     print(f"{'=' * 130}")
-    print("All times are in milliseconds (ms) per allreduce operation")
-    print("Speedup column shows: fastest_algorithm (speedup_vs_pynccl)")
+    print(
+        f"All times are milliseconds per allreduce operation (sizing mode: {size_mode})"
+    )
 
 
-def main():
+def main() -> None:
     parser = FlexibleArgumentParser(description="Benchmark device communicators")
-
     parser.add_argument(
         "--sequence-lengths",
         type=int,
         nargs="+",
         default=DEFAULT_SEQUENCE_LENGTHS,
-        help="Sequence lengths to benchmark (tensor shape: seq_len x hidden_size)",
+        help="Legacy tensor shape sizes: seq_len x hidden_size.",
     )
-
+    parser.add_argument("--hidden-size", type=int, default=DEFAULT_HIDDEN_SIZE)
+    parser.add_argument("--dtype", choices=sorted(DTYPES), default="bfloat16")
+    parser.add_argument(
+        "--num-elements",
+        type=int,
+        nargs="+",
+        action="append",
+        help="Exact one-dimensional tensor element count; repeatable.",
+    )
+    parser.add_argument(
+        "--message-size-bytes",
+        type=int,
+        nargs="+",
+        action="append",
+        help="Exact tensor byte size; repeatable and divisible by dtype size.",
+    )
     parser.add_argument(
         "--num-warmup", type=int, default=5, help="Number of warmup iterations"
     )
-
     parser.add_argument(
         "--num-trials", type=int, default=50, help="Number of benchmark trials"
     )
-
     parser.add_argument("--output-json", type=str, help="Output results to JSON file")
-
     args = parser.parse_args()
+    if args.hidden_size <= 0:
+        parser.error("--hidden-size must be positive")
+    try:
+        tensor_elements, size_mode = resolve_tensor_elements(args)
+    except ValueError as error:
+        parser.error(str(error))
+    dtype = DTYPES[args.dtype]
 
-    # Initialize distributed
     if not dist.is_initialized():
         dist.init_process_group(backend="gloo")
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-
-    # Set device
     device = torch.device(f"cuda:{rank}")
     torch.accelerator.set_device_index(device)
-
-    # Get CPU process group
     cpu_group = dist.new_group(backend="gloo")
-
-    # Disable USE_SYMM_MEM to avoid affecting the max_sizes
-    # in symm_mem and custom_all_reduce for benchmark
     os.environ["VLLM_ALLREDUCE_USE_SYMM_MEM"] = "0"
-
-    # Initialize benchmark
     benchmark = CommunicatorBenchmark(
-        rank, world_size, device, cpu_group, args.sequence_lengths
+        rank, world_size, device, cpu_group, tensor_elements, dtype
     )
-
-    # Run benchmarks
-    all_results = {}
-
-    for seq_len in args.sequence_lengths:
+    all_results: dict[int, dict[str, float]] = {}
+    for elements in tensor_elements:
         if rank == 0:
             logger.info(
-                "Benchmarking sequence length: %s (tensor shape: %s x %s)",
-                seq_len,
-                seq_len,
-                HIDDEN_SIZE,
+                "Benchmarking %s elements (%s bytes, dtype=%s)",
+                elements,
+                elements * dtype.itemsize,
+                args.dtype,
             )
-
-        results = benchmark.benchmark_allreduce(
-            sequence_length=seq_len,
+        all_results[elements] = benchmark.benchmark_allreduce(
+            tensor_elements=elements,
             num_warmup=args.num_warmup,
             num_trials=args.num_trials,
         )
-
-        all_results[seq_len] = results
-
-        # Synchronize between ranks
         dist.barrier()
-
-    # Print results (only rank 0)
     if rank == 0:
-        print_results(all_results, args.sequence_lengths, world_size)
-
-        # Save to JSON if requested
+        print_results(
+            all_results, tensor_elements, world_size, dtype, args.hidden_size, size_mode
+        )
         if args.output_json:
-            # Add speedup information to results
-            enhanced_results = {}
-            for seq_len, comm_results in all_results.items():
-                enhanced_results[seq_len] = {
-                    "timings": comm_results,
-                    "speedup_info": _calculate_speedup_info(comm_results),
-                }
-
             output_data = {
                 "world_size": world_size,
-                "dtype": str(BENCHMARK_DTYPE),
-                "hidden_size": HIDDEN_SIZE,
-                "sequence_lengths": args.sequence_lengths,
+                "dtype": args.dtype,
+                "hidden_size": args.hidden_size,
+                "size_mode": size_mode,
+                "tensor_elements": tensor_elements,
+                "message_size_bytes": [
+                    elements * dtype.itemsize for elements in tensor_elements
+                ],
                 "num_warmup": args.num_warmup,
                 "num_trials": args.num_trials,
                 "cuda_graph_capture_cycles": CUDA_GRAPH_CAPTURE_CYCLES,
-                "results": enhanced_results,
+                "results": {
+                    str(elements): {
+                        "timings": comm_results,
+                        "speedup_info": _calculate_speedup_info(comm_results),
+                    }
+                    for elements, comm_results in all_results.items()
+                },
             }
-
-            with open(args.output_json, "w") as f:
-                json.dump(output_data, f, indent=2)
-
+            with open(args.output_json, "w") as file:
+                json.dump(output_data, file, indent=2)
             logger.info("Results saved to %s", args.output_json)
-
-    # Cleanup
     if cpu_group != dist.group.WORLD:
         dist.destroy_process_group(cpu_group)
 

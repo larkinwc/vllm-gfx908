@@ -24,7 +24,7 @@ import urllib.request
 from pathlib import Path
 
 DEFAULT_OUT = Path("/root/bench-int8-w4a16/final/m6_needle32k.json")
-SERVER = "http://127.0.0.1:8000"
+DEFAULT_BASE_URL = "http://127.0.0.1:8000"
 
 NEEDLES = [
     {
@@ -87,7 +87,14 @@ def insert_at_depth(haystack: str, needle_phrase: str, depth_pct: int) -> str:
     return haystack[:pos] + " " + needle_phrase + " " + haystack[pos:]
 
 
-def chat(system: str, user: str, model: str, max_tokens: int = 768, timeout: float = 900.0) -> str:  # noqa: E501
+def chat(
+    base_url: str,
+    system: str,
+    user: str,
+    model: str,
+    max_tokens: int = 768,
+    timeout: float = 900.0,
+) -> str:
     body = json.dumps({
         "model": model,
         "messages": [
@@ -99,7 +106,7 @@ def chat(system: str, user: str, model: str, max_tokens: int = 768, timeout: flo
         "seed": 0,
     }).encode()
     req = urllib.request.Request(
-        f"{SERVER}/v1/chat/completions",
+        f"{base_url.rstrip('/')}/v1/chat/completions",
         data=body,
         headers={"Content-Type": "application/json"},
     )
@@ -114,13 +121,15 @@ def main() -> int:
     ap.add_argument("--probes", type=int, default=5)
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
     ap.add_argument("--model", type=str, default=None)
+    ap.add_argument("--base-url", type=str, default=DEFAULT_BASE_URL)
     args = ap.parse_args()
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
 
     model = args.model
     if model is None:
-        with urllib.request.urlopen(f"{SERVER}/v1/models", timeout=5.0) as resp:
+        models_url = f"{args.base_url.rstrip('/')}/v1/models"
+        with urllib.request.urlopen(models_url, timeout=5.0) as resp:
             blob = json.loads(resp.read())
             model = blob["data"][0]["id"]
 
@@ -141,7 +150,7 @@ def main() -> int:
             f"in the passage? Answer with the exact value as written."
         )
         try:
-            response = chat(SYSTEM, question, model)
+            response = chat(args.base_url, SYSTEM, question, model)
         except Exception as exc:
             results.append({
                 "label": needle["key"],

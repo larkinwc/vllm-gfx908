@@ -2,11 +2,12 @@
 """
 M0 Perplexity (VAL-M0-006) — server-mode.
 
-Computes Wikitext-2 perplexity over `--chunks` fixed chunks of `--chunk-tokens`
-tokens (deterministic offset using `--seed`) by calling a *running* vLLM
-OpenAI-compatible /v1/completions endpoint with `echo=true, logprobs=1,
-max_tokens=0`. The server returns per-prompt-token logprobs; we mean the
-negative logprobs and exponentiate.
+Computes WikiText-2 perplexity over `--chunks` fixed chunks of `--chunk-tokens`
+tokens (deterministic offset using `--seed`) through a running vLLM
+OpenAI-compatible `/v1/completions` endpoint with `echo=true` and prompt
+logprobs. vLLM intentionally skips prefix-cache reads for prompt-logprob
+requests, so this measures prefill numerical stability only; it is not a
+quantized-KV read-quality gate.
 
 This avoids spinning up three separate vLLM engines from the same script —
 the caller is expected to have started the server pointing at the model
@@ -24,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import sys
@@ -33,19 +35,56 @@ from pathlib import Path
 import requests  # noqa: E402
 
 
-def load_wikitext_token_ids(tokenizer_path: str) -> list[int]:
+def load_wikitext_token_ids(
+    tokenizer_path: str, wikitext_parquet: Path | None
+) -> tuple[list[int], dict[str, str]]:
     # Bypass AutoTokenizer (which fails on model_type=qwen3_5 in transformers v4)
     # and load the fast tokenizer directly from tokenizer.json.
-    from datasets import load_dataset
     from transformers import PreTrainedTokenizerFast
 
     tok = PreTrainedTokenizerFast(
         tokenizer_file=str(Path(tokenizer_path) / "tokenizer.json"),
     )
-    ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
-    texts = [t for t in ds["text"] if t and t.strip()]
+    if wikitext_parquet is None:
+        from datasets import load_dataset
+
+        ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+        texts = [text for text in ds["text"] if text and text.strip()]
+        source = {
+            "dataset": "Salesforce/wikitext",
+            "config": "wikitext-2-raw-v1",
+            "split": "test",
+            "source": "datasets",
+        }
+    else:
+        try:
+            import pyarrow.parquet as pq
+        except ImportError as exc:
+            raise RuntimeError(
+                "--wikitext-parquet requires the pyarrow dependency"
+            ) from exc
+        if not wikitext_parquet.is_file():
+            raise FileNotFoundError(wikitext_parquet)
+        texts = [
+            text
+            for text in pq.read_table(wikitext_parquet, columns=["text"])
+            .column("text")
+            .to_pylist()
+            if text and text.strip()
+        ]
+        with wikitext_parquet.open("rb") as parquet_file:
+            parquet_sha256 = hashlib.file_digest(
+                parquet_file, "sha256"
+            ).hexdigest()
+        source = {
+            "dataset": "Salesforce/wikitext",
+            "config": "wikitext-2-raw-v1",
+            "split": "test",
+            "source": str(wikitext_parquet),
+            "sha256": parquet_sha256,
+        }
     blob = "\n\n".join(texts)
-    return tok(blob, add_special_tokens=False)["input_ids"]
+    return tok(blob, add_special_tokens=False)["input_ids"], source
 
 
 def build_chunks(token_ids: list[int], num_chunks: int, chunk_tokens: int,
@@ -64,33 +103,28 @@ def build_chunks(token_ids: list[int], num_chunks: int, chunk_tokens: int,
     return chunks
 
 
-def score_chunk(base_url: str, model: str, ids: list[int],
-                timeout: int = 600) -> tuple[float, int]:
-    """Returns (sum_neg_logp, n_tokens_scored) for the given prompt token ids.
-
-    Uses /v1/completions with echo=true, logprobs=1, max_tokens=0 — vLLM
-    returns the logprob of each input token (the first token has logprob=None).
-    """
+def score_chunk(
+    base_url: str, model: str, ids: list[int], timeout: int = 600
+) -> tuple[float, int]:
+    """Return NLL and count for prompt tokens in one prefill request."""
     url = base_url.rstrip("/") + "/completions"
     payload = {
         "model": model,
-        "prompt": ids,         # token-id prompt is supported by vLLM
-        "max_tokens": 1,       # Some servers refuse max_tokens=0; ask for 1.
-        "echo": True,          # Return prompt token logprobs as well.
-        "logprobs": 0,         # 0 = just include logprobs of the chosen tokens.
+        "prompt": ids,
+        "max_tokens": 1,
+        "echo": True,
+        "logprobs": 0,
         "temperature": 0.0,
         "seed": 0,
     }
     r = requests.post(url, json=payload, timeout=timeout)
     r.raise_for_status()
-    j = r.json()
-    choice = j["choices"][0]
+    choice = r.json()["choices"][0]
     lp_obj = choice.get("logprobs") or {}
     token_logprobs = lp_obj.get("token_logprobs") or []
-    # token_logprobs[0] is None (no logprob for first token);
-    # the last entry corresponds to the *generated* token (max_tokens=1) and
-    # should NOT be counted toward prompt PPL — drop it.
-    prompt_lp = token_logprobs[: len(ids)]  # keep only prompt-position logprobs
+    # The first position has no logprob. The final logprob belongs to the
+    # generated token, so only retain prompt-position logprobs.
+    prompt_lp = token_logprobs[: len(ids)]
     sum_nll = 0.0
     n = 0
     for lp in prompt_lp:
@@ -113,11 +147,18 @@ def main() -> int:
     ap.add_argument("--chunks", type=int, default=50)
     ap.add_argument("--chunk-tokens", type=int, default=512)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument(
+        "--wikitext-parquet",
+        type=Path,
+        help="Pinned WikiText-2 raw test Parquet shard, bypassing datasets loading.",
+    )
     ap.add_argument("--out", required=True)
     ap.add_argument("--label", default="")
     args = ap.parse_args()
 
-    ids = load_wikitext_token_ids(args.tokenizer)
+    ids, dataset = load_wikitext_token_ids(
+        args.tokenizer, args.wikitext_parquet
+    )
     chunks = build_chunks(ids, args.chunks, args.chunk_tokens, args.seed)
     print(f"[m0_perplexity] tokenized blob: {len(ids)} tokens; "
           f"using {len(chunks)} chunks of {args.chunk_tokens} tokens")
@@ -151,6 +192,7 @@ def main() -> int:
         "n_tokens_scored": total_n,
         "mean_nll": mean_nll,
         "perplexity": ppl,
+        "dataset": dataset,
         "elapsed_s": elapsed,
     }
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)

@@ -66,10 +66,9 @@ class DecodeBenchTestRunner:
         num_heads = 4
         head_dim = 64
         self.kv_caches = {
-            f"layer_{i}": torch.zeros(
+            "layer": torch.zeros(
                 num_gpu_blocks, 2, num_heads, block_size, head_dim
             )
-            for i in range(2)  # 2 layers for testing
         }
 
         # Register KV caches with worker connector
@@ -410,6 +409,25 @@ def test_decode_bench_connector_concurrent_requests():
     # Run second step - should NOT fill again (already filled)
     _, metadata2 = runner.run_single_step()
     assert len(metadata2.reqs_to_fill) == 0
+
+
+def test_decode_bench_connector_fills_list_backed_cache():
+    """List-backed cache registrations fill each physical cache tensor."""
+    block_size = 16
+    runner = DecodeBenchTestRunner(block_size=block_size, num_gpu_blocks=100)
+    list_backed_caches = [
+        torch.zeros_like(runner.kv_caches["layer"]),
+        torch.zeros_like(runner.kv_caches["layer"]),
+    ]
+    runner.worker_connector.register_kv_caches({"layer": list_backed_caches})
+
+    runner.new_request([1] * (block_size * 2))
+    _, metadata = runner.run_single_step()
+    block_ids, _ = metadata.reqs_to_fill["0"]
+
+    for kv_cache in list_backed_caches:
+        for block_id in block_ids[0]:
+            assert torch.allclose(kv_cache[block_id], torch.tensor(0.015))
 
 
 if __name__ == "__main__":

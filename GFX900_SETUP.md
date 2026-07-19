@@ -3,10 +3,109 @@
 This branch (`gfx900-support`) extends the MI100/gfx908 fork to AMD **gfx900**
 (Vega10) GPUs such as the Radeon Pro V340 and Instinct MI25.
 
-## Hardware context
+> **Reproducibility status (2026-07):** historical hardware statements below are
+> evidence, not platform defaults. Capture a live manifest and validate its
+> `platform_sha256` before using any recipe:
+>
+> ```bash
+> .venv/bin/python -m scripts.gfx900 manifest \
+>   --profile scripts/gfx900/profiles/c4130-2.json \
+>   --output <run>/manifest.json --reference
+> .venv/bin/python -m scripts.gfx900 validate <run>/manifest.json
+> ```
+>
+> The profile pins the Qwen3.5 reference revisions and records actual
+> device/VRAM/topology, ROCm/PyTorch/Triton/RCCL hashes, power state, NUMA
+> placement, and gfx900 reset method. A mismatch is `INCOMPARABLE`, never a
+> normalized performance comparison. The capture intentionally fails closed
+> unless `amdgpu.reset_method=2`; it does not change host settings.
 
-Validated on: 8x AMD Radeon Pro V340 (= 16x gfx900 GPUs, 8GB VRAM each),
-dual Xeon E5-2640 v3, Ubuntu 24.04, ROCm 7.2.4.
+## Accepted c4130-2 reference (2026-07-13)
+
+Historical system note: earlier testing described 8 Radeon Pro V340 cards
+(16 gfx900 dies) on dual Xeon E5-2640 v3 with ROCm 7.2.4. The accepted
+2026-07-13 capture selects the eight-die c4130-2 group recorded above; do not
+infer unselected inventory, VRAM, or topology from the historical description.
+It was captured from clean source commit
+`3973e0ec9cd10b95f4663096237c025806efdfdb` with vLLM
+`0.1.dev17289+g3973e0ec9`, ROCm 7.2.4, PyTorch 2.12.1+rocm7.2, and Triton
+3.7.0. The selected group is eight 56-CU gfx900 dies (8,573,157,376 bytes
+each), all PCIe-attached on NUMA node 0. Its compatibility digest is
+`61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`;
+its complete manifest digest is
+`9ffd3ab1d71629984918598f06901bfcbb457925a044c78048ee30942f6bc81d`.
+
+The host has `amdgpu.reset_method=2`, verified after reboot. Treat this
+reference as the only comparable substrate for the run artifacts named in
+`GFX900_RECOMMENDED.md`; recapture rather than reusing its figures after any
+hardware, ROCm, library, rank-order, or topology change.
+
+### Reproducing the completed c4130-2 campaign
+
+Use `scripts/gfx900/profiles/c4130-2.json` and its declared device group rather
+than copying an old `HIP_VISIBLE_DEVICES` recipe. The TP8 topology control uses
+`Qwen/Qwen3.5-9B` at revision
+`c202236235762e1c871ad0ccb60c8ee5ba337b9a`, FP16,
+`--language-model-only`, `--max-model-len 4352`, and
+`--gpu-memory-utilization 0.85` in eager mode. The separate 8,192-input
+capacity and prefix cells use `--max-model-len 8448`.
+
+The measured workload-specific serving features are prefix caching and
+decode-only CUDAGraphs. Prefix-caching promotion evidence is the deterministic
+`prefix_repetition` workload: 4,096 shared-prefix tokens, 256 unique suffix
+tokens, 128 requested output tokens, four prefixes, 32 prompts, and c=8. The
+reproducible option is `--enable-prefix-caching`; do not infer a benefit for
+unrelated prompt distributions.
+
+For latency-sensitive decode-dominant serving, the TP8 graph profile uses
+`FULL_DECODE_ONLY` with capture sizes `[1,2,4,8,16,32]`. It improved a
+512-input / 512-output c=1 run from 12.73 to 58.18 output tok/s and reduced p99
+TPOT from 78.15 to 15.78 ms. The matched AWQ TP4 c=1 control also improved from
+10.629 to 39.637 output tok/s, with p99 TPOT from 88.01 to 18.21 ms.
+
+This is not a burst/open-loop default. In the TP8 DecodeBenchConnector
+4,096-input / 256-output burst control at 0.0827 RPS and burstiness 0.25, graph
+and eager had nearly equal output throughput (18.119 versus 18.064 tok/s);
+graph p99 TPOT was slightly lower (126.93 versus 129.48 ms), but its p99 TTFT
+was 2,431 versus 1,621 ms. Use the graph profile only for the demonstrated
+low-concurrency, decode-dominant workload, and validate application arrival
+traces before enabling it.
+
+The 32,768-token numerical quality check is intentionally a separate,
+single-sequence launch because a 0.85 GPU-memory-utilization TurboQuant server
+OOMed in the prefill activation path. For that check only, use
+`--max-model-len 34816 --max-num-seqs 1 --max-num-batched-tokens 4096
+--gpu-memory-utilization 0.75`, then run:
+
+```bash
+.venv/bin/python scripts/eval_needle.py \
+  --base-url http://127.0.0.1:<port> --ctx 32768 --probes 5 \
+  --model Qwen/Qwen3.5-9B --out <run>/needle-32768.json
+```
+
+Both auto KV and `turboquant_k8v4` passed this 5/5 probe under the identical
+single-sequence settings. The verified WikiText-2 Parquet shard bypasses the
+incompatible legacy `datasets` loader, but the `echo=true` prompt-logprob API
+still intentionally skips prefix-cache reads; retain it as a corpus-loader and
+prefill-numerics smoke test only.
+
+The valid cache-read perplexity gate is
+`.venv/bin/python -m scripts.gfx900.cache_read_ppl`: it prefills 256 tokens
+from each fixed 512-token chunk, teacher-forces the remaining 256 corpus tokens
+through actual decode steps, and records raw target logits before masking the
+sampled output. Across 50 chunks (12,800 scored tokens), auto PPL was 7.7323505
+and `turboquant_k8v4` PPL was 7.7242287 (-0.105%). That difference is
+quality-neutral within measurement noise, not a quality gain, and is below the
++1% gate. `turboquant_k8v4` is therefore a capacity-oriented Qwen3.5-9B TP8
+profile option, not a global KV-cache default.
+See `GFX900_RECOMMENDED.md` for measured launch recommendations and
+`PERF_GFX900.md` for the chronological campaign evidence.
+
+## Historical hardware context
+
+Historical system observed: 8x AMD Radeon Pro V340 (= 16x gfx900 GPUs, 8GB
+VRAM each), dual Xeon E5-2640 v3, Ubuntu 24.04, ROCm 7.2.4. Use the accepted
+manifest above rather than this prose for a new run.
 
 ## Why gfx900 is a distinct tier
 

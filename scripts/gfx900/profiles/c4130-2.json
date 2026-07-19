@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "host_id": "c4130-2",
+  "executables": {"vllm": "/home/larkinwc/venvs/triton/bin/vllm"},
+  "models": {
+    "qwen35_fp16": {
+      "id": "Qwen/Qwen3.5-9B",
+      "revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+      "tokenizer": "Qwen/Qwen3.5-9B",
+      "tokenizer_revision": "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+      "allowed_dtypes": ["float16"],
+      "environment": {"VLLM_USE_V1": "1"}
+    },
+    "qwen35_awq": {
+      "id": "QuantTrio/Qwen3.5-9B-AWQ",
+      "revision": "938f8e3ef86c9d1e9bec3705e149694c172592f1",
+      "tokenizer": "QuantTrio/Qwen3.5-9B-AWQ",
+      "tokenizer_revision": "938f8e3ef86c9d1e9bec3705e149694c172592f1",
+      "allowed_dtypes": ["float16"],
+      "environment": {"VLLM_USE_V1": "1"}
+    }
+  },
+  "expected_platform": {
+    "reset_method": 2,
+    "devices": [{"arch": "gfx900"}],
+    "topology": {"source": "capture rocm-smi --showtopo before accepting a reference"},
+    "power": {"source": "capture configured limits; harness never changes them"}
+  },
+  "device_groups": {
+    "single_socket_8": {
+      "id": "single_socket_8",
+      "visible_indices": [0, 1, 2, 3, 4, 5, 6, 7],
+      "numa_binding": "socket0",
+      "layouts": ["tp4", "tp8", "tp4_pp2", "two_tp4_replicas"]
+    },
+    "single_socket_4": {
+      "id": "single_socket_4",
+      "visible_indices": [0, 1, 2, 3],
+      "numa_binding": "socket0",
+      "layouts": ["tp4"]
+    }
+  },
+  "default_device_group": "single_socket_8",
+  "numa_bindings": {"socket0": {"mode": "profiled", "nodes": [], "cpus": []}},
+  "telemetry_limits": {"junction_temperature_c": 85, "throttle_clock_mhz": 300, "minimum_disk_gib": 20, "profiler_output_gib": 10},
+  "baseline_environment": {"VLLM_USE_V1": "1"},
+  "ports": {"first": 8000},
+  "timeouts": {"server_seconds": 300, "benchmark_seconds": 600}
+}
