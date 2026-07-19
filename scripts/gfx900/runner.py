@@ -454,6 +454,13 @@ def _run_confirm_cell(
     """Resume and execute only confirm launches lacking a terminal result."""
     if result_path.exists():
         artifact = json.loads(result_path.read_text())
+        if (
+            artifact.get("provenance", {}).get("manifest_sha256")
+            != manifest["manifest_sha256"]
+        ):
+            raise RuntimeError(
+                "confirm resume manifest SHA does not match existing artifact"
+            )
         if artifact.get("verdict", {}).get("status") == "PASS":
             return artifact
         if "confirm" not in artifact:

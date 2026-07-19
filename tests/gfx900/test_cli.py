@@ -69,6 +69,13 @@ def test_reference_matrix_declares_all_clean_source_confirm_cells() -> None:
         matrix["cells"]
     )
 
+    assert matrix["cells"]["smoke-fp16-tp8"]["timeout_seconds"] == 1200
+    assert {
+        cell_id
+        for cell_id, cell in matrix["cells"].items()
+        if cell["timeout_seconds"] == 1200
+    } == {"smoke-fp16-tp8"}
+
     revision = profile["models"]["qwen35_fp16"]["revision"]
     for cell_id, details in expected.items():
         cell = matrix["cells"][cell_id]

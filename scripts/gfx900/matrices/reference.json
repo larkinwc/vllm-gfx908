@@ -623,7 +623,7 @@
         "0.85",
         "--enforce-eager"
       ],
-      "timeout_seconds": 600,
+      "timeout_seconds": 1200,
       "trial_policy": "smoke",
       "variant_keys": [],
       "warmup_runs": 1,

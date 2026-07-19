@@ -370,3 +370,48 @@ def test_confirm_resume_preserves_completed_launches(tmp_path, monkeypatch) -> N
         (launch["launch_index"], launch["attempt"], launch["status"])
         for launch in resumed["confirm"]["launches"]
     ] == [(0, 1, "PASS"), (1, 1, "FAILED"), (1, 2, "PASS"), (2, 1, "PASS")]
+
+
+def test_confirm_resume_rejects_changed_manifest_and_preserves_evidence(
+    tmp_path, monkeypatch
+) -> None:
+    server_starts = []
+    terminated = []
+
+    def fake_popen(argv, **kwargs):
+        server_starts.append(argv)
+        return _FakeServer()
+
+    def failing_benchmark(argv, environment, timeout, result_path, base_url=None):
+        raise RuntimeError("benchmark failure")
+
+    monkeypatch.setattr("scripts.gfx900.runner.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("scripts.gfx900.runner._terminate", terminated.append)
+    monkeypatch.setattr("scripts.gfx900.runner._is_port_free", lambda port: True)
+    monkeypatch.setattr("scripts.gfx900.runner._wait_for_server", lambda *args: None)
+    monkeypatch.setattr("scripts.gfx900.runner._run_benchmark", failing_benchmark)
+
+    first = run_cell(
+        profile=_confirm_profile(),
+        matrix=_confirm_matrix(),
+        cell_id="cell",
+        output_dir=tmp_path,
+        manifest=_manifest(),
+    )
+    result_path = tmp_path / "cells/cell/cell.json"
+    evidence = result_path.read_bytes()
+    changed_manifest = {**_manifest(), "manifest_sha256": "other-manifest"}
+
+    with pytest.raises(RuntimeError, match="manifest SHA"):
+        run_cell(
+            profile=_confirm_profile(),
+            matrix=_confirm_matrix(),
+            cell_id="cell",
+            output_dir=tmp_path,
+            manifest=changed_manifest,
+        )
+
+    assert first["verdict"]["status"] == "FAILED"
+    assert result_path.read_bytes() == evidence
+    assert len(server_starts) == 1
+    assert len(terminated) == 1
