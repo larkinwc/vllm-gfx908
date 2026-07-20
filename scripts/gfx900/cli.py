@@ -11,6 +11,7 @@ from typing import Any
 
 import jsonschema
 
+from scripts.gfx900.analysis import compare_cells
 from scripts.gfx900.common import read_json, write_json
 from scripts.gfx900.manifest import (
     build_manifest,
@@ -152,6 +153,39 @@ def command_analyze(args: argparse.Namespace) -> int:
     return EXIT_OK if result["verdict"] == "PASS" else EXIT_INCOMPARABLE
 
 
+def command_compare_cells(args: argparse.Namespace) -> int:
+    baseline = read_json(Path(args.baseline))
+    candidate = read_json(Path(args.candidate))
+    errors = _validate(baseline, "result.schema.json") + _validate(
+        candidate, "result.schema.json"
+    )
+    if errors:
+        print("\n".join(errors), file=sys.stderr)
+        return EXIT_INVALID
+    baseline_platform = baseline["provenance"]["platform_sha256"]
+    candidate_platform = candidate["provenance"]["platform_sha256"]
+    identity = {
+        "baseline_cell_id": baseline["identity"]["cell_id"],
+        "candidate_cell_id": candidate["identity"]["cell_id"],
+        "baseline_path": str(Path(args.baseline)),
+        "candidate_path": str(Path(args.candidate)),
+    }
+    if baseline_platform != candidate_platform:
+        write_json(
+            Path(args.output),
+            {
+                "verdict": "INCOMPARABLE",
+                "baseline_platform_sha256": baseline_platform,
+                "candidate_platform_sha256": candidate_platform,
+                **identity,
+            },
+        )
+        return EXIT_INCOMPARABLE
+    result = {**compare_cells(baseline, candidate), **identity}
+    write_json(Path(args.output), result)
+    return EXIT_REGRESSION if result["verdict"] == "REGRESSION" else EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="gfx900 reproducible benchmark harness"
@@ -174,6 +208,11 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--candidate", required=True)
     analyze.add_argument("--output", required=True)
     analyze.set_defaults(handler=command_analyze)
+    compare_cells_parser = subparsers.add_parser("compare-cells")
+    compare_cells_parser.add_argument("--baseline", required=True)
+    compare_cells_parser.add_argument("--candidate", required=True)
+    compare_cells_parser.add_argument("--output", required=True)
+    compare_cells_parser.set_defaults(handler=command_compare_cells)
     validate = subparsers.add_parser("validate")
     validate.add_argument("path")
     validate.set_defaults(handler=command_validate)
