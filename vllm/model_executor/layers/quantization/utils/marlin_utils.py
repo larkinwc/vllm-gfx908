@@ -456,7 +456,19 @@ def should_use_atomic_add_reduce(
         maybe_warn_marlin_atomic_add_env()
         return False
 
-    # sm8x doesn't support atomicAdd + bfloat16 natively
+    # sm8x doesn't support atomicAdd + bfloat16 natively. This check calls
+    # torch.cuda.get_device_capability(), which returns a plain Python
+    # tuple (not a Tensor) and cannot be fake-tensor-propagated by Dynamo —
+    # the same failure mode already guarded against in the sibling
+    # maybe_warn_marlin_atomic_add()/maybe_warn_marlin_atomic_add_env()
+    # above. Mirror that guard here: while Dynamo is tracing, skip the
+    # capability probe and conservatively report "don't use atomic add".
+    # That is always numerically safe (identical to running on a GPU that
+    # doesn't support it) and this whole fast path is opt-in and
+    # default-off (VLLM_MARLIN_USE_ATOMIC_ADD) regardless, so eager-mode
+    # behavior — including this exact check — is unaffected.
+    if torch.compiler.is_dynamo_compiling():
+        return False
     device_capability = torch.cuda.get_device_capability(device)
     if device_capability[0] < 9 and dtype == torch.bfloat16:
         maybe_warn_marlin_atomic_add(device, dtype)

@@ -223,6 +223,11 @@ def try_stash_fused_silu_quant_int8(
 
     Negative branches (must NOT stash):
         * Env-disable flag set (primary or legacy alias).
+        * ``torch.compiler.is_compiling()`` is True (Dynamo is tracing this
+          call, e.g. during ``torch.compile`` aot_compile graph capture).
+          MUST be checked, and MUST short-circuit, before this function
+          ever reaches ``torch.cuda.is_current_stream_capturing()`` — see
+          the inline comment above that call for why.
         * ``down_proj`` is not bound to the MI100 W8A8 INT8 kernel (e.g.
           W4A16, unquantized, fp8, or non-gfx908 platform).
         * ``gate_up`` is not a 2-D fp16 tensor with an even last dim (the
@@ -240,6 +245,26 @@ def try_stash_fused_silu_quant_int8(
     if gate_up.shape[-1] % 2 != 0:
         return False
     if not gate_up.is_cuda:
+        return False
+    # Skip while Dynamo is tracing this call (``torch.compile``'s Dynamo
+    # graph capture / aot_compile), *before* ever touching
+    # ``torch.cuda.is_current_stream_capturing()`` below. That op returns a
+    # plain Python bool from a C++ extension binding; Dynamo cannot
+    # fake-tensor-propagate it and raises ``Unsupported: torch.* op
+    # returned non-Tensor`` the instant it is reached inside a traced
+    # region — this is exactly what happens when Qwen3.5's compiled MoE
+    # MLP forward calls this producer (``qwen2_moe.py``'s
+    # ``Qwen2MoeMLP.forward``, itself wrapped by ``@support_torch_compile``).
+    # ``torch.compiler.is_compiling()`` is itself Dynamo-special-cased
+    # (folded to a literal bool at trace time — no graph break, verified
+    # under ``torch.compile(..., fullgraph=True)``), so this guard is safe
+    # to call from inside a traced region. When it is True we skip the
+    # entire producer for the duration of tracing/compilation and fall
+    # through to the legacy ``act_fn(gate_up)`` + ``down_proj`` composition,
+    # which compiles cleanly (same rationale as the CUDA-graph-capture skip
+    # right below: byte-identical legacy path, fusion lost only on the
+    # traced/captured shapes, still applied on eager-executed shapes).
+    if torch.compiler.is_compiling():
         return False
     # Skip during CUDA-graph capture. The captured graph would freeze the
     # cache-stash pointer on ``down_proj``, but the next replay would not
