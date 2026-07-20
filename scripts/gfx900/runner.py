@@ -235,7 +235,17 @@ def _aggregate_trials(trials: list[Mapping[str, Any]]) -> dict[str, Any]:
 
 
 def _confirmed_aggregate(launches: list[Mapping[str, Any]]) -> dict[str, Any]:
-    """Reduce independent per-launch medians into the confirm headline."""
+    """Reduce independent per-launch medians into the confirm headline.
+
+    Each metric's median is computed independently across the completed
+    launches (per-metric, not per-launch). Consequently the returned
+    composite row is **not guaranteed to match any single launch's full
+    aggregate** — e.g. ``output_throughput`` and ``p99_tpot_ms`` may both
+    come from launch 1's real run while ``p99_ttft_ms`` independently
+    comes from launch 2's real run. This is the intended, statistically
+    correct behavior (standard median-per-metric-across-repeated-trials
+    practice) for robustness against a single anomalous launch, not a bug.
+    """
     aggregate: dict[str, Any] = {}
     for key in (
         "output_throughput",

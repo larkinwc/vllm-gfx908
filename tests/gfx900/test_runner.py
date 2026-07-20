@@ -9,6 +9,7 @@ from scripts.gfx900.cli import _validate
 from scripts.gfx900.common import contains_error_signature, redact_environment
 from scripts.gfx900.runner import (
     TERMINAL_STATUSES,
+    _confirmed_aggregate,
     _missing_required_metrics,
     _run_benchmark,
     resolve_cell,
@@ -415,3 +416,46 @@ def test_confirm_resume_rejects_changed_manifest_and_preserves_evidence(
     assert result_path.read_bytes() == evidence
     assert len(server_starts) == 1
     assert len(terminated) == 1
+
+
+def test_confirmed_aggregate_composite_can_mix_launches() -> None:
+    """Per-metric medians can each land on a different real launch.
+
+    Mirrors an observed production case: two metrics' medians came from
+    one launch while a third metric's median came from a different
+    launch. The composite is a valid statistical reduction, not a
+    single launch's actual aggregate.
+    """
+    launches = [
+        {
+            "aggregate": {
+                "output_throughput": 100.0,
+                "p99_tpot_ms": 50.0,
+                "p99_ttft_ms": 10.0,
+            }
+        },
+        {
+            "aggregate": {
+                "output_throughput": 101.0,
+                "p99_tpot_ms": 51.0,
+                "p99_ttft_ms": 30.0,
+            }
+        },
+        {
+            "aggregate": {
+                "output_throughput": 200.0,
+                "p99_tpot_ms": 200.0,
+                "p99_ttft_ms": 11.0,
+            }
+        },
+    ]
+
+    composite = _confirmed_aggregate(launches)
+
+    # output_throughput and p99_tpot_ms medians both land on launch 1.
+    assert composite["output_throughput"] == 101.0
+    assert composite["p99_tpot_ms"] == 51.0
+    # p99_ttft_ms median lands on launch 2, a different launch.
+    assert composite["p99_ttft_ms"] == 11.0
+    # No single launch's aggregate equals the composite row.
+    assert composite not in (launch["aggregate"] for launch in launches)
