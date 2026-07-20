@@ -7,6 +7,7 @@ pytest.importorskip("torch")
 pytest.importorskip("vllm")
 
 import vllm.envs as envs
+from vllm.model_executor.layers.fused_moe import fused_moe as fused_moe_mod
 from vllm.platforms import rocm
 from vllm.platforms.rocm import RocmPlatform
 from vllm.v1.attention.backends.registry import AttentionBackendEnum
@@ -44,3 +45,37 @@ def test_gfx900_moe_gemv_is_default_on_and_has_kill_switch(monkeypatch) -> None:
     monkeypatch.setenv("VLLM_GFX900_MOE_GEMV", "0")
     envs.disable_envs_cache()
     assert not envs.VLLM_GFX900_MOE_GEMV
+
+
+def test_gfx900_moe_gemv_dispatch_follows_env(monkeypatch) -> None:
+    """get_default_config's GEMV_MODE selection must track envs.VLLM_GFX900_MOE_GEMV
+    (not a raw os.environ read), for the exact gate in fused_moe.py:
+    `on_gfx900() and M <= 2 and envs.VLLM_GFX900_MOE_GEMV`."""
+    monkeypatch.setattr(rocm, "_ON_GFX900", True)
+    monkeypatch.setattr(
+        fused_moe_mod, "should_moe_wna16_use_cuda", lambda *a, **kw: False
+    )
+
+    def config_for(M: int) -> dict:
+        return fused_moe_mod.get_default_config(
+            M=M,
+            E=8,
+            N=1024,
+            K=1024,
+            topk=2,
+            dtype="int4_w4a16",
+            block_shape=[128, 128],
+        )
+
+    monkeypatch.setenv("VLLM_GFX900_MOE_GEMV", "1")
+    envs.disable_envs_cache()
+    assert config_for(1).get("GEMV_MODE") is True
+
+    monkeypatch.setenv("VLLM_GFX900_MOE_GEMV", "0")
+    envs.disable_envs_cache()
+    assert "GEMV_MODE" not in config_for(1)
+
+    # M > 2 never takes the GEMV path, even with the gate enabled.
+    monkeypatch.setenv("VLLM_GFX900_MOE_GEMV", "1")
+    envs.disable_envs_cache()
+    assert "GEMV_MODE" not in config_for(3)
