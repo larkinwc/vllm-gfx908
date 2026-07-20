@@ -5,13 +5,22 @@ The historical sections cover **Qwen3.5-9B** (dense hybrid) and
 uses the selected c4130-2 eight-die group; its results remain
 workload-specific.
 
-> **Current verification status (2026-07-19):** the clean, commit-validated
+> **Current verification status (2026-07-20):** the clean, commit-validated
 > substrate has platform digest
 > `61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`
-> at source commit `689cbbba3ae5400bd583e1435177464e48f1f94a`. One matched
-> TurboQuant c=32 screen and one dense c=1 graph/eager screen completed, but
-> neither has the required independent-launch confirmation. They do not
-> promote a default or profile. The prior AWQ graph result is historical only:
+> at source commit `689cbbba3ae5400bd583e1435177464e48f1f94a`. The TurboQuant
+> vs. auto KV-cache capacity comparison (TP8 Qwen3.5-9B FP16, 8,192/256, c=32)
+> now has the required independent-launch confirmation: three independent
+> launches per arm, all PASS, zero failed requests, mechanized `compare-cells`
+> verdict `IMPROVEMENT`. This confirms the throughput/latency capacity gates
+> only — TurboQuant's quality gates (perplexity, coding suite,
+> needle-in-haystack) remain historical-only evidence from the earlier source
+> commit and have not yet been reconfirmed on this clean substrate; that
+> reconfirmation is a deliberate open decision, not an oversight, so this does
+> not promote a default or profile yet. The dense c=1 graph/eager confirm
+> trial (`confirm-dense-eager-c1` / `confirm-graphs-full-decode-c1`) is still
+> in-flight on real hardware as of this writing; its result is not yet
+> available. The prior AWQ graph result is historical only:
 > on this substrate, AWQ requires `--max-num-batched-tokens 512` for eager
 > startup, while every tested VLLM_COMPILE configuration hangs during warmup
 > after compiling. Do not enable AWQ graphs on gfx900 from the historical
@@ -79,20 +88,25 @@ The rows below record the earlier source commit
 `3973e0ec9cd10b95f4663096237c025806efdfdb` and model revision
 `c202236235762e1c871ad0ccb60c8ee5ba337b9a`. They are not promotion evidence
 for the clean `689cbbba3` campaign. The 2026-07-19 dense c=1 screen measured
-57.651 versus 12.707 output tok/s (graph versus eager); the matched TurboQuant
-c=32 screen measured 20.521 versus 18.583 output tok/s (TurboQuant versus
-auto). Both require independent-launch confirmation.
+57.651 versus 12.707 output tok/s (graph versus eager); that confirm trial
+(`confirm-dense-eager-c1` / `confirm-graphs-full-decode-c1`) is still
+in-flight on real hardware as of this writing. The matched TurboQuant c=32
+screen measured 20.521 versus 18.583 output tok/s (TurboQuant versus auto)
+as a single-launch pilot; the 3-launch independent-confirm trial for this
+comparison has since completed (see the capacity row below) and passed the
+throughput/latency capacity gates, though TurboQuant's quality gates remain
+historical-only and unreconfirmed on this substrate.
 
 | Workload / decision | Result | Recommendation |
 |---|---|---|
 | TP8 FP16 eager, 4,096/256, c=8 | 26.476 output tok/s | Retain as the general c4130-2 control. TP4 and TP4×PP2 did not meet a universal topology-promotion gate. |
 | `FULL_DECODE_ONLY`, 4,096/256, c=8 | 26.551 output tok/s, +0.28% versus eager | Declined for this prefill-heavy reference workload; retain `--enforce-eager` for that control. |
-| `FULL_DECODE_ONLY`, 512/512, c=1 | Historical result: 58.18 versus 12.73 output tok/s eager (+357.1%); the clean screen was 57.651 versus 12.707 | Pending independent-launch confirmation; do not promote yet. |
+| `FULL_DECODE_ONLY`, 512/512, c=1 | Historical result: 58.18 versus 12.73 output tok/s eager (+357.1%); the clean screen was 57.651 versus 12.707 | Independent-launch confirm trial (`confirm-dense-eager-c1` / `confirm-graphs-full-decode-c1`) is in progress on real hardware; do not promote yet. |
 | `FULL_DECODE_ONLY`, 512/512, c=32 | 190.51 versus 188.33 output tok/s eager (+1.16%); full 32-token graph steps, no steady-state padding | Do not enable solely for high-throughput batching; graph launch savings are amortized at the full batch. |
 | AWQ TP4, `FULL_DECODE_ONLY`, 512/512, c=1 | Historical result: graph 39.637 versus eager 10.629 output tok/s. Clean source required `--max-num-batched-tokens 512` even for eager; VLLM_COMPILE warmup hung with and without CUDAGraphs. | Do not enable AWQ graphs on gfx900. The only successful clean screen is eager, text-only AWQ at a 512-token batch cap (10.677 output tok/s). |
 | TP8 decode-isolated burst, 4,096/256, 0.0827 RPS, burstiness 0.25 | Graph: 18.119 versus eager 18.064 output tok/s (+0.31%); p99 TPOT 126.93 versus 129.48 ms; p99 TTFT 2,431 versus 1,621 ms | Do not promote graph mode for burst/open-loop serving: it misses the p99 TTFT gate despite zero failures and a small TPOT reduction. |
 | Repeated-prefix workload, TurboQuant, c=8 | 4,096 shared-prefix / 256 suffix / 128 output; prefix cache on: 36.029 output tok/s, 82.8% hit rate; off: 12.740 output tok/s | Enable `--enable-prefix-caching` only when the application has demonstrably repeated prefixes. The observed +182.8% output goodput and -77.1% mean TTFT exceed the workload-specific gate; it is not a generic latency claim. |
-| Long input, c=32 capacity screen | Historical result: TurboQuant 22.092 versus auto 18.450 output tok/s (+19.7%). Clean screen: TurboQuant 20.521 versus auto 18.583 (+10.4%), both with zero request failures. | Pending independent-launch confirmation; do not promote `turboquant_k8v4` yet. |
+| Long input, c=32 capacity screen | Historical result: TurboQuant 22.092 versus auto 18.450 output tok/s (+19.7%). Clean single-launch screen: TurboQuant 20.521 versus auto 18.583 (+10.4%). **Confirmed** (3 independent launches per arm, all PASS, 0 failed requests): TurboQuant 22.505 versus auto 18.600 output tok/s (+20.997%); p99 TPOT 1377.553 versus 1672.270 ms (-17.624%); p99 TTFT 319853.228 versus 379302.669 ms (-15.673%). Mechanized `compare-cells` verdict: `IMPROVEMENT`, zero regressions, comparable `platform_sha256`. | Throughput/latency capacity gates confirmed and passing — clears the +10% capacity gate with no latency regression. TurboQuant's quality gates (perplexity, coding, needle-in-haystack) remain historical-only, not yet reconfirmed on this clean substrate: this is a deliberate open decision, not an oversight. Do not promote `turboquant_k8v4` as a default until quality reconfirmation completes. |
 | Native MTP K=1 and CPU ngram K=4 | MTP: 22.376 output tok/s; ngram: 24.007 output tok/s, versus eager 26.476 | `DECLINED_NO_END_TO_END_WIN`: retain non-speculative serving. |
 
 For the graph-promoted c=1 workload class, replace `--enforce-eager` with:

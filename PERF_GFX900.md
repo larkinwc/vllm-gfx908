@@ -17,20 +17,26 @@ efficient operating point?"
 The historical measurements below share platform digest
 `61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`.
 The clean, commit-validated campaign source is
-`689cbbba3ae5400bd583e1435177464e48f1f94a`. Its one-pass dense-graph and
-TurboQuant screens are evidence only until independently launched confirmation
-trials complete; they do not promote a profile.
+`689cbbba3ae5400bd583e1435177464e48f1f94a`. Its one-pass dense-graph screen
+remains evidence only until its independently launched confirmation trial
+(`confirm-dense-eager-c1` / `confirm-graphs-full-decode-c1`) completes —
+still in-flight on real hardware as of this writing. The TurboQuant capacity
+screen's independent-launch confirmation trial has since completed (see the
+capacity row below): the throughput/latency capacity gates are confirmed and
+passing, but TurboQuant's quality gates remain historical-only and have not
+yet been reconfirmed on this clean substrate, so it does not yet promote a
+profile.
 
 | Screen | Measured result | Decision |
 |---|---|---|
 | RCCL TP4/TP8, 1 KiB–8 MiB, default/Ring/Tree/LL/Simple | Default RCCL 2.27.7 was the only no-regression choice | No static RCCL override. |
 | FP16 topology, 4,096/256, c=8 | TP8: 26.476 output tok/s; TP4: 20.895; TP4×PP2: 26.304 | Keep separate topology observations; no universal replacement for TP8 eager. |
 | `FULL_DECODE_ONLY`, 4,096/256, c=8 | 26.551 versus 26.476 output tok/s eager (+0.28%) | Declined for the prefill-heavy reference workload. |
-| `FULL_DECODE_ONLY`, 512/512, c=1 | Historical: 58.18 versus 12.73 output tok/s eager (+357.1%); clean screen: 57.651 versus 12.707 | Pending independent-launch confirmation; do not promote yet. |
+| `FULL_DECODE_ONLY`, 512/512, c=1 | Historical: 58.18 versus 12.73 output tok/s eager (+357.1%); clean screen: 57.651 versus 12.707 | Independent-launch confirm trial (`confirm-dense-eager-c1` / `confirm-graphs-full-decode-c1`) is in progress on real hardware; do not promote yet. |
 | `FULL_DECODE_ONLY`, 512/512, c=32 | 190.51 versus 188.33 output tok/s eager (+1.16%); p99 TPOT 163.09 versus 165.01 ms | Do not enable for throughput batching alone. Repeated scheduler rows show an unpadded size-32 `FULL` graph, so this is not a fallback artifact. |
 | AWQ TP4, `FULL_DECODE_ONLY`, 512/512, c=1 | Historical: graph 39.637 versus eager 10.629 output tok/s. On clean source, eager started only with text-only multimodal limits and `--max-num-batched-tokens 512` (10.677 output tok/s); tested VLLM_COMPILE paths hung during warmup. | Do not enable AWQ graphs on gfx900. |
 | TP8 DecodeBenchConnector burst, 4,096/256, 0.0827 RPS, burstiness 0.25 | Graph 18.119 versus eager 18.064 output tok/s (+0.31%); p99 TPOT 126.93 versus 129.48 ms; p99 TTFT 2,431 versus 1,621 ms | Do not enable graph mode for burst/open-loop traffic: p99 TTFT fails the +2% gate. |
-| TurboQuant versus auto, 8,192/256, c=32 | Historical: 22.092 versus 18.450 output tok/s (+19.7%). Clean screen: 20.521 versus 18.583 (+10.4%), both with zero request failures. | Pending independent-launch confirmation; do not promote `turboquant_k8v4` yet. |
+| TurboQuant versus auto, 8,192/256, c=32 | Historical: 22.092 versus 18.450 output tok/s (+19.7%). Clean single-launch screen: 20.521 versus 18.583 (+10.4%). **Confirmed** (3 independent launches per arm, all PASS, 0 failed requests): 22.505 versus 18.600 output tok/s (+20.997%); p99 TPOT 1377.553 versus 1672.270 ms (-17.624%); p99 TTFT 319853.228 versus 379302.669 ms (-15.673%). `compare-cells` verdict: `IMPROVEMENT`, zero regressions. | Throughput/latency capacity gates confirmed and passing. Quality gates (perplexity, coding, needle-in-haystack) remain historical-only, not yet reconfirmed on the clean substrate — a deliberate open decision. Do not promote `turboquant_k8v4` as a default until quality reconfirmation completes. |
 | Prefix-repetition, TurboQuant, c=8 | Cache-on 36.029 output tok/s, 82.8% hit; cache-off 12.740 | Promote prefix caching only for repeated-prefix workloads. |
 | MTP K=1 / CPU ngram K=4 | 22.376 / 24.007 output tok/s versus 26.476 eager | `DECLINED_NO_END_TO_END_WIN`. |
 
