@@ -87,6 +87,10 @@ class CommunicatorBenchmark:
         self.symm_mem_comm_multimem = None
         self.symm_mem_comm_two_shot = None
         self.fi_ar_comm = None
+        # Communicator variant name -> human-readable reason it could not be
+        # initialized/used. Populated for anything unavailable, disabled, or
+        # failing to init so reporting never silently drops a backend.
+        self.unsupported: dict[str, str] = {}
 
         self._init_communicators()
 
@@ -102,11 +106,23 @@ class CommunicatorBenchmark:
                 logger.info("Rank %s: CustomAllreduce initialized", self.rank)
             else:
                 logger.info("Rank %s: CustomAllreduce disabled", self.rank)
+                self.custom_allreduce = None
+                reason = (
+                    "CustomAllreduce reported disabled=True: missing custom-ar "
+                    "library, cross-node process group, unsupported world size, "
+                    "non-fully-connected multi-GPU topology (PCIe-only with >2 "
+                    "GPUs), or no GPU P2P/NVLink support"
+                )
+                self.unsupported["ca_1stage"] = reason
+                self.unsupported["ca_2stage"] = reason
         except Exception as e:
             logger.warning(
                 "Rank %s: Failed to initialize CustomAllreduce: %s", self.rank, e
             )
             self.custom_allreduce = None
+            reason = f"initialization raised {type(e).__name__}: {e}"
+            self.unsupported["ca_1stage"] = reason
+            self.unsupported["ca_2stage"] = reason
 
         try:
             self.pynccl_comm = PyNcclCommunicator(
@@ -118,11 +134,21 @@ class CommunicatorBenchmark:
             else:
                 logger.info("Rank %s: PyNcclCommunicator disabled", self.rank)
                 self.pynccl_comm = None
+                reason = (
+                    "PyNcclCommunicator reported disabled=True: world_size == 1, "
+                    "VLLM_DISABLE_PYNCCL is set, or the NCCL/RCCL library failed "
+                    "to load"
+                )
+                self.unsupported["pynccl"] = reason
+                self.unsupported["pynccl-symm"] = reason
         except Exception as e:
             logger.warning(
                 "Rank %s: Failed to initialize PyNcclCommunicator: %s", self.rank, e
             )
             self.pynccl_comm = None
+            reason = f"initialization raised {type(e).__name__}: {e}"
+            self.unsupported["pynccl"] = reason
+            self.unsupported["pynccl-symm"] = reason
 
         # Initialize variants for SymmMemCommunicator
         try:
@@ -138,6 +164,13 @@ class CommunicatorBenchmark:
                 )
             else:
                 self.symm_mem_comm_multimem = None
+                self.unsupported["symm_mem_multimem"] = (
+                    "SymmMemCommunicator(multimem) reported disabled=True: "
+                    "symmetric-memory extension unavailable, non-CUDA platform, "
+                    "unknown/unsupported device capability or world size, "
+                    "buffer rendezvous failed, or multicast operations "
+                    "unsupported"
+                )
         except Exception as e:
             logger.warning(
                 "Rank %s: Failed to initialize SymmMemCommunicator (multimem): %s",
@@ -145,6 +178,9 @@ class CommunicatorBenchmark:
                 e,
             )
             self.symm_mem_comm_multimem = None
+            self.unsupported["symm_mem_multimem"] = (
+                f"initialization raised {type(e).__name__}: {e}"
+            )
 
         try:
             self.symm_mem_comm_two_shot = SymmMemCommunicator(
@@ -159,6 +195,13 @@ class CommunicatorBenchmark:
                 )
             else:
                 self.symm_mem_comm_two_shot = None
+                self.unsupported["symm_mem_two_shot"] = (
+                    "SymmMemCommunicator(two_shot) reported disabled=True: "
+                    "symmetric-memory extension unavailable, non-CUDA platform, "
+                    "unknown/unsupported device capability or world size, "
+                    "buffer rendezvous failed, or multicast operations "
+                    "unsupported"
+                )
         except Exception as e:
             logger.warning(
                 "Rank %s: Failed to initialize SymmMemCommunicator (two_shot): %s",
@@ -166,6 +209,9 @@ class CommunicatorBenchmark:
                 e,
             )
             self.symm_mem_comm_two_shot = None
+            self.unsupported["symm_mem_two_shot"] = (
+                f"initialization raised {type(e).__name__}: {e}"
+            )
 
         try:
             self.fi_ar_comm = FlashInferAllReduce(
@@ -177,11 +223,22 @@ class CommunicatorBenchmark:
             else:
                 logger.info("Rank %s: FlashInferAllReduce disabled", self.rank)
                 self.fi_ar_comm = None
+                reason = (
+                    "FlashInferAllReduce reported disabled=True: flashinfer "
+                    "library not installed, non-CUDA platform, world_size == 1, "
+                    "or no supported allreduce-fusion workspace size for this "
+                    "world_size"
+                )
+                self.unsupported["flashinfer_trtllm"] = reason
+                self.unsupported["flashinfer_mnnvl"] = reason
         except Exception as e:
             logger.warning(
                 "Rank %s: Failed to initialize FlashInferAllReduce: %s", self.rank, e
             )
             self.fi_ar_comm = None
+            reason = f"initialization raised {type(e).__name__}: {e}"
+            self.unsupported["flashinfer_trtllm"] = reason
+            self.unsupported["flashinfer_mnnvl"] = reason
 
     def benchmark_allreduce(
         self, tensor_elements: int, num_warmup: int, num_trials: int
@@ -442,6 +499,7 @@ def print_results(
     dtype: torch.dtype,
     hidden_size: int,
     size_mode: str,
+    unsupported: dict[str, str] | None = None,
 ) -> None:
     """Print timings while retaining exact byte and element sizing."""
     print(f"\n{'=' * 130}")
@@ -475,6 +533,11 @@ def print_results(
     print(
         f"All times are milliseconds per allreduce operation (sizing mode: {size_mode})"
     )
+    if unsupported:
+        print(f"\n{'-' * 130}")
+        print("Unsupported communicators (excluded from the table above):")
+        for name in sorted(unsupported):
+            print(f"  {name}: UNSUPPORTED - {unsupported[name]}")
 
 
 def main() -> None:
@@ -546,7 +609,13 @@ def main() -> None:
         dist.barrier()
     if rank == 0:
         print_results(
-            all_results, tensor_elements, world_size, dtype, args.hidden_size, size_mode
+            all_results,
+            tensor_elements,
+            world_size,
+            dtype,
+            args.hidden_size,
+            size_mode,
+            benchmark.unsupported,
         )
         if args.output_json:
             output_data = {
@@ -561,6 +630,7 @@ def main() -> None:
                 "num_warmup": args.num_warmup,
                 "num_trials": args.num_trials,
                 "cuda_graph_capture_cycles": CUDA_GRAPH_CAPTURE_CYCLES,
+                "unsupported": benchmark.unsupported,
                 "results": {
                     str(elements): {
                         "timings": comm_results,
