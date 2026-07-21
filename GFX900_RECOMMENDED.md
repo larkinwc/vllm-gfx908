@@ -18,13 +18,26 @@ workload-specific.
 > commit and have not yet been reconfirmed on this clean substrate; that
 > reconfirmation is a deliberate open decision, not an oversight, so this does
 > not promote a default or profile yet. The dense c=1 graph/eager confirm
-> trial (`confirm-dense-eager-c1` / `confirm-graphs-full-decode-c1`) is still
-> in-flight on real hardware as of this writing; its result is not yet
-> available. The prior AWQ graph result is historical only:
+> trial (`confirm-dense-eager-c1` / `confirm-graphs-full-decode-c1`) has now
+> completed its independent-launch confirmation: three independent launches
+> per arm, both cells PASS, zero failed requests. Confirmed
+> `confirm-dense-eager-c1` (`--enforce-eager` baseline) output_throughput
+> 12.724873664265084 tok/s, p99 TPOT 79.0647771127532 ms, p99 TTFT
+> 772.2754819784313 ms; confirmed `confirm-graphs-full-decode-c1`
+> (`FULL_DECODE_ONLY`, capture sizes [1,2,4,8,16,32,64,96]) output_throughput
+> 56.336206381615746 tok/s, p99 TPOT 16.297473464836184 ms, p99 TTFT
+> 781.2450528336922 ms. Mechanized `compare-cells` verdict: `IMPROVEMENT`,
+> zero regressions, comparable `platform_sha256` — output_throughput
+> +342.725%, p99 TPOT -79.387%, p99 TTFT +1.161% (within the 2%
+> latency-regression gate). Unlike the TurboQuant KV-cache-dtype comparison,
+> CUDAGraph capture for this dense eager-vs-graph decode comparison changes
+> no numerics (identical FP16 weights and math, replayed rather than
+> dispatched); it has no perplexity/coding/needle quality-gate requirement in
+> this campaign's promotion framework, so the throughput/latency capacity
+> confirmation above is the complete gate for this result. The prior AWQ
+> graph result is historical only:
 > on this substrate, AWQ requires `--max-num-batched-tokens 512` for eager
 > startup, while every tested VLLM_COMPILE configuration hangs during warmup
-> after compiling. Do not enable AWQ graphs on gfx900 from the historical
-> figure.
 > **Recommendation gate:** do not apply historical V340 count, per-die VRAM,
 > topology, RCCL variables, graph buckets, quantization defaults, or
 > performance figures to another host. First run the versioned `scripts.gfx900`
@@ -89,10 +102,12 @@ The rows below record the earlier source commit
 `c202236235762e1c871ad0ccb60c8ee5ba337b9a`. They are not promotion evidence
 for the clean `689cbbba3` campaign. The 2026-07-19 dense c=1 screen measured
 57.651 versus 12.707 output tok/s (graph versus eager); that confirm trial
-(`confirm-dense-eager-c1` / `confirm-graphs-full-decode-c1`) is still
-in-flight on real hardware as of this writing. The matched TurboQuant c=32
-screen measured 20.521 versus 18.583 output tok/s (TurboQuant versus auto)
-as a single-launch pilot; the 3-launch independent-confirm trial for this
+(`confirm-dense-eager-c1` / `confirm-graphs-full-decode-c1`) has since
+completed (see the table row below) with 3 independent launches per arm,
+both cells PASS, zero failed requests, and a mechanized `compare-cells`
+verdict of `IMPROVEMENT`. The matched TurboQuant c=32 screen measured
+20.521 versus 18.583 output tok/s (TurboQuant versus auto) as a
+single-launch pilot; the 3-launch independent-confirm trial for this
 comparison has since completed (see the capacity row below) and passed the
 throughput/latency capacity gates, though TurboQuant's quality gates remain
 historical-only and unreconfirmed on this substrate.
@@ -101,7 +116,7 @@ historical-only and unreconfirmed on this substrate.
 |---|---|---|
 | TP8 FP16 eager, 4,096/256, c=8 | 26.476 output tok/s | Retain as the general c4130-2 control. TP4 and TP4×PP2 did not meet a universal topology-promotion gate. |
 | `FULL_DECODE_ONLY`, 4,096/256, c=8 | 26.551 output tok/s, +0.28% versus eager | Declined for this prefill-heavy reference workload; retain `--enforce-eager` for that control. |
-| `FULL_DECODE_ONLY`, 512/512, c=1 | Historical result: 58.18 versus 12.73 output tok/s eager (+357.1%); the clean screen was 57.651 versus 12.707 | Independent-launch confirm trial (`confirm-dense-eager-c1` / `confirm-graphs-full-decode-c1`) is in progress on real hardware; do not promote yet. |
+| `FULL_DECODE_ONLY`, 512/512, c=1 | Historical result: 58.18 versus 12.73 output tok/s eager (+357.1%); clean single-launch screen: 57.651 versus 12.707. **Confirmed** (3 independent launches per arm, both cells PASS, 0 failed requests): `confirm-dense-eager-c1` (eager baseline) 12.724873664265084 versus `confirm-graphs-full-decode-c1` (`FULL_DECODE_ONLY`) 56.336206381615746 output tok/s (+342.725%); p99 TPOT 79.0647771127532 versus 16.297473464836184 ms (-79.387%); p99 TTFT 772.2754819784313 versus 781.2450528336922 ms (+1.161%, within the 2% latency-regression gate). Mechanized `compare-cells` verdict: `IMPROVEMENT`, zero regressions, comparable `platform_sha256`. | Throughput/latency capacity gates confirmed and passing. CUDAGraph capture changes no numerics for this eager-vs-graph comparison, so there is no separate quality-gate requirement (unlike TurboQuant's KV-cache-dtype quantization) — promote `FULL_DECODE_ONLY` for this low-concurrency, decode-dominant c=1 workload. |
 | `FULL_DECODE_ONLY`, 512/512, c=32 | 190.51 versus 188.33 output tok/s eager (+1.16%); full 32-token graph steps, no steady-state padding | Do not enable solely for high-throughput batching; graph launch savings are amortized at the full batch. |
 | AWQ TP4, `FULL_DECODE_ONLY`, 512/512, c=1 | Historical result: graph 39.637 versus eager 10.629 output tok/s. Clean source required `--max-num-batched-tokens 512` even for eager; VLLM_COMPILE warmup hung with and without CUDAGraphs. | Do not enable AWQ graphs on gfx900. The only successful clean screen is eager, text-only AWQ at a 512-token batch cap (10.677 output tok/s). |
 | TP8 decode-isolated burst, 4,096/256, 0.0827 RPS, burstiness 0.25 | Graph: 18.119 versus eager 18.064 output tok/s (+0.31%); p99 TPOT 126.93 versus 129.48 ms; p99 TTFT 2,431 versus 1,621 ms | Do not promote graph mode for burst/open-loop serving: it misses the p99 TTFT gate despite zero failures and a small TPOT reduction. |
