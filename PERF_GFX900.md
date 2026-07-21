@@ -28,9 +28,12 @@ this campaign's promotion framework, so the throughput/latency capacity
 confirmation is the complete gate for this result. The TurboQuant capacity
 screen's independent-launch confirmation trial has since completed (see the
 capacity row below): the throughput/latency capacity gates are confirmed and
-passing, but TurboQuant's quality gates remain historical-only and have not
-yet been reconfirmed on this clean substrate, so it does not yet promote a
-profile.
+passing. TurboQuant's quality gates (perplexity, coding suite,
+needle-in-haystack) have since been reconfirmed on this clean substrate too,
+at source commit `0054f988bcca5d50bcfaddf2ff7545246df6e8ba` (2026-07-21, see
+the table row and detail below) — all three **PASS**. Combining the capacity
+and quality results into a single promoted default/profile is still a
+separate write-up decision, not made by this note.
 
 | Screen | Measured result | Decision |
 |---|---|---|
@@ -41,7 +44,7 @@ profile.
 | `FULL_DECODE_ONLY`, 512/512, c=32 | 190.51 versus 188.33 output tok/s eager (+1.16%); p99 TPOT 163.09 versus 165.01 ms | Do not enable for throughput batching alone. Repeated scheduler rows show an unpadded size-32 `FULL` graph, so this is not a fallback artifact. |
 | AWQ TP4, `FULL_DECODE_ONLY`, 512/512, c=1 | Historical: graph 39.637 versus eager 10.629 output tok/s. On clean source, eager started only with text-only multimodal limits and `--max-num-batched-tokens 512` (10.677 output tok/s); tested VLLM_COMPILE paths hung during warmup. | Do not enable AWQ graphs on gfx900. |
 | TP8 DecodeBenchConnector burst, 4,096/256, 0.0827 RPS, burstiness 0.25 | Graph 18.119 versus eager 18.064 output tok/s (+0.31%); p99 TPOT 126.93 versus 129.48 ms; p99 TTFT 2,431 versus 1,621 ms | Do not enable graph mode for burst/open-loop traffic: p99 TTFT fails the +2% gate. |
-| TurboQuant versus auto, 8,192/256, c=32 | Historical: 22.092 versus 18.450 output tok/s (+19.7%). Clean single-launch screen: 20.521 versus 18.583 (+10.4%). **Confirmed** (3 independent launches per arm, all PASS, 0 failed requests): 22.505 versus 18.600 output tok/s (+20.997%); p99 TPOT 1377.553 versus 1672.270 ms (-17.624%); p99 TTFT 319853.228 versus 379302.669 ms (-15.673%). `compare-cells` verdict: `IMPROVEMENT`, zero regressions. | Throughput/latency capacity gates confirmed and passing. Quality gates (perplexity, coding, needle-in-haystack) remain historical-only, not yet reconfirmed on the clean substrate — a deliberate open decision. Do not promote `turboquant_k8v4` as a default until quality reconfirmation completes. |
+| TurboQuant versus auto, 8,192/256, c=32 | Historical: 22.092 versus 18.450 output tok/s (+19.7%). Clean single-launch screen: 20.521 versus 18.583 (+10.4%). **Confirmed** (3 independent launches per arm, all PASS, 0 failed requests): 22.505 versus 18.600 output tok/s (+20.997%); p99 TPOT 1377.553 versus 1672.270 ms (-17.624%); p99 TTFT 319853.228 versus 379302.669 ms (-15.673%). `compare-cells` verdict: `IMPROVEMENT`, zero regressions. | Throughput/latency capacity gates confirmed and passing. Quality gates (perplexity, coding, needle-in-haystack) reconfirmed on the clean substrate 2026-07-21: cache-read PPL Δ -0.10504% (gate ≤+1% PASS), coding suite 8/10 both arms with identical prompt-id-level pass/fail sets (no new failure), needle@32k 5/5 both arms (all depths). All three quality gates PASS. Combining capacity+quality into a promoted default is still a separate write-up decision.
 | Prefix-repetition, TurboQuant, c=8 | Cache-on 36.029 output tok/s, 82.8% hit; cache-off 12.740 | Promote prefix caching only for repeated-prefix workloads. |
 | MTP K=1 / CPU ngram K=4 | 22.376 / 24.007 output tok/s versus 26.476 eager | `DECLINED_NO_END_TO_END_WIN`. |
 
@@ -52,6 +55,27 @@ and TurboQuant. It used a 34,816-token single-sequence server with
 attention activation. The matched coding suite was 8/10 in both modes with the
 same two environmental/extractor failures, so it found no new TurboQuant
 failure.
+
+**Clean-substrate quality reconfirmation (2026-07-21, source commit
+`0054f988bcca5d50bcfaddf2ff7545246df6e8ba`, `platform_sha256` reconfirmed
+matching `61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`):**
+all three checks were rerun end-to-end on this clean substrate rather than
+relied on from the earlier `3973e0ec9` commit. Cache-read PPL: `auto`
+7.73235049556447, `turboquant_k8v4` 7.724228731405752 (Δ **-0.10504%**, gate
+≤+1% **PASS**), 50 chunks × 512 tokens, 12,800 scored tokens each arm —
+matches the historical Δ (-0.105%) to within noise. Coding suite: 8/10 both
+arms, and the prompt-id-level pass/fail sets are identical between arms (no
+new failure, no new pass) — `node_check_js` fails with the same
+missing-Node-interpreter error on both; `max_subarray` fails on both too,
+though by a different mechanism per arm (`auto`'s emitted code block has a
+bad indent, `turboquant_k8v4`'s response truncates mid-reasoning before
+emitting a code block at all) — the id-level binary outcome is nonetheless
+identical. Needle@32k: both arms passed 5/5, verified per-probe (all five
+depths 10/30/50/70/90% individually correct, not just the aggregate count),
+using the same bounded `--max-model-len 34816 --max-num-seqs 1
+--max-num-batched-tokens 4096 --gpu-memory-utilization 0.75` launch. All
+three quality gates **PASS** on the clean substrate. Raw artifacts:
+`/home/larkinwc/gfx900-runs/quality-reconfirm-20260721-134221/` on `c4130-2`.
 
 The pinned WikiText-2 cache-read control used 50 fixed 512-token chunks:
 256-token prefills followed by 256 teacher-forced corpus decode tokens, with

@@ -13,11 +13,12 @@ workload-specific.
 > now has the required independent-launch confirmation: three independent
 > launches per arm, all PASS, zero failed requests, mechanized `compare-cells`
 > verdict `IMPROVEMENT`. This confirms the throughput/latency capacity gates
-> only — TurboQuant's quality gates (perplexity, coding suite,
-> needle-in-haystack) remain historical-only evidence from the earlier source
-> commit and have not yet been reconfirmed on this clean substrate; that
-> reconfirmation is a deliberate open decision, not an oversight, so this does
-> not promote a default or profile yet. The dense c=1 graph/eager confirm
+> only. TurboQuant's quality gates (perplexity, coding suite,
+> needle-in-haystack) were reconfirmed on this clean substrate on
+> 2026-07-21 (see the dedicated note below) — all three **PASS**. Combining
+> the capacity and quality results into one promoted default/profile is
+> still a separate follow-up decision, not made by this note. The dense c=1
+> graph/eager confirm
 > trial (`confirm-dense-eager-c1` / `confirm-graphs-full-decode-c1`) has now
 > completed its independent-launch confirmation: three independent launches
 > per arm, both cells PASS, zero failed requests. Confirmed
@@ -38,6 +39,38 @@ workload-specific.
 > graph result is historical only:
 > on this substrate, AWQ requires `--max-num-batched-tokens 512` for eager
 > startup, while every tested VLLM_COMPILE configuration hangs during warmup
+> **TurboQuant quality-gate reconfirmation (2026-07-21):** the three quality
+> checks (cache-read perplexity, coding suite, needle-in-haystack) have now
+> been rerun on this clean substrate at source commit
+> `0054f988bcca5d50bcfaddf2ff7545246df6e8ba` (four commits ahead of
+> `689cbbba3`, not diverged; `platform_sha256` reconfirmed matching
+> `61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`). Cache-read
+> PPL: `auto` 7.73235049556447, `turboquant_k8v4` 7.724228731405752 (Δ
+> **-0.10504%**, gate ≤+1% **PASS**), 50 chunks × 512 tokens (256 prefill +
+> 256 teacher-forced decode), 12,800 scored tokens for each arm — matches the
+> earlier-commit historical numbers (7.7323505 / 7.7242287, Δ -0.105%) to
+> within noise. Coding suite: 8/10 for both `auto` and `turboquant_k8v4`,
+> identical prompt-id-level pass/fail sets (no new failure, no new pass vs.
+> the matched `auto` run) — the same two known-environmental failures on both
+> (`node_check_js`: no Node interpreter on this host; `max_subarray`:
+> extractor-format failure on a reasoning-heavy prompt — the exact failure
+> mechanism differs slightly between arms, `auto` emits a code block with a
+> bad indent while `turboquant_k8v4`'s response truncates mid-reasoning
+> before emitting one, but the binary id-level pass/fail outcome is
+> identical). Needle@32k: both `auto` and `turboquant_k8v4` passed 5/5 (all
+> depths 10/30/50/70/90%, per-probe verified, not just the aggregate count),
+> launched with `--max-model-len 34816 --max-num-seqs 1
+> --max-num-batched-tokens 4096 --gpu-memory-utilization 0.75`. All three
+> quality gates now **PASS** on the clean substrate. Combined with the
+> already-confirmed capacity/latency gates above, TurboQuant's quality
+> reconfirmation is complete; deciding whether/how to write up a "recommended
+> profile" combining both is a separate follow-up, not made by this note. Raw
+> artifacts: `/home/larkinwc/gfx900-runs/quality-reconfirm-20260721-134221/`
+> on `c4130-2` (`cache-read-ppl-{auto,turboquant}.json`,
+> `coding/m6_coding_eval_*.json`, `needle-32768-{auto,turboquant}.json`,
+> `gate_summary.json`, `campaign.status`/`campaign.log` for the full run
+> trace).
+>
 > **Recommendation gate:** do not apply historical V340 count, per-die VRAM,
 > topology, RCCL variables, graph buckets, quantization defaults, or
 > performance figures to another host. First run the versioned `scripts.gfx900`
