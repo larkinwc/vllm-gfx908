@@ -737,6 +737,116 @@
       "warmup_runs": 1,
       "workload": "decode_isolated"
     },
+    "confirm-speculation-mtp-k1": {
+      "benchmark_argv": [
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "4096",
+        "--random-output-len",
+        "256",
+        "--num-prompts",
+        "128",
+        "--max-concurrency",
+        "8"
+      ],
+      "confirm_launches": 3,
+      "device_group": "single_socket_8",
+      "environment": {},
+      "model_alias": "qwen35_fp16",
+      "phase": "profile",
+      "port": 8018,
+      "predecessor": "topology-fp16-tp8",
+      "promotion_policy": "promotion",
+      "recorded_runs": 3,
+      "required_metrics": [
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms",
+        "spec_decode_num_drafts",
+        "spec_decode_num_accepted_tokens"
+      ],
+      "server_argv": [
+        "--tensor-parallel-size",
+        "8",
+        "--dtype",
+        "float16",
+        "--revision",
+        "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "--enforce-eager",
+        "--speculative-config",
+        "{\"method\":\"mtp\",\"num_speculative_tokens\":1}",
+        "--language-model-only",
+        "--max-model-len",
+        "4352",
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.85"
+      ],
+      "timeout_seconds": 7200,
+      "trial_policy": "confirm",
+      "variant_keys": [
+        "server_argv"
+      ],
+      "warmup_runs": 1,
+      "workload": "decode_isolated"
+    },
+    "confirm-speculation-ngram-cpu-k4": {
+      "benchmark_argv": [
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "4096",
+        "--random-output-len",
+        "256",
+        "--num-prompts",
+        "128",
+        "--max-concurrency",
+        "8"
+      ],
+      "confirm_launches": 3,
+      "device_group": "single_socket_8",
+      "environment": {},
+      "model_alias": "qwen35_fp16",
+      "phase": "profile",
+      "port": 8019,
+      "predecessor": "topology-fp16-tp8",
+      "promotion_policy": "promotion",
+      "recorded_runs": 3,
+      "required_metrics": [
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms",
+        "spec_decode_num_drafts",
+        "spec_decode_num_accepted_tokens"
+      ],
+      "server_argv": [
+        "--tensor-parallel-size",
+        "8",
+        "--dtype",
+        "float16",
+        "--revision",
+        "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "--enforce-eager",
+        "--speculative-config",
+        "{\"method\":\"ngram\",\"num_speculative_tokens\":4,\"prompt_lookup_min\":2,\"prompt_lookup_max\":5}",
+        "--language-model-only",
+        "--max-model-len",
+        "4352",
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.85"
+      ],
+      "timeout_seconds": 7200,
+      "trial_policy": "confirm",
+      "variant_keys": [
+        "server_argv"
+      ],
+      "warmup_runs": 1,
+      "workload": "decode_isolated"
+    },
     "topology-fp16-tp8": {
       "benchmark_argv": [
         "--dataset-name",
