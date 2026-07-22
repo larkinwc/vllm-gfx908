@@ -95,6 +95,51 @@ isolated graph launch failed with the old `AttributeError`; only the subsequent
 fixed graph/eager cells above are valid evidence. Both completed 16/16 requests
 with the connector active.
 
+**RCCL/communication-tuning microbenchmark sweep (2026-07-21, source commit
+`fad847da6dc43b66d4c0ec4042c98154057b9000`, extends
+`benchmarks/kernels/benchmark_device_communicators.py`):** a full
+communication-tuning sweep completed on this substrate and is independently
+verified against raw JSON for both TP4 and TP8 device groups. This is a
+genuine, complete negative result, not a gap: RCCL's own default auto-tuning
+is already the best-performing option tested, so no static
+`NCCL_ALGO`/`NCCL_PROTO`/channel-count override, and no `vllm/envs.py` or
+host-profile change, is warranted from this sweep. It does not touch
+topology, capacity, or the capacity/graph/quality results elsewhere in this
+addendum — it is scoped to communication tuning only.
+
+TP4 (visible indices 0-3): baseline cell-geomean over the 8/64/256/512/768
+KiB message-size cells = 0.16579 ms; RCCL confirmed as
+`2.27.7-release/rocm-rel-7.2`. `NCCL_ALGO=Ring` (no protocol override):
+**+0.30%** — does not clear the +5% promotion gate. `NCCL_ALGO=Tree`:
+**-29.5%** (worse), with per-size regressions up to +124.9% at 8192 KiB. The
+four explicit `(algo,proto)` combinations `Ring+Simple`, `Ring+LL`,
+`Tree+Simple`, `Tree+LL` were all worse than baseline, with `Ring+LL` and
+`Tree+LL` regressing over +100% at large message sizes. The best of those,
+`Ring+Simple`, was carried into a `NCCL_MIN_NCHANNELS` sweep ({2, 8, 16, 32}
+with `NCCL_MAX_NCHANNELS=32`); none cleared the gate either (best: minch=32
+at -10.85% vs. baseline). **Verdict: `DECLINED_STATIC_POLICY_SUFFICIENT`.**
+
+TP8 (visible indices 0-7) reproduced the same shape of result: baseline
+cell-geomean = 0.30791 ms, same RCCL version confirmed, same pattern of
+explicit overrides underperforming default. **Verdict:
+`DECLINED_STATIC_POLICY_SUFFICIENT`, `winning_combo: null`.**
+
+**Operational hazard — distinct from the performance-decline findings
+above, not a benchmark result:** during the TP8 sweep, `NCCL_ALGO=Ring
+NCCL_PROTO=LL` genuinely deadlocked. All 8 rank processes pegged at ~99% CPU
+with 0% GPU CU occupancy (confirmed via `rocm-smi`: VRAM allocated, no
+compute-unit activity) for several minutes with zero progress; the run had
+to be killed manually. `Tree+LL` at the same TP8 scale completed normally
+immediately afterward, so this hang is specific to the `Ring`+`LL`
+combination at 8-way scale on this host's PCIe topology, not a general
+LL-protocol defect. **Do not set `NCCL_ALGO=Ring NCCL_PROTO=LL` together on
+an 8-die gfx900 group on this platform.**
+
+Raw evidence: `/home/larkinwc/gfx900-runs/rccl-sweep-20260721-183309/` on
+`c4130-2` (`analysis/{tp4,tp8}_analysis.json` — complete per-size regression
+tables; `json/` — raw benchmark output; `logs/` — including
+`NCCL_DEBUG=VERSION` and `NCCL_DEBUG=INFO,TUNING` captures).
+
 ### Promoted-workload profile
 
 A bounded server-side PyTorch profiler captured the TurboQuant

@@ -71,6 +71,38 @@ workload-specific.
 > `gate_summary.json`, `campaign.status`/`campaign.log` for the full run
 > trace).
 >
+> **RCCL communication-tuning sweep (2026-07-21, source commit
+> `fad847da6dc43b66d4c0ec4042c98154057b9000`, extending
+> `benchmarks/kernels/benchmark_device_communicators.py`):** the RCCL/NCCL
+> communication-tuning microbenchmark sweep from the roadmap has completed on
+> this substrate for both the TP4 and TP8 device groups, independently
+> verified against raw JSON for each. TP4 (visible indices 0-3, baseline
+> cell-geomean over the 8/64/256/512/768 KiB cells = 0.16579 ms) and TP8
+> (visible indices 0-7, baseline cell-geomean = 0.30791 ms) both confirmed
+> RCCL `2.27.7-release/rocm-rel-7.2` and both reached verdict
+> `DECLINED_STATIC_POLICY_SUFFICIENT`: every tested `NCCL_ALGO`/`NCCL_PROTO`
+> combination and `NCCL_MIN_NCHANNELS` sweep underperformed RCCL's own
+> default auto-tuning (best case TP4 `Ring` with no protocol override at
+> +0.30%, short of the +5% promotion gate; worst case TP4 `Tree` at -29.5%,
+> with per-size regressions up to +124.9% at 8192 KiB). TP8 reproduced the
+> same shape of result, `winning_combo: null`. This is a genuine, complete
+> negative result, not a gap in coverage — no `vllm/envs.py` or host-profile
+> RCCL variable change is warranted from this sweep, and it does not touch
+> topology, capacity, or the capacity/graph/quality results above. **Separate
+> operational hazard, not a performance finding:** `NCCL_ALGO=Ring
+> NCCL_PROTO=LL` together on the 8-die TP8 group genuinely deadlocked — all 8
+> rank processes pegged at ~99% CPU with 0% GPU CU occupancy (confirmed via
+> `rocm-smi`: VRAM allocated, no compute-unit activity) for several minutes
+> with zero progress, and had to be killed manually; `Tree+LL` at the same
+> TP8 scale completed normally immediately afterward, so the hang is specific
+> to `Ring`+`LL` at 8-way scale on this host's PCIe topology. **Do not set
+> `NCCL_ALGO=Ring NCCL_PROTO=LL` together on an 8-die gfx900 group on this
+> platform.** Full per-size regression tables and detail:
+> `PERF_GFX900.md` § 2026-07 c4130-2 reproducibility campaign addendum. Raw
+> artifacts: `/home/larkinwc/gfx900-runs/rccl-sweep-20260721-183309/` on
+> `c4130-2` (`analysis/{tp4,tp8}_analysis.json`, `json/`, `logs/` including
+> `NCCL_DEBUG=VERSION` and `NCCL_DEBUG=INFO,TUNING` captures).
+>
 > **Recommendation gate:** do not apply historical V340 count, per-die VRAM,
 > topology, RCCL variables, graph buckets, quantization defaults, or
 > performance figures to another host. First run the versioned `scripts.gfx900`
