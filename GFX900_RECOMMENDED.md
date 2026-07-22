@@ -103,6 +103,41 @@ workload-specific.
 > `c4130-2` (`analysis/{tp4,tp8}_analysis.json`, `json/`, `logs/` including
 > `NCCL_DEBUG=VERSION` and `NCCL_DEBUG=INFO,TUNING` captures).
 >
+> **Topology independent-launch confirmation (2026-07-21/22, source commit
+> `bfc80f4db504a4878a8dffac711b643756922e17`, adds `confirm-topology-fp16-tp8`
+> / `confirm-topology-fp16-tp4` / `confirm-topology-fp4-pp2` to
+> `scripts/gfx900/matrices/reference.json`):** closes the topology item of the
+> Recommendation-gate checklist below — for **per-config reproducibility
+> only**, not a cross-config performance ranking. Each new cell reruns its
+> own historical 2026-07-13 single-launch screen (`topology-fp16-tp8`,
+> `topology-fp16-tp4`, `topology-fp4-pp2`) as 3 independent launches
+> (`trial_policy: confirm`, `confirm_launches: 3`), reusing the existing
+> `promotion` policy unchanged (±3%/2% throughput/latency gate) rather than a
+> new one. All three **PASS**, zero failed requests across all 9 launches,
+> and no config crosses the ±3%/2% gate in either direction — each
+> configuration's confirm-methodology result simply reproduces its own prior
+> screen within noise: TP8 26.476 → 26.5186 output tok/s (Δ+0.161%, p99 TPOT
+> Δ-0.054%, p99 TTFT Δ-0.115%); TP4 20.895 → 21.0840 (Δ+0.903%, p99 TPOT
+> Δ-0.944%, p99 TTFT Δ-1.175%); TP4×PP2 26.304 → 26.3448 (Δ+0.154%, p99 TPOT
+> Δ-0.141%, p99 TTFT Δ-0.417%). Mechanized `compare-cells` verdict for all
+> three: `PASS` (not `IMPROVEMENT` — every delta stays inside the gate, as
+> expected for a reproducibility check rather than a performance
+> intervention). **Do not read TP8's ~26.5 tok/s against TP4's ~21.1 tok/s as
+> a topology finding** — this gate never compared configurations against each
+> other, only each configuration against its own earlier screen; TP8 simply
+> spreads the same workload across twice as many GPUs as TP4, which is a
+> parallelism effect, not new topology evidence. Live host topology was also
+> independently re-queried this session (not assumed from prose): `numactl
+> --hardware`, `lscpu`, `dmidecode -t processor`, `rocm-smi --showtopo`, and
+> `/sys` NUMA/PCI attributes all confirm the accepted c4130-2 group is
+> single-socket (only CPU1 populated), single NUMA node, with all 8 dies
+> uniformly PCIe-attached (weight 40, 2 hops) — see `GFX900_SETUP.md` for the
+> full re-verification note. Raw artifacts:
+> `/home/larkinwc/gfx900-runs/durable-confirm-d600eaaa-f331-4ec1-998f-c1e1e9b2e8cf/cells/confirm-topology-{fp16-tp8,fp16-tp4,fp4-pp2}/cell.json`
+> and `compare-cells` outputs at
+> `/home/larkinwc/gfx900-runs/topology-gate-compare-20260722/{tp8,tp4,fp4pp2}.json`
+> on `c4130-2`.
+>
 > **Recommendation gate:** do not apply historical V340 count, per-die VRAM,
 > topology, RCCL variables, graph buckets, quantization defaults, or
 > performance figures to another host. First run the versioned `scripts.gfx900`

@@ -25,6 +25,16 @@ is `/home/larkinwc/gfx900-runs/reference-3/manifest.json`
 It identifies eight 56-CU gfx900 dies with 8,573,157,376 bytes each, on NUMA
 node 0 and PCIe-only topology.
 
+**Live topology re-verification (2026-07-21/22):** independently re-queried
+against the running c4130-2 host (`numactl --hardware`, `lscpu`,
+`dmidecode -t processor`, `rocm-smi --showtopo`, `/sys` NUMA/PCI attributes)
+rather than assumed — confirmed single-socket (only CPU1 populated), a
+single NUMA node, and all 8 dies uniformly PCIe-attached (topology weight
+40, 2 hops). See `GFX900_SETUP.md`'s "Historical c4130-2 reference record"
+section for the full re-verification note; this does not touch the separate
+"Historical hardware / software manifest" table below, which describes a
+different host (`tyangpu1`).
+
 - `topology-fp16-tp8` (4,096 input / 256 output / c=8): 26.476 output tok/s,
   p99 TPOT 279.810 ms, p99 TTFT 39,304.785 ms; PASS with 0 failed requests.
 - `capacity-turboquant` (8,192 input / 256 output / c=8): 18.078 output tok/s,

@@ -38,7 +38,7 @@ separate write-up decision, not made by this note.
 | Screen | Measured result | Decision |
 |---|---|---|
 | RCCL TP4/TP8, 1 KiB–8 MiB, default/Ring/Tree/LL/Simple | Default RCCL 2.27.7 was the only no-regression choice | No static RCCL override. |
-| FP16 topology, 4,096/256, c=8 | TP8: 26.476 output tok/s; TP4: 20.895; TP4×PP2: 26.304 | Keep separate topology observations; no universal replacement for TP8 eager. |
+| FP16 topology, 4,096/256, c=8 | TP8: 26.476 output tok/s; TP4: 20.895; TP4×PP2: 26.304. **Confirmed** (3 independent launches per config, all PASS, 0 failed requests): TP8 26.5186 (Δ+0.161%); TP4 21.0840 (Δ+0.903%); TP4×PP2 26.3448 (Δ+0.154%), each `compare-cells` verdict `PASS` against its own screen. | Keep separate topology observations; no universal replacement for TP8 eager. Per-config reproducibility confirmed 2026-07-21/22 — not a cross-config ranking; see addendum below. |
 | `FULL_DECODE_ONLY`, 4,096/256, c=8 | 26.551 versus 26.476 output tok/s eager (+0.28%) | Declined for the prefill-heavy reference workload. |
 | `FULL_DECODE_ONLY`, 512/512, c=1 | Historical: 58.18 versus 12.73 output tok/s eager (+357.1%); clean single-launch screen: 57.651 versus 12.707. **Confirmed** (3 independent launches per arm, both cells PASS, 0 failed requests): `confirm-dense-eager-c1` (eager) 12.724873664265084 versus `confirm-graphs-full-decode-c1` (`FULL_DECODE_ONLY`) 56.336206381615746 output tok/s (+342.725%); p99 TPOT 79.0647771127532 versus 16.297473464836184 ms (-79.387%); p99 TTFT 772.2754819784313 versus 781.2450528336922 ms (+1.161%, within the 2% gate). `compare-cells` verdict: `IMPROVEMENT`, zero regressions. | Throughput/latency capacity gates confirmed and passing. CUDAGraph capture changes no numerics here, so there is no separate quality-gate requirement (unlike TurboQuant's KV-cache-dtype quantization) — promote `FULL_DECODE_ONLY` for this low-concurrency, decode-dominant c=1 workload. |
 | `FULL_DECODE_ONLY`, 512/512, c=32 | 190.51 versus 188.33 output tok/s eager (+1.16%); p99 TPOT 163.09 versus 165.01 ms | Do not enable for throughput batching alone. Repeated scheduler rows show an unpadded size-32 `FULL` graph, so this is not a fallback artifact. |
@@ -139,6 +139,62 @@ Raw evidence: `/home/larkinwc/gfx900-runs/rccl-sweep-20260721-183309/` on
 `c4130-2` (`analysis/{tp4,tp8}_analysis.json` — complete per-size regression
 tables; `json/` — raw benchmark output; `logs/` — including
 `NCCL_DEBUG=VERSION` and `NCCL_DEBUG=INFO,TUNING` captures).
+
+**Topology independent-launch confirmation (2026-07-21/22, source commit
+`bfc80f4db504a4878a8dffac711b643756922e17`, adds `confirm-topology-fp16-tp8`
+/ `confirm-topology-fp16-tp4` / `confirm-topology-fp4-pp2` to
+`scripts/gfx900/matrices/reference.json`):** closes the topology item of the
+Recommendation-gate checklist in `GFX900_RECOMMENDED.md`, scoped strictly to
+**per-config reproducibility** — does each config's independent-launch
+confirm reproduce its own 2026-07-13 single-launch screen — not a
+cross-config performance ranking of TP8 vs. TP4 vs. TP4×PP2. Each new cell
+(`trial_policy: confirm`, `confirm_launches: 3`) reused the existing
+`promotion` policy unchanged (±3%/2% throughput/latency gate); no new gate
+was introduced.
+
+| Config | Screen (2026-07-13) | Confirm launches (2026-07-21/22) | Confirm aggregate | Δ output_throughput | Δ p99 TPOT | Δ p99 TTFT | `compare-cells` |
+|---|---|---|---|---:|---:|---:|---|
+| TP8 | 26.476 tok/s | 26.5317, 26.5161, 26.5186 | 26.5186 tok/s | +0.161% | -0.054% | -0.115% | `PASS` |
+| TP4 | 20.895 tok/s | 21.0618, 21.0840, 21.0955 | 21.0840 tok/s | +0.903% | -0.944% | -1.175% | `PASS` |
+| TP4×PP2 | 26.304 tok/s | 26.3800, 26.3448, 26.3361 | 26.3448 tok/s | +0.154% | -0.141% | -0.417% | `PASS` |
+
+All 9 launches PASS with 0 failed requests; no config crosses the ±3%/2% gate
+in either direction, so every verdict is `PASS` rather than `IMPROVEMENT` —
+exactly what a reproducibility check should show, not a performance
+intervention. **The TP8/TP4/TP4×PP2 absolute values above are not
+comparable to each other under this gate** — each row only compares a
+config against its own earlier screen. TP8's ~26.5 tok/s versus TP4's ~21.1
+tok/s reflects the same workload split across twice as many GPUs, a
+parallelism effect already documented elsewhere in this file, not new
+topology evidence.
+
+Live host topology was independently re-queried this session (not assumed
+from prose): `numactl --hardware`, `lscpu`, `dmidecode -t processor`,
+`rocm-smi --showtopo`, and `/sys/devices/system/node` / per-GPU
+`/sys/.../numa_node` all confirm the accepted c4130-2 group is single-socket
+(only CPU1 populated per `dmidecode -t processor`), a single NUMA node (all
+36 CPU threads under `node0`), and all 8 gfx900 dies uniformly PCIe-attached
+(topology weight 40, 2 hops, `Numa Node: 0` for every GPU per
+`rocm-smi --showtopo`) — see `GFX900_SETUP.md`'s "Historical c4130-2
+reference record" section for the full re-verification note. This is
+consistent with, not a contradiction of, the "do not infer unselected
+inventory" guidance in `GFX900_SETUP.md`: the dual-socket/16-die/QPI
+hardware description in this document's own historical "Multi-GPU topology
+review" section above predates the accepted c4130-2 group and matches the
+same dual Xeon E5-2640 v3 / 16-die inventory named in `BENCH_GFX900.md`'s
+historical hardware table (host `tyangpu1`) — not the accepted c4130-2
+group's live topology confirmed here.
+
+Raw artifacts:
+`/home/larkinwc/gfx900-runs/durable-confirm-d600eaaa-f331-4ec1-998f-c1e1e9b2e8cf/cells/confirm-topology-{fp16-tp8,fp16-tp4,fp4-pp2}/cell.json`
+and `compare-cells` outputs at
+`/home/larkinwc/gfx900-runs/topology-gate-compare-20260722/{tp8,tp4,fp4pp2}.json`
+on `c4130-2`. Screen baselines:
+`/home/larkinwc/gfx900-runs/topology/cells/topology-fp16-tp8/cell.json`,
+`/home/larkinwc/gfx900-runs/topology-tp4/cells/topology-fp16-tp4/cell.json`,
+`/home/larkinwc/gfx900-runs/topology-pp2/cells/topology-fp4-pp2/cell.json`
+(all share `manifest_sha256 9ffd3ab1d71629984918598f06901bfcbb457925a044c78048ee30942f6bc81d`,
+`platform_sha256 61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`).
 
 ### Promoted-workload profile
 

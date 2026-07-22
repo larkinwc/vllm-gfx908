@@ -39,6 +39,22 @@ confirmation. Treat the historical figures as comparable context, not an
 accepted recommendation. Recapture rather than reusing any figure after a
 hardware, ROCm, library, rank-order, or topology change.
 
+**Live topology re-verification (2026-07-21/22):** rather than continue to
+rely on the historical dual-socket/16-die prose elsewhere in this file, the
+accepted c4130-2 eight-die group was independently re-queried against the
+running host — `numactl --hardware`, `lscpu`, `dmidecode -t processor`,
+`rocm-smi --showtopo`, and `/sys/devices/system/node` / per-GPU
+`/sys/.../numa_node` — rather than assumed. It confirmed single-socket (only
+CPU1 populated per `dmidecode`), a single NUMA node (`node0`, all 36 CPU
+threads), and all 8 gfx900 dies uniformly PCIe-attached (topology weight 40,
+2 hops, `Numa Node: 0` for every GPU). This is consistent with, not a
+contradiction of, the "do not infer unselected inventory" disclaimer above:
+the dual-socket/16-die/QPI description is historical context for a
+differently-configured or since-reconfigured host inventory (see
+`BENCH_GFX900.md`'s historical hardware table, host `tyangpu1`), not the
+accepted c4130-2 group, and no per-GPU NUMA-affinity asymmetry exists on
+this host to pin against.
+
 ### Reproducing the completed c4130-2 campaign
 
 Use `scripts/gfx900/profiles/c4130-2.json` and its declared device group rather
