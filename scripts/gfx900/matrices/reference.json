@@ -786,6 +786,162 @@
       ],
       "warmup_runs": 1,
       "workload": "decode_isolated"
+    },
+    "confirm-topology-fp16-tp8": {
+      "benchmark_argv": [
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "4096",
+        "--random-output-len",
+        "256",
+        "--num-prompts",
+        "128",
+        "--max-concurrency",
+        "8"
+      ],
+      "confirm_launches": 3,
+      "device_group": "single_socket_8",
+      "environment": {},
+      "model_alias": "qwen35_fp16",
+      "phase": "profile",
+      "port": 8015,
+      "predecessor": "topology-fp16-tp8",
+      "promotion_policy": "promotion",
+      "recorded_runs": 3,
+      "required_metrics": [
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms"
+      ],
+      "server_argv": [
+        "--tensor-parallel-size",
+        "8",
+        "--dtype",
+        "float16",
+        "--revision",
+        "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "--language-model-only",
+        "--max-model-len",
+        "4352",
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.85",
+        "--enforce-eager"
+      ],
+      "timeout_seconds": 7200,
+      "trial_policy": "confirm",
+      "variant_keys": [
+        "server_argv"
+      ],
+      "warmup_runs": 1,
+      "workload": "decode_isolated"
+    },
+    "confirm-topology-fp16-tp4": {
+      "benchmark_argv": [
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "4096",
+        "--random-output-len",
+        "256",
+        "--num-prompts",
+        "128",
+        "--max-concurrency",
+        "8"
+      ],
+      "confirm_launches": 3,
+      "device_group": "single_socket_4",
+      "environment": {},
+      "model_alias": "qwen35_fp16",
+      "phase": "profile",
+      "port": 8016,
+      "predecessor": "topology-fp16-tp4",
+      "promotion_policy": "promotion",
+      "recorded_runs": 3,
+      "required_metrics": [
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms"
+      ],
+      "server_argv": [
+        "--tensor-parallel-size",
+        "4",
+        "--dtype",
+        "float16",
+        "--revision",
+        "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "--language-model-only",
+        "--max-model-len",
+        "4352",
+        "--max-num-seqs",
+        "8",
+        "--gpu-memory-utilization",
+        "0.85",
+        "--enforce-eager"
+      ],
+      "timeout_seconds": 7200,
+      "trial_policy": "confirm",
+      "variant_keys": [
+        "server_argv"
+      ],
+      "warmup_runs": 1,
+      "workload": "decode_isolated"
+    },
+    "confirm-topology-fp4-pp2": {
+      "benchmark_argv": [
+        "--dataset-name",
+        "random",
+        "--random-input-len",
+        "4096",
+        "--random-output-len",
+        "256",
+        "--num-prompts",
+        "128",
+        "--max-concurrency",
+        "8"
+      ],
+      "confirm_launches": 3,
+      "device_group": "single_socket_8",
+      "environment": {},
+      "model_alias": "qwen35_fp16",
+      "phase": "profile",
+      "port": 8017,
+      "predecessor": "topology-fp4-pp2",
+      "promotion_policy": "promotion",
+      "recorded_runs": 3,
+      "required_metrics": [
+        "output_throughput",
+        "p99_tpot_ms",
+        "p99_ttft_ms"
+      ],
+      "server_argv": [
+        "--tensor-parallel-size",
+        "4",
+        "--pipeline-parallel-size",
+        "2",
+        "--no-async-scheduling",
+        "--dtype",
+        "float16",
+        "--revision",
+        "c202236235762e1c871ad0ccb60c8ee5ba337b9a",
+        "--language-model-only",
+        "--max-model-len",
+        "4352",
+        "--max-num-seqs",
+        "32",
+        "--gpu-memory-utilization",
+        "0.85",
+        "--enforce-eager"
+      ],
+      "timeout_seconds": 7200,
+      "trial_policy": "confirm",
+      "variant_keys": [
+        "server_argv"
+      ],
+      "warmup_runs": 1,
+      "workload": "decode_isolated"
     }
   },
   "phases": [
