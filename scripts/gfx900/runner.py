@@ -51,6 +51,42 @@ def _merge_environment(*layers: Mapping[str, str]) -> dict[str, str]:
         allowed_parent.update(layer)
     return allowed_parent
 
+# Keys that vary per SSH connection/login session (ephemeral client port,
+# session id, shell invocation context) even when the declared experiment
+# configuration is byte-identical. These must be excluded from whatever
+# feeds a confirm cell's configuration_digest -- otherwise resuming a
+# confirm cell from a new SSH session spuriously fails with "confirm
+# resume configuration does not match existing artifact", even though
+# nothing about the actual server_argv/benchmark_argv/model/device_group
+# changed. The full environment (including these keys) is still passed to
+# the actual subprocess launch unchanged; only the digest INPUT is
+# filtered.
+_SESSION_EPHEMERAL_ENV_KEYS = frozenset(
+    {
+        "SSH_CLIENT",
+        "SSH_CONNECTION",
+        "SSH_TTY",
+        "XDG_SESSION_ID",
+        "XDG_SESSION_CLASS",
+        "XDG_SESSION_TYPE",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "PWD",
+        "OLDPWD",
+        "SHLVL",
+        "_",
+    }
+)
+
+
+def _digest_environment(environment: Mapping[str, str]) -> dict[str, str]:
+    """Strip session-ephemeral keys before hashing into a configuration digest."""
+    return {
+        key: value
+        for key, value in environment.items()
+        if key not in _SESSION_EPHEMERAL_ENV_KEYS
+    }
+
 
 def _is_port_free(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -566,7 +602,7 @@ def resolve_cell(
                 "cell": cell,
                 "model": model,
                 "device_group": group,
-                "environment": environment,
+                "environment": _digest_environment(environment),
             }
         ),
     }

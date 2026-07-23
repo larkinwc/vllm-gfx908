@@ -117,6 +117,59 @@ def test_resolve_cell_rejects_undeclared_override() -> None:
         resolve_cell(_profile(), matrix, "cell")
 
 
+def test_resolve_cell_configuration_digest_ignores_session_ephemeral_env(
+    monkeypatch,
+) -> None:
+    """Session-ephemeral vars (SSH port, login session id, cwd) must not
+    change the digest that confirm-cell resume compares -- only the
+    declared configuration should. See scripts/gfx900/runner.py's
+    _SESSION_EPHEMERAL_ENV_KEYS / _digest_environment().
+    """
+    session_one = {
+        "SSH_CLIENT": "10.0.0.1 55552 22",
+        "SSH_CONNECTION": "10.0.0.1 55552 10.0.0.2 22",
+        "SSH_TTY": "/dev/pts/1",
+        "XDG_SESSION_ID": "1716",
+        "XDG_SESSION_CLASS": "user",
+        "XDG_SESSION_TYPE": "tty",
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+        "PWD": "/home/user/one",
+        "OLDPWD": "/home/user",
+        "SHLVL": "2",
+        "_": "/usr/bin/python3",
+    }
+    session_two = {
+        "SSH_CLIENT": "10.0.0.1 65211 22",
+        "SSH_CONNECTION": "10.0.0.1 65211 10.0.0.2 22",
+        "SSH_TTY": "/dev/pts/7",
+        "XDG_SESSION_ID": "1822",
+        "XDG_SESSION_CLASS": "user",
+        "XDG_SESSION_TYPE": "tty",
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+        "PWD": "/home/user/two",
+        "SHLVL": "1",
+        "_": "/usr/bin/env",
+    }
+    for key in {**session_one, **session_two}:
+        monkeypatch.delenv(key, raising=False)
+    for key, value in session_one.items():
+        monkeypatch.setenv(key, value)
+    first = resolve_cell(_profile(), _matrix({}), "cell")
+
+    for key in session_one:
+        monkeypatch.delenv(key, raising=False)
+    for key, value in session_two.items():
+        monkeypatch.setenv(key, value)
+    second = resolve_cell(_profile(), _matrix({}), "cell")
+
+    # Sanity: the two sessions really do differ in the raw environment,
+    # so a passing digest match below is a meaningful assertion.
+    assert first["environment"]["SSH_CLIENT"] != second["environment"]["SSH_CLIENT"]
+    assert first["configuration_digest"] == second["configuration_digest"]
+
+
 def test_secret_redaction_and_fatal_signatures() -> None:
     assert (
         redact_environment({"HF_TOKEN": "secret", "VLLM_USE_V1": "1"})["HF_TOKEN"]
@@ -416,6 +469,79 @@ def test_confirm_resume_rejects_changed_manifest_and_preserves_evidence(
     assert result_path.read_bytes() == evidence
     assert len(server_starts) == 1
     assert len(terminated) == 1
+
+
+def test_confirm_resume_survives_session_ephemeral_env_change(
+    tmp_path, monkeypatch
+) -> None:
+    """Regression test: resuming a confirm cell from a new SSH session
+    (different ephemeral client port / login session id) must not raise
+    'confirm resume configuration does not match existing artifact' --
+    only a real declared-configuration change should trigger that guard.
+    """
+    server_starts = []
+    terminated = []
+    fail_launch_2 = True
+
+    def fake_popen(argv, **kwargs):
+        server_starts.append(argv)
+        return _FakeServer()
+
+    def benchmark_fail_launch_2(
+        argv, environment, timeout, result_path, base_url=None
+    ):
+        if fail_launch_2 and result_path.parent.parent.name == "launch-2-attempt-1":
+            raise RuntimeError("benchmark failure")
+        return _successful_trial(result_path)
+
+    monkeypatch.setattr("scripts.gfx900.runner.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("scripts.gfx900.runner._terminate", terminated.append)
+    monkeypatch.setattr("scripts.gfx900.runner._is_port_free", lambda port: True)
+    monkeypatch.setattr("scripts.gfx900.runner._wait_for_server", lambda *args: None)
+    monkeypatch.setattr("scripts.gfx900.runner._scrape_metrics", lambda base_url: {})
+    monkeypatch.setattr(
+        "scripts.gfx900.runner._run_benchmark", benchmark_fail_launch_2
+    )
+
+    monkeypatch.setenv("SSH_CLIENT", "10.0.0.1 55552 22")
+    monkeypatch.setenv("SSH_CONNECTION", "10.0.0.1 55552 10.0.0.2 22")
+    monkeypatch.setenv("XDG_SESSION_ID", "1716")
+    monkeypatch.setenv("PWD", "/home/user/session-one")
+
+    first = run_cell(
+        profile=_confirm_profile(),
+        matrix=_confirm_matrix(),
+        cell_id="cell",
+        output_dir=tmp_path,
+        manifest=_manifest(),
+    )
+    assert first["verdict"]["status"] == "FAILED"
+    assert [
+        (launch["launch_index"], launch["status"])
+        for launch in first["confirm"]["launches"]
+    ] == [(0, "PASS"), (1, "PASS"), (2, "FAILED")]
+
+    # Simulate resuming from a brand-new SSH session: different ephemeral
+    # client port, login session id, and cwd -- same declared configuration.
+    monkeypatch.setenv("SSH_CLIENT", "10.0.0.1 65211 22")
+    monkeypatch.setenv("SSH_CONNECTION", "10.0.0.1 65211 10.0.0.2 22")
+    monkeypatch.setenv("XDG_SESSION_ID", "1822")
+    monkeypatch.setenv("PWD", "/home/user/session-two")
+    fail_launch_2 = False
+
+    resumed = run_cell(
+        profile=_confirm_profile(),
+        matrix=_confirm_matrix(),
+        cell_id="cell",
+        output_dir=tmp_path,
+        manifest=_manifest(),
+    )
+
+    assert resumed["verdict"]["status"] == "PASS"
+    assert [
+        (launch["launch_index"], launch["attempt"], launch["status"])
+        for launch in resumed["confirm"]["launches"]
+    ] == [(0, 1, "PASS"), (1, 1, "PASS"), (2, 1, "FAILED"), (2, 2, "PASS")]
 
 
 def test_confirmed_aggregate_composite_can_mix_launches() -> None:
