@@ -46,7 +46,7 @@ separate write-up decision, not made by this note.
 | TP8 DecodeBenchConnector burst, 4,096/256, 0.0827 RPS, burstiness 0.25 | Graph 18.119 versus eager 18.064 output tok/s (+0.31%); p99 TPOT 126.93 versus 129.48 ms; p99 TTFT 2,431 versus 1,621 ms | Do not enable graph mode for burst/open-loop traffic: p99 TTFT fails the +2% gate. |
 | TurboQuant versus auto, 8,192/256, c=32 | Historical: 22.092 versus 18.450 output tok/s (+19.7%). Clean single-launch screen: 20.521 versus 18.583 (+10.4%). **Confirmed** (3 independent launches per arm, all PASS, 0 failed requests): 22.505 versus 18.600 output tok/s (+20.997%); p99 TPOT 1377.553 versus 1672.270 ms (-17.624%); p99 TTFT 319853.228 versus 379302.669 ms (-15.673%). `compare-cells` verdict: `IMPROVEMENT`, zero regressions. | Throughput/latency capacity gates confirmed and passing. Quality gates (perplexity, coding, needle-in-haystack) reconfirmed on the clean substrate 2026-07-21: cache-read PPL Δ -0.10504% (gate ≤+1% PASS), coding suite 8/10 both arms with identical prompt-id-level pass/fail sets (no new failure), needle@32k 5/5 both arms (all depths). All three quality gates PASS. Combining capacity+quality into a promoted default is still a separate write-up decision.
 | Prefix-repetition, TurboQuant, c=8 | Cache-on 36.029 output tok/s, 82.8% hit; cache-off 12.740 | Promote prefix caching only for repeated-prefix workloads. |
-| MTP K=1 / CPU ngram K=4 | 22.376 / 24.007 output tok/s versus 26.476 eager | `DECLINED_NO_END_TO_END_WIN`. |
+| MTP K=1 / CPU ngram K=4 | 22.376 / 24.007 output tok/s versus 26.476 eager. **Confirmed** (3 independent launches per config, all PASS, 0 failed requests): MTP K=1 22.309 (Δ-0.301%); ngram K=4 23.755 (Δ-1.052%), each `compare-cells` verdict `PASS` against its own screen. | `DECLINED_NO_END_TO_END_WIN`. Per-config reproducibility confirmed 2026-07-22/23 — the decline stands; see addendum below. |
 
 The matched 32,768-context needle control passed all five depths for both auto
 and TurboQuant. It used a 34,816-token single-sequence server with
@@ -195,6 +195,76 @@ on `c4130-2`. Screen baselines:
 `/home/larkinwc/gfx900-runs/topology-pp2/cells/topology-fp4-pp2/cell.json`
 (all share `manifest_sha256 9ffd3ab1d71629984918598f06901bfcbb457925a044c78048ee30942f6bc81d`,
 `platform_sha256 61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`).
+
+**Speculation independent-launch confirmation (2026-07-22/23, source
+commit `33d5cce0f4cd9853d970e525135bf13252d31f47`, adds
+`confirm-speculation-mtp-k1` / `confirm-speculation-ngram-cpu-k4` to
+`scripts/gfx900/matrices/reference.json`):** closes the speculation item
+of the Recommendation-gate checklist in `GFX900_RECOMMENDED.md`, scoped
+strictly to **per-config reproducibility** — same discipline as the
+topology confirmation above. This does not re-litigate the original
+`DECLINED_NO_END_TO_END_WIN` promotion call against the eager TP8
+reference; it only confirms that decision's numbers reproduce under
+independent launches, not a single-launch fluke. Both configs reused the
+existing `promotion` policy unchanged (±3%/2% throughput/latency gate);
+no new gate was introduced.
+
+| Config | Screen (2026-07-13) | Confirm aggregate (2026-07-22/23) | Δ output_throughput | Δ p99 TPOT | Δ p99 TTFT | `compare-cells` |
+|---|---|---|---:|---:|---:|---|
+| Native MTP K=1 | 22.376 tok/s | 22.309 tok/s | -0.301% | +0.547% | -0.298% | `PASS` |
+| CPU n-gram K=4 | 24.007 tok/s | 23.755 tok/s | -1.052% | +1.514% | -0.297% | `PASS` |
+
+All launches PASS with 0 failed requests; neither config crosses the
+±3%/2% gate, so both verdicts are `PASS` rather than `IMPROVEMENT` or
+`REGRESSION` — exactly what a reproducibility check should show. **Do not
+read either delta as a new performance finding** — the decline against
+eager TP8 (26.476 tok/s) stands unchanged from the original screen; this
+addendum only confirms that decline reproduces.
+
+**A concrete side effect of this work:** retrying
+`confirm-speculation-ngram-cpu-k4`'s third launch — which failed once on
+a transient DNS resolution error inside the `vllm bench serve` client's
+tokenizer-config lookup, unrelated to gfx900, spec-decode, or the model
+itself — from a new SSH session initially failed with a harness-level
+`RuntimeError: confirm resume configuration does not match existing
+artifact`. Root cause: `_merge_environment()` in `scripts/gfx900/runner.py`
+built each resolved cell's environment (and therefore its confirm-cell
+`configuration_digest`) from a copy of the *current process's* raw
+`os.environ`, so SSH-session-ephemeral variables (`SSH_CLIENT`,
+`SSH_CONNECTION`, `XDG_SESSION_ID`, `PWD`, `OLDPWD`, `SHLVL`, the shell's
+`$_`) were baked into the hash that confirm-resume strictly compares
+across launches. Any confirm cell resumed from a different SSH connection
+than its previous attempt hit this false-positive mismatch regardless of
+whether the declared configuration actually changed. Fixed in
+`33d5cce0f4cd9853d970e525135bf13252d31f47`
+(`_SESSION_EPHEMERAL_ENV_KEYS` / `_digest_environment()`, which strips
+those keys from the digest input only — the real subprocess launch
+environment is unchanged), covered by two regression tests in
+`tests/gfx900/test_runner.py` (verified to fail on the pre-fix code and
+pass after). Because the existing `confirm-speculation-ngram-cpu-k4`
+artifact's stored digest predated the fix, its `configuration.
+resolved_digest` field was migrated (one field only, backed up first as
+`cell.json.pre-digest-migration-20260722`) to the value the corrected
+formula produces for the same, unchanged declared configuration — verified
+by independently reconstructing that value from the artifact's own stored
+pre-fix environment snapshot (minus only the now-excluded ephemeral keys)
+and confirming it matched exactly. The retry then completed as
+`launch-2-attempt-2` with 0 failed requests, and `launch-0`/`launch-1`'s
+original evidence resumed untouched, confirming the fix works end to end,
+not just in unit tests.
+
+This closes the **last** of the five Recommendation-gate items —
+topology, graph, capacity, quality, and now speculation are all
+independently-launch confirmed on this `platform_sha256`.
+
+Raw artifacts:
+`/home/larkinwc/gfx900-runs/durable-confirm-d600eaaa-f331-4ec1-998f-c1e1e9b2e8cf/cells/confirm-speculation-{mtp-k1,ngram-cpu-k4}/cell.json`
+and `compare-cells` outputs at
+`/home/larkinwc/gfx900-runs/speculation-gate-compare-20260723/{mtp-k1,ngram-cpu-k4}.json`
+on `c4130-2`. Screen baselines:
+`/home/larkinwc/gfx900-runs/speculation/cells/speculation-mtp-k1/cell.json`,
+`/home/larkinwc/gfx900-runs/speculation-ngram/cells/speculation-ngram-cpu-k4/cell.json`
+(both share `platform_sha256 61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`).
 
 ### Promoted-workload profile
 

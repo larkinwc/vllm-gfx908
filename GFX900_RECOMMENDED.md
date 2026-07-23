@@ -138,6 +138,45 @@ workload-specific.
 > `/home/larkinwc/gfx900-runs/topology-gate-compare-20260722/{tp8,tp4,fp4pp2}.json`
 > on `c4130-2`.
 >
+> **Speculation independent-launch confirmation (2026-07-22/23, source
+> commit `33d5cce0f4cd9853d970e525135bf13252d31f47`, adds
+> `confirm-speculation-mtp-k1` / `confirm-speculation-ngram-cpu-k4` to
+> `scripts/gfx900/matrices/reference.json`):** closes the speculation item
+> of the Recommendation-gate checklist below — for **per-config
+> reproducibility only**, same scope discipline as the topology
+> confirmation above. This does **not** re-litigate the original
+> `DECLINED_NO_END_TO_END_WIN` promotion call (native MTP K=1 and CPU
+> n-gram K=4 both underperform the eager TP8 reference); it only confirms
+> that decision's underlying numbers were not a single-launch fluke. Both
+> configs reused the existing `promotion` policy unchanged (±3%/2%
+> throughput/latency gate). All launches **PASS**, zero failed requests:
+> native MTP K=1 22.376 → 22.309 output tok/s (Δ-0.301%, p99 TPOT
+> Δ+0.547%, p99 TTFT Δ-0.298%); CPU n-gram K=4 24.007 → 23.755 (Δ-1.052%,
+> p99 TPOT Δ+1.514%, p99 TTFT Δ-0.297%). Both `compare-cells` verdicts:
+> `PASS` (not `IMPROVEMENT` or `REGRESSION` — every delta stays inside the
+> gate). **Do not read either delta as a new performance finding** — the
+> declined verdict against eager TP8 stands unchanged; this only
+> reproduces it. One concrete side effect of this work: retrying
+> `confirm-speculation-ngram-cpu-k4`'s third launch (a transient DNS
+> resolution failure in the benchmark client, unrelated to gfx900 or
+> spec-decode) from a new SSH session originally failed with `confirm
+> resume configuration does not match existing artifact` — root-caused to
+> `_merge_environment()` baking SSH-session-ephemeral variables
+> (`SSH_CLIENT`, `SSH_CONNECTION`, `XDG_SESSION_ID`, `PWD`, `OLDPWD`,
+> `SHLVL`, …) into the hashed confirm-cell configuration digest. Fixed and
+> covered by two regression tests in `scripts/gfx900/runner.py` /
+> `tests/gfx900/test_runner.py`
+> (`33d5cce0f4cd9853d970e525135bf13252d31f47`); the existing artifact's
+> digest was migrated (one field, `configuration.resolved_digest`) to
+> match the corrected formula before the retry succeeded. This closes the
+> **last** of the five Recommendation-gate items — topology, graph,
+> capacity, quality, and now speculation are all independently-launch
+> confirmed on this `platform_sha256`. Raw artifacts:
+> `/home/larkinwc/gfx900-runs/durable-confirm-d600eaaa-f331-4ec1-998f-c1e1e9b2e8cf/cells/confirm-speculation-{mtp-k1,ngram-cpu-k4}/cell.json`
+> and `compare-cells` outputs at
+> `/home/larkinwc/gfx900-runs/speculation-gate-compare-20260723/{mtp-k1,ngram-cpu-k4}.json`
+> on `c4130-2`.
+>
 > **Recommendation gate:** do not apply historical V340 count, per-die VRAM,
 > topology, RCCL variables, graph buckets, quantization defaults, or
 > performance figures to another host. First run the versioned `scripts.gfx900`
