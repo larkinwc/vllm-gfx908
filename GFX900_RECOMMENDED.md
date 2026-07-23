@@ -84,27 +84,83 @@ workload-specific.
 > in 2.855s, matching/exceeding the historical 39.637 tok/s figure and
 > confirming the measurement methodology). Output was verified
 > correct/coherent in every case, not corrupted — this is a throughput
-> regression, not a numerics bug. **Root cause is unresolved, and the
-> evidence collected is contradictory rather than merely incomplete**:
-> 1-second-cadence `rocm-smi --showuse` polling during one decode request
-> showed sustained ~100% GPU utilization for most of the request window;
-> separate `py-spy dump --nonblocking` snapshots of both the worker's and
-> `EngineCore`'s main threads, taken during other live decode requests,
-> mostly caught both sides idle, blocked on the `shm_broadcast` IPC
-> dequeue waiting on each other. These two signals point in opposite
-> directions and have **not** been reconciled — neither should be read as
-> the established mechanism. Resolving this needs torch-profiler or
-> rocprof-level instrumentation, which this investigation did not reach.
-> **Practical conclusion, for a different reason than before**: AWQ +
-> `torch.compile` remains not viable for production on gfx900 — not
-> because of a hang (that concern is retracted), but because of this
-> decode-throughput collapse. Continue using AWQ in eager mode, or
-> `mode=NONE` + `FULL_DECODE_ONLY` graphs for the graph-mode profile, per
-> the existing recommendations elsewhere in this document. Further
-> profiling is a possible follow-up if AWQ+compile becomes a priority, but
-> it is not a promoted path either way, so none is committed here. Raw
-> logs: `/home/larkinwc/gfx900-runs/awq-compile-hang-20260723/attempt{A,B,C}-*.log`
-> on `c4130-2`.
+> regression, not a numerics bug.
+> **Root cause identified and causally confirmed (2026-07-23, follow-up
+> profiling session).** Direct `torch.profiler` instrumentation reproduced
+> the collapse cleanly (1.043 tok/s, matching the 1.06 tok/s figure above)
+> and named the mechanism: vLLM's `TorchCompileWithNoGuardsWrapper`
+> (`vllm/compilation/wrapper.py`) intentionally drops **all** torch.compile
+> guards when `compilation_config.dynamic_shapes_config.evaluate_guards` is
+> `False` (the default, and present verbatim in the failing config's
+> non-default-args dump). `TritonW4A16LinearKernel`'s dispatcher
+> (`vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py:228`)
+> picks the fast gfx900 decode path with a plain Python branch — `if
+> on_gfx900() and group_size in (32, 64, 128) and M <= 8: return
+> w4a16_gemv_gfx900(...)` — which Dynamo resolves once, at whatever shape
+> the *first* traced call has, baking the chosen branch into the compiled
+> graph permanently with no guard to re-check `M` later. The first call
+> through the compiled model is `profile_run()`'s memory-sizing dummy
+> forward (`gpu_model_runner.py:6176`, M = `max_num_batched_tokens` = 512),
+> which runs *before* CUDA-graph capture or any real decode call. That
+> single M=512 trace freezes in the generic `triton_w4a16_gemm_kernel`
+> (plain `tl.dot`, a padded FP32 GEMM on gfx900's MFMA-less hardware);
+> every real M=1 decode step silently replays that frozen graph forever —
+> the fast `w4a16_gemv_gfx900` → `_w4a16_gemv_splitk_kernel` path is never
+> reached again. `TORCH_LOGS=recompiles` on a full compiled-decode run
+> showed **zero** recompile events, ruling out per-step retracing.
+> Measured directly: the frozen generic kernel runs **14.634 ms/call**
+> (1488 calls, 97.86% of GPU time in the compiled trace) versus **81.468
+> µs/call** for the correct GEMV kernel in the control (1922 calls, 15.75%
+> of GPU time) — a **~180x** per-call slowdown, fully accounting for the
+> ~40x end-to-end collapse.
+>
+> **This was causally confirmed, not just correlated.** An isolated
+> unit-level test called the exact production `triton_w4a16_gemm`
+> function directly, replicating real conditions
+> (`torch._dynamo.mark_dynamic(a, 0)` on the token dim, matching
+> `DynamicShapesType.BACKED`), compiled once at M=512, called again at
+> M=1, toggling only guard-handling across three arms: (1) guards dropped
+> (vLLM's real default) → M=1 call silently reused the frozen generic
+> kernel, no error; (2) guards kept + `fail_on_recompile` (exactly
+> replicating vLLM's real `evaluate_guards=True` behavior) → M=1 call
+> raised `RuntimeError: Detected recompile when torch.compile stance is
+> 'fail_on_recompile' ... triggered by ... 65 <= a.size()[0] <=
+> 2147483647 # elif M <= 64`, direct proof PyTorch's own guard system
+> *does* detect the M=512→M=1 violation on this exact branch, and is only
+> forbidden from acting on it by vLLM's guard-dropping design (also: this
+> shows `evaluate_guards=True` alone would trade the silent bug for a
+> crash, not fix it); (3) guards kept, recompiling allowed (stock default)
+> → M=1 call visibly retraced (`dynamo` = 79.92% of that call's CPU time,
+> `compile_id=0/1`) and correctly dispatched to `_w4a16_gemv_splitk_kernel`
+> — the literal recovery demonstration. All three arms hold "M=512 traced
+> first" constant and vary only guard-handling, isolating guard-dropping as
+> the specific, necessary cause.
+>
+> This also reconciles the earlier "contradictory" evidence: the ~100% GPU
+> utilization finding was **correct** — the GPU is genuinely busy for ~97%
+> of a decode-heavy window, it's just running the wrong, catastrophically
+> slow kernel the whole time. The `py-spy` snapshots that caught idle
+> `shm_broadcast` waits were most likely sampled during a *different* part
+> of the timeline (inter-request/inter-step gaps in that open-loop
+> benchmark), not concurrently with an in-flight decode step's kernel
+> execution — different moments, not a real contradiction.
+> **Practical conclusion, unchanged**: AWQ + `torch.compile` remains not
+> viable for production on gfx900 — now a well-understood,
+> causally-confirmed defect rather than an open mystery. Continue using
+> AWQ in eager mode, or `mode=NONE` + `FULL_DECODE_ONLY` graphs for the
+> graph-mode profile, per the existing recommendations elsewhere in this
+> document. Two candidate fix directions were identified but **not
+> implemented or committed** (AWQ+compile is not a promoted path): (a)
+> wrap `triton_w4a16_gemm`'s dispatch behind a `torch.library.custom_op`
+> boundary so Dynamo can't inline-and-freeze the Python `if` branch, or (b)
+> allow recompiling for this region specifically (plain
+> `evaluate_guards=True` alone is insufficient — see the crash finding
+> above). Either needs its own correctness + perf validation before being
+> promoted. Raw logs:
+> `/home/larkinwc/gfx900-runs/awq-compile-hang-20260723/attempt{A,B,C}-*.log`
+> and the root-cause profiler evidence + causal intervention test at
+> `/home/larkinwc/gfx900-runs/awq-compile-profile-20260723/` (see
+> `PERF_GFX900.md` for the full artifact list), both on `c4130-2`.
 >
 > **TurboQuant quality-gate reconfirmation (2026-07-21):** the three quality
 > checks (cache-read perplexity, coding suite, needle-in-haystack) have now
@@ -453,7 +509,7 @@ historical-only and unreconfirmed on this substrate.
 | `FULL_DECODE_ONLY`, 4,096/256, c=8 | 26.551 output tok/s, +0.28% versus eager | Declined for this prefill-heavy reference workload; retain `--enforce-eager` for that control. |
 | `FULL_DECODE_ONLY`, 512/512, c=1 | Historical result: 58.18 versus 12.73 output tok/s eager (+357.1%); clean single-launch screen: 57.651 versus 12.707. **Confirmed** (3 independent launches per arm, both cells PASS, 0 failed requests): `confirm-dense-eager-c1` (eager baseline) 12.724873664265084 versus `confirm-graphs-full-decode-c1` (`FULL_DECODE_ONLY`) 56.336206381615746 output tok/s (+342.725%); p99 TPOT 79.0647771127532 versus 16.297473464836184 ms (-79.387%); p99 TTFT 772.2754819784313 versus 781.2450528336922 ms (+1.161%, within the 2% latency-regression gate). Mechanized `compare-cells` verdict: `IMPROVEMENT`, zero regressions, comparable `platform_sha256`. | Throughput/latency capacity gates confirmed and passing. CUDAGraph capture changes no numerics for this eager-vs-graph comparison, so there is no separate quality-gate requirement (unlike TurboQuant's KV-cache-dtype quantization) — promote `FULL_DECODE_ONLY` for this low-concurrency, decode-dominant c=1 workload. |
 | `FULL_DECODE_ONLY`, 512/512, c=32 | 190.51 versus 188.33 output tok/s eager (+1.16%); full 32-token graph steps, no steady-state padding | Do not enable solely for high-throughput batching; graph launch savings are amortized at the full batch. |
-| AWQ TP4, `FULL_DECODE_ONLY`, 512/512, c=1 | Historical result: graph 39.637 versus eager 10.629 output tok/s. Clean source requires `--max-num-batched-tokens 512` even for eager (10.677 output tok/s). **Retracted (2026-07-23):** VLLM_COMPILE does not hang — both with and without CUDAGraphs complete warmup in ~14 min via a real, finite GDN/FLA Triton autotune (confirmed via `py-spy` + `TRITON_PRINT_AUTOTUNING`; see the dated note above). **New finding (2026-07-23, open):** once warmup completes, AWQ decode under VLLM_COMPILE runs at ~1 tok/s versus 44.8 tok/s for `mode=NONE`+graphs measured fresh in the same session — root cause unresolved, evidence contradictory (see note above). | Do not enable AWQ + VLLM_COMPILE on gfx900 — not because it hangs (retracted), but because of the decode-throughput collapse (open issue). Use eager, text-only AWQ at a 512-token batch cap (10.677 output tok/s), or `mode=NONE` + `FULL_DECODE_ONLY` graphs for the graph-mode profile. |
+| AWQ TP4, `FULL_DECODE_ONLY`, 512/512, c=1 | Historical result: graph 39.637 versus eager 10.629 output tok/s. Clean source requires `--max-num-batched-tokens 512` even for eager (10.677 output tok/s). **Retracted (2026-07-23):** VLLM_COMPILE does not hang — both with and without CUDAGraphs complete warmup in ~14 min via a real, finite GDN/FLA Triton autotune (confirmed via `py-spy` + `TRITON_PRINT_AUTOTUNING`; see the dated note above). **Root-caused (2026-07-23):** once warmup completes, AWQ decode under VLLM_COMPILE runs at ~1 tok/s versus 44.8 tok/s for `mode=NONE`+graphs measured fresh in the same session — causally confirmed cause is vLLM's guard-dropping (`evaluate_guards=False`) freezing the AWQ W4A16 kernel's `M<=8` GEMV-vs-generic dispatch branch at the M=512 shape of `profile_run()`'s first compiled trace, so real M=1 decode steps silently reuse the wrong, ~180x-slower generic kernel forever; confirmed via a 3-arm causal intervention test, not just correlation (see note above). | Do not enable AWQ + VLLM_COMPILE on gfx900 — not because it hangs (retracted), but because of the decode-throughput collapse (root-caused, not promoted for a fix). Use eager, text-only AWQ at a 512-token batch cap (10.677 output tok/s), or `mode=NONE` + `FULL_DECODE_ONLY` graphs for the graph-mode profile. |
 | TP8 decode-isolated burst, 4,096/256, 0.0827 RPS, burstiness 0.25 | Graph: 18.119 versus eager 18.064 output tok/s (+0.31%); p99 TPOT 126.93 versus 129.48 ms; p99 TTFT 2,431 versus 1,621 ms | Do not promote graph mode for burst/open-loop serving: it misses the p99 TTFT gate despite zero failures and a small TPOT reduction. |
 | Repeated-prefix workload, TurboQuant, c=8 | 4,096 shared-prefix / 256 suffix / 128 output; prefix cache on: 36.029 output tok/s, 82.8% hit rate; off: 12.740 output tok/s | Enable `--enable-prefix-caching` only when the application has demonstrably repeated prefixes. The observed +182.8% output goodput and -77.1% mean TTFT exceed the workload-specific gate; it is not a generic latency claim. |
 | Long input, c=32 capacity screen | Historical result: TurboQuant 22.092 versus auto 18.450 output tok/s (+19.7%). Clean single-launch screen: TurboQuant 20.521 versus auto 18.583 (+10.4%). **Confirmed** (3 independent launches per arm, all PASS, 0 failed requests): TurboQuant 22.505 versus auto 18.600 output tok/s (+20.997%); p99 TPOT 1377.553 versus 1672.270 ms (-17.624%); p99 TTFT 319853.228 versus 379302.669 ms (-15.673%). Mechanized `compare-cells` verdict: `IMPROVEMENT`, zero regressions, comparable `platform_sha256`. | Throughput/latency capacity gates confirmed and passing — clears the +10% capacity gate with no latency regression. TurboQuant's quality gates (perplexity, coding, needle-in-haystack) remain historical-only, not yet reconfirmed on this clean substrate: this is a deliberate open decision, not an oversight. Do not promote `turboquant_k8v4` as a default until quality reconfirmation completes. |

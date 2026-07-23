@@ -42,7 +42,7 @@ separate write-up decision, not made by this note.
 | `FULL_DECODE_ONLY`, 4,096/256, c=8 | 26.551 versus 26.476 output tok/s eager (+0.28%) | Declined for the prefill-heavy reference workload. |
 | `FULL_DECODE_ONLY`, 512/512, c=1 | Historical: 58.18 versus 12.73 output tok/s eager (+357.1%); clean single-launch screen: 57.651 versus 12.707. **Confirmed** (3 independent launches per arm, both cells PASS, 0 failed requests): `confirm-dense-eager-c1` (eager) 12.724873664265084 versus `confirm-graphs-full-decode-c1` (`FULL_DECODE_ONLY`) 56.336206381615746 output tok/s (+342.725%); p99 TPOT 79.0647771127532 versus 16.297473464836184 ms (-79.387%); p99 TTFT 772.2754819784313 versus 781.2450528336922 ms (+1.161%, within the 2% gate). `compare-cells` verdict: `IMPROVEMENT`, zero regressions. | Throughput/latency capacity gates confirmed and passing. CUDAGraph capture changes no numerics here, so there is no separate quality-gate requirement (unlike TurboQuant's KV-cache-dtype quantization) — promote `FULL_DECODE_ONLY` for this low-concurrency, decode-dominant c=1 workload. |
 | `FULL_DECODE_ONLY`, 512/512, c=32 | 190.51 versus 188.33 output tok/s eager (+1.16%); p99 TPOT 163.09 versus 165.01 ms | Do not enable for throughput batching alone. Repeated scheduler rows show an unpadded size-32 `FULL` graph, so this is not a fallback artifact. |
-| AWQ TP4, `FULL_DECODE_ONLY`, 512/512, c=1 | Historical: graph 39.637 versus eager 10.629 output tok/s. On clean source, eager started only with text-only multimodal limits and `--max-num-batched-tokens 512` (10.677 output tok/s). **Retracted (2026-07-23):** VLLM_COMPILE does not hang — both with and without CUDAGraphs complete warmup in ~14 min via a real, finite GDN/FLA Triton autotune (see the dated note below). **New finding (2026-07-23, open):** post-warmup AWQ decode under VLLM_COMPILE runs at ~1 tok/s versus 44.8 tok/s for `mode=NONE`+graphs measured fresh in the same session — root cause unresolved, evidence contradictory (see note below). | Do not enable AWQ + VLLM_COMPILE on gfx900 — not because it hangs (retracted), but because of the decode-throughput collapse (open issue). |
+| AWQ TP4, `FULL_DECODE_ONLY`, 512/512, c=1 | Historical: graph 39.637 versus eager 10.629 output tok/s. On clean source, eager started only with text-only multimodal limits and `--max-num-batched-tokens 512` (10.677 output tok/s). **Retracted (2026-07-23):** VLLM_COMPILE does not hang — both with and without CUDAGraphs complete warmup in ~14 min via a real, finite GDN/FLA Triton autotune (see the dated note below). **Root-caused (2026-07-23):** post-warmup AWQ decode under VLLM_COMPILE runs at ~1 tok/s versus 44.8 tok/s for `mode=NONE`+graphs measured fresh in the same session — causally confirmed cause is vLLM's guard-dropping (`evaluate_guards=False`) freezing the AWQ W4A16 kernel's `M<=8` GEMV-vs-generic dispatch branch at the M=512 shape of `profile_run()`'s first compiled trace, so every real M=1 decode step silently reuses the wrong, ~180x-slower generic kernel forever (see note below for the profiler evidence and the 3-arm causal intervention test). | Do not enable AWQ + VLLM_COMPILE on gfx900 — not because it hangs (retracted), but because of the decode-throughput collapse (root-caused, not promoted for a fix). |
 | TP8 DecodeBenchConnector burst, 4,096/256, 0.0827 RPS, burstiness 0.25 | Graph 18.119 versus eager 18.064 output tok/s (+0.31%); p99 TPOT 126.93 versus 129.48 ms; p99 TTFT 2,431 versus 1,621 ms | Do not enable graph mode for burst/open-loop traffic: p99 TTFT fails the +2% gate. |
 | TurboQuant versus auto, 8,192/256, c=32 | Historical: 22.092 versus 18.450 output tok/s (+19.7%). Clean single-launch screen: 20.521 versus 18.583 (+10.4%). **Confirmed** (3 independent launches per arm, all PASS, 0 failed requests): 22.505 versus 18.600 output tok/s (+20.997%); p99 TPOT 1377.553 versus 1672.270 ms (-17.624%); p99 TTFT 319853.228 versus 379302.669 ms (-15.673%). `compare-cells` verdict: `IMPROVEMENT`, zero regressions. | Throughput/latency capacity gates confirmed and passing. Quality gates (perplexity, coding, needle-in-haystack) reconfirmed on the clean substrate 2026-07-21: cache-read PPL Δ -0.10504% (gate ≤+1% PASS), coding suite 8/10 both arms with identical prompt-id-level pass/fail sets (no new failure), needle@32k 5/5 both arms (all depths). All three quality gates PASS. Combining capacity+quality into a promoted default is still a separate write-up decision.
 | Prefix-repetition, TurboQuant, c=8 | Cache-on 36.029 output tok/s, 82.8% hit; cache-off 12.740 | Promote prefix caching only for repeated-prefix workloads. |
@@ -319,32 +319,139 @@ measurement methodology). Output was verified correct/coherent in every
 case, not corrupted — this is a throughput regression, not a numerics
 bug.
 
-**Root cause is unresolved, and the evidence collected is contradictory
-rather than merely incomplete.** 1-second-cadence `rocm-smi --showuse`
-polling during one decode request showed sustained ~100% GPU utilization
-for most of the request window. Separately, `py-spy dump --nonblocking`
-snapshots of both the worker's and `EngineCore`'s main threads, taken
-during other live decode requests, mostly caught both sides idle, blocked
-on the `shm_broadcast` IPC dequeue waiting on each other rather than doing
-visible compute. These two signals point in opposite directions and have
-**not** been reconciled; neither should be read as the established
-mechanism pending further investigation. Resolving this needs
-torch-profiler or rocprof-level instrumentation, which this investigation
-did not reach.
+**Root cause identified and causally confirmed (2026-07-23, follow-up
+profiling session).** Direct `torch.profiler` instrumentation (offline
+`LLM.generate()` with `ProfilerConfig(profiler="torch")`, same AWQ TP4
+config as attempts A/C above) reproduced the collapse cleanly (1.043 tok/s,
+matching the 1.06 tok/s figure above) and named the mechanism precisely,
+then a separate controlled intervention test confirmed it causally rather
+than by correlation alone.
 
-**Practical conclusion, for a different reason than before:** AWQ +
-`torch.compile` remains not viable for production on gfx900 — not because
-of a hang (that concern above is retracted), but because of this
-decode-throughput collapse. Continue using AWQ in eager mode, or
-`mode=NONE` + `FULL_DECODE_ONLY` graphs for the graph-mode profile, per
-`GFX900_RECOMMENDED.md`. Further profiling of the decode-collapse defect
-is a possible follow-up if AWQ+compile becomes a priority, but it is not a
-promoted path either way, so none is committed here.
+**Mechanism.** vLLM's `TorchCompileWithNoGuardsWrapper`
+(`vllm/compilation/wrapper.py`) intentionally drops **all** torch.compile
+guards when `compilation_config.dynamic_shapes_config.evaluate_guards` is
+`False` (the default, and present verbatim in the failing config's
+non-default-args dump) — "Dynamo should never be traced again after that
+since we drop all guards," per its own docstring.
+`TritonW4A16LinearKernel`'s dispatcher
+(`vllm/model_executor/kernels/linear/mixed_precision/triton_w4a16.py:228`)
+picks the fast gfx900 decode path with a plain Python branch: `if
+on_gfx900() and group_size in (32, 64, 128) and M <= 8: return
+w4a16_gemv_gfx900(...)`. Because this is ordinary Python control flow (not
+a data-dependent op), Dynamo resolves it once, at whatever shape the
+**first** traced call has, and bakes the chosen branch into the compiled
+graph permanently — no guard survives to re-check `M` on later calls. The
+first call through the compiled model is `profile_run()`'s memory-sizing
+dummy forward (`gpu_model_runner.py:6176`,
+`_dummy_run(self.max_num_tokens, is_profile=True)`, where `max_num_tokens
+== max_num_batched_tokens == 512`), which runs **before** KV-cache init /
+CUDA-graph capture / any real decode call. That single M=512 trace takes
+the `else` branch and freezes in the generic `triton_w4a16_gemm_kernel`
+(plain `tl.dot`, a padded FP32 GEMM on gfx900's MFMA-less hardware). Every
+subsequent call — CUDA-graph capture at M=1 and every real decode step at
+M=1 — silently replays that frozen compiled bytecode and keeps calling the
+generic kernel; the fast `w4a16_gemv_gfx900` → `_w4a16_gemv_splitk_kernel`
+path (`gfx900_w4a16_gemv.py`) is never reached again. No error, no
+warning, no recompilation — `TORCH_LOGS=recompiles` on a full
+compiled-decode run showed **zero** recompile events, ruling out per-step
+retracing as a contributing factor.
 
-Raw logs:
-`/home/larkinwc/gfx900-runs/awq-compile-hang-20260723/attempt{A,B,C}-*.log`
+Per-call cost, measured directly from the profiler traces (rank0, same M=1
+decode shape both arms): the frozen generic kernel runs at **14.634
+ms/call** (`triton_w4a16_gemm_kernel`, 1488 calls, 97.86% of total GPU time
+in the compiled trace) versus **81.468 µs/call** for the correct GEMV
+kernel in the `mode=NONE`+graphs control (`_w4a16_gemv_splitk_kernel`, 1922
+calls, 15.75% of GPU time in that trace) — a **~180x** per-call slowdown,
+which fully accounts for the ~40x end-to-end tok/s collapse (not 1:1
+because the mis-dispatched kernel is not literally 100% of wall time).
+
+**Causal confirmation, not just correlation.** The profiler evidence above
+establishes *which* kernel runs, but not by itself that guard-dropping is
+*why* — that required a controlled before/after intervention. An isolated
+unit-level test called the exact production `triton_w4a16_gemm` function
+directly (bypassing the rest of the model), replicating the real
+conditions exactly: `torch._dynamo.mark_dynamic(a, 0)` on the token dim
+(mirroring `vllm/compilation/decorators.py:_mark_dynamic_inputs` for
+`DynamicShapesType.BACKED`, the config actually used), compiled once at
+M=512 (the real `profile_run()` shape), then called again at M=1 (the real
+decode shape), toggling only the guard-handling across three arms:
+- **`--guards drop`** (replicates vLLM's real `VLLM_COMPILE` default,
+  `evaluate_guards=False`): the M=1 call silently reused the frozen branch
+  — `triton_w4a16_gemm_kernel` ran (self-device time ≈14.3ms for that one
+  call, matching the 14.634ms/call average above), `_w4a16_gemv_splitk_kernel`
+  did not appear at all. No error.
+- **`--guards keep`** (guards kept, wrapped in
+  `torch.compiler.set_stance("fail_on_recompile")` — exactly replicating
+  what vLLM's own `evaluate_guards=True` path actually does): the M=1 call
+  raised `RuntimeError: Detected recompile when torch.compile stance is
+  'fail_on_recompile' ... triggered by the following guard failure(s): -
+  0/0: 65 <= a.size()[0] <= 2147483647 # elif M <= 64: #
+  .../triton_w4a16.py`. This is direct, first-party proof that PyTorch's
+  own guard system *does* detect the M=512→M=1 shape violation on this
+  exact `M`-conditioned branch — it is specifically forbidden from acting
+  on it (recompiling) by vLLM's own guard-dropping design, not something
+  else about compiling first at M=512. (Side finding: this also shows
+  `evaluate_guards=True` would not silently fix the throughput problem in
+  production either — vLLM's own wrapper pairs guard-keeping with
+  `fail_on_recompile`, so it would crash rather than recover.)
+- **`--guards keep-recompile`** (guards kept, recompiling allowed — plain
+  stock `torch.compile` default, no stance override): the M=1 call visibly
+  retraced (`dynamo` frame = 79.92% of that call's CPU time,
+  `compile_id=0/1` confirming a second, fresh compile) and correctly
+  dispatched to `_w4a16_gemv_splitk_kernel` (156µs self-device time;
+  `triton_w4a16_gemm_kernel` absent) — the same fast kernel the eager
+  control uses. This is the literal recovery demonstration: with the exact
+  same M=512-first-then-M=1 call sequence, only removing guard-dropping,
+  decode dispatch self-corrects.
+
+All three arms hold the "M=512 traced first" fact constant and vary only
+guard-handling, so the result isolates guard-dropping as the specific,
+necessary cause — not merely something correlated with it.
+
+This also reconciles the earlier "contradictory" evidence rather than
+leaving it open: the 1-second `rocm-smi --showuse` ~100% GPU utilization
+finding was **correct** — the profiler confirms the GPU is genuinely busy
+for ~97% of a decode-heavy window (22.25s of 23.0s), it's just running the
+wrong, catastrophically slow kernel the entire time. The separate `py-spy`
+snapshots that caught both the worker and `EngineCore` idle on the
+`shm_broadcast` IPC dequeue were most likely sampled during a *different*
+part of the timeline than the hot decode-step kernel launch — e.g.
+inter-request/inter-step gaps in that earlier open-loop serving benchmark
+— not concurrently with an in-flight decode step's kernel execution. The
+two observations describe different moments, not the same moment measured
+two different ways; there is no remaining contradiction.
+
+**Practical conclusion, unchanged:** AWQ + `torch.compile` remains not
+viable for production on gfx900 — this is now a well-understood,
+causally-confirmed defect rather than an open mystery. Continue using AWQ
+in eager mode, or `mode=NONE` + `FULL_DECODE_ONLY` graphs for the
+graph-mode profile, per `GFX900_RECOMMENDED.md`. Two candidate fix
+directions were identified but **not implemented or committed**, since
+AWQ+compile is not a promoted path: (a) wrap `triton_w4a16_gemm`'s
+shape-dependent dispatch behind a `torch.library.custom_op` boundary so
+Dynamo treats it as opaque and can't inline-and-freeze the Python `if`
+branch, or (b) set `evaluate_guards=True` for this specific compiled
+region so `M` is re-checked per call — though the causal test above shows
+vLLM's real `evaluate_guards=True` pairs this with `fail_on_recompile`, so
+that specific knob alone would trade the silent-wrong-kernel bug for a
+hard crash, not a fix; a real fix needs recompiling to be allowed for this
+region specifically. Either direction needs its own correctness + perf
+validation before being promoted.
+
+Raw logs: `/home/larkinwc/gfx900-runs/awq-compile-hang-20260723/attempt{A,B,C}-*.log`
 on `c4130-2` (attempt A: `mode=3`+graphs; attempt B: `mode=3`, no graphs;
-attempt C: `mode=NONE`+graphs control, same session).
+attempt C: `mode=NONE`+graphs control, same session). Root-cause profiler
+evidence and the causal intervention test:
+`/home/larkinwc/gfx900-runs/awq-compile-profile-20260723/` on `c4130-2` —
+`prof_awq_compile.py` (full-engine repro, offline `LLM.generate()` + vLLM's
+torch-profiler `ProfilerConfig`), `control-C.log` / `attemptA-compile.log`
+/ `attemptA-recompile-check.log` (full-engine run logs, the last with
+`TORCH_LOGS=recompiles`), `traces-{control-C,attemptA-compile,attemptA-recompile-check}/`
+(chrome traces + per-rank kernel-time tables); `causal_test_guard_drop.py`
+(the isolated 3-arm intervention test), `causal-fix-v4.log` (the
+`fail_on_recompile` guard-failure message), `causal-recover-v1.log` (the
+recovery arm), `causal-traces-*/m1_call_table.txt` (per-arm M=1-call
+kernel tables).
 
 ### Promoted-workload profile
 
