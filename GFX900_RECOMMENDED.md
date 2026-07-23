@@ -231,3 +231,5 @@ backend already uses the gfx900-safe SDPA prefill fallback, since
 - `bench_scripts/combo_dec.py turboquant_k8v4` — int4 weights + TQ KV together.
 - `bench_scripts/batch_sweep.py` — concurrency scaling.
 - Deep dives: `PERF_GFX900.md`, `BENCH_GFX900.md`, `GFX900_SETUP.md`.
+- Why there is no "fuse the V340's two dies into one GPU" path (and the one
+  open follow-up, card-aware TP2 pairing): `RESEARCH_V340_DUAL_DIE_FUSION_2026_07.md`.
