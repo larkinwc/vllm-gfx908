@@ -302,3 +302,91 @@ def test_triton_w4a16_process_weights_after_loading_repacks_layout():
     torch.testing.assert_close(layer.weight_packed, expected_w_kn8)
     torch.testing.assert_close(layer.weight_scale, expected_scales_gn)
     torch.testing.assert_close(layer.weight_zero_point, expected_zeros_gn8)
+
+
+def test_triton_w4a16_gemm_is_registered_as_custom_op():
+    """``triton_w4a16_gemm`` must be the ``torch.ops.vllm.triton_w4a16_gemm``
+    custom op, not a plain Python function, so that ``torch.compile`` treats
+    the M-dependent gfx900-GEMV-vs-generic dispatch inside it as an opaque
+    call boundary (see the guard-drop regression test below). This check is
+    hardware-free: custom-op registration happens at import time.
+    """
+    assert triton_w4a16_gemm is torch.ops.vllm.triton_w4a16_gemm
+
+
+@pytest.mark.skipif(not current_platform.is_rocm(), reason="ROCm only")
+def test_triton_w4a16_gemm_gfx900_gemv_survives_guard_dropping_compile():
+    """Regression test for the AWQ TP4 ``VLLM_COMPILE`` decode-collapse bug
+    (PERF_GFX900.md, "Causal confirmation, not just correlation").
+
+    Reproduces the exact production sequence: compile with vLLM's
+    guard-dropping default (``guard_filter_fn=skip_all_guards_unsafe``,
+    i.e. ``evaluate_guards=False``), mark the token dim dynamic (mirroring
+    ``vllm/compilation/decorators.py``'s ``DynamicShapesType.BACKED``
+    handling), first call at M=512 (the real ``profile_run()`` shape),
+    second call at M=1 (a real decode shape). Before
+    ``torch.ops.vllm.triton_w4a16_gemm`` existed as a custom-op boundary,
+    Dynamo traced the M-dependent gfx900-GEMV-vs-generic branch inside
+    ``triton_w4a16_gemm`` exactly once at the first call's shape (M=512)
+    and froze it forever: every subsequent M=1 call silently kept using
+    the frozen "M=512" branch decision, with no error. This test fails if
+    that regresses: the M=1 call must actually run
+    ``_w4a16_gemv_splitk_kernel`` (not ``triton_w4a16_gemm_kernel``).
+    """
+    if not torch.cuda.is_available():
+        pytest.skip("CUDA/HIP device not available")
+    from vllm.platforms.rocm import on_gfx900
+
+    if not on_gfx900():
+        pytest.skip("gfx900 only (the fast path this test targets)")
+
+    set_random_seed(0)
+    K, N, G = 4096, 4096, 128
+    w_int4 = torch.randint(0, 16, (K, N), device=device, dtype=torch.int32)
+    b_packed = _pack_int4_along_n(w_int4)
+    scales = (0.05 * torch.rand((K // G, N), device=device, dtype=torch.float32)).to(
+        torch.float16
+    )
+
+    a_512 = torch.randn(512, K, device=device, dtype=torch.float16).contiguous()
+    a_1 = torch.randn(1, K, device=device, dtype=torch.float16).contiguous()
+    torch._dynamo.mark_dynamic(a_512, 0)
+    torch._dynamo.mark_dynamic(a_1, 0)
+
+    guard_filter_fn = getattr(
+        torch.compiler, "skip_all_guards_unsafe", lambda guards: [False for _ in guards]
+    )
+    compiled = torch.compile(
+        triton_w4a16_gemm,
+        fullgraph=True,
+        dynamic=False,
+        backend="inductor",
+        options={"guard_filter_fn": guard_filter_fn},
+    )
+
+    compiled(a_512, b_packed, scales, None, G, 8)
+    torch.cuda.synchronize()
+
+    with torch.profiler.profile(
+        activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,
+        ],
+    ) as prof:
+        compiled(a_1, b_packed, scales, None, G, 8)
+        torch.cuda.synchronize()
+
+    events = prof.key_averages()
+    gemv_time = sum(e.self_device_time_total for e in events if "gemv_splitk" in e.key)
+    generic_time = sum(
+        e.self_device_time_total for e in events if "triton_w4a16_gemm_kernel" in e.key
+    )
+    assert gemv_time > 0, (
+        "expected the gfx900 GEMV fast path (_w4a16_gemv_splitk_kernel) to "
+        "run for the M=1 decode call; the custom-op boundary may have "
+        "regressed and Dynamo is tracing through the dispatch again"
+    )
+    assert generic_time == 0, (
+        "frozen-wrong-kernel regression: the M=1 call ran the generic "
+        "triton_w4a16_gemm_kernel instead of the gfx900 GEMV fast path"
+    )

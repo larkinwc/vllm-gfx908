@@ -28,6 +28,7 @@ from vllm.model_executor.parameter import BasevLLMParameter, permute_param_layou
 from vllm.platforms import current_platform
 from vllm.scalar_type import scalar_types
 from vllm.triton_utils import tl, triton
+from vllm.utils.torch_utils import direct_register_custom_op
 
 from .MPLinearKernel import MPLinearKernel, MPLinearLayerConfig
 
@@ -174,7 +175,7 @@ def triton_w4a16_gemm_kernel(
     tl.store(c_ptrs, c, mask=mask_c)
 
 
-def triton_w4a16_gemm(
+def _triton_w4a16_gemm_impl(
     a: torch.Tensor,  # [M, K] fp16/bf16
     b_q: torch.Tensor,  # [K, N//8] int32
     scales: torch.Tensor,  # [K//G, N] fp16/bf16
@@ -184,6 +185,12 @@ def triton_w4a16_gemm(
 ) -> torch.Tensor:
     """
     Fused W4A16 GEMM using GPTQ-packed int4 weights.
+
+    Registered as the ``torch.ops.vllm.triton_w4a16_gemm`` custom op (see
+    the bottom of this module) so the M-dependent kernel dispatch below
+    (gfx900 GEMV vs. generic Triton) re-evaluates in eager Python on every
+    real call, immune to ``torch.compile`` guard-dropping freezing the
+    branch taken by the first (profiling) call's shape.
 
     Args:
         a:          Activation matrix [M, K], float16 or bfloat16.
@@ -328,6 +335,43 @@ def triton_w4a16_gemm(
         **launch_kwargs,
     )
     return c
+
+
+def _triton_w4a16_gemm_fake(
+    a: torch.Tensor,
+    b_q: torch.Tensor,
+    scales: torch.Tensor,
+    qzeros: torch.Tensor | None,
+    group_size: int,
+    zp_bias: int = 8,
+) -> torch.Tensor:
+    M = a.shape[0]
+    N = b_q.shape[1] * 8
+    return torch.empty((M, N), dtype=a.dtype, device=a.device)
+
+
+# Registered as a custom op rather than left a plain Python function so
+# that ``torch.compile`` treats it as an opaque call boundary. Without
+# this, vLLM's default guard-dropping (`evaluate_guards=False`) makes
+# Dynamo trace the M-dependent dispatch branch above (gfx900 GEMV vs.
+# generic Triton, `if on_gfx900() and ... and M <= 8`) exactly once, at
+# whatever shape the *first* call happens to have, and permanently freeze
+# that decision with no re-evaluation and no error. In production the
+# first call is vLLM's `profile_run()` memory-sizing dummy forward at
+# M=512 -- so every real M<=8 decode step would silently keep using the
+# frozen "generic kernel" branch even though the fast gfx900 GEMV is
+# available and correct for M<=8. Wrapping the dispatch in
+# `torch.ops.vllm.triton_w4a16_gemm` makes Dynamo stop tracing at the op
+# boundary; the wrapped Python body (including this `if`) then runs fresh
+# in eager Python on every real invocation, regardless of what shape was
+# traced first. See PERF_GFX900.md, "Causal confirmation, not just
+# correlation" (2026-07 c4130-2 reproducibility campaign addendum).
+direct_register_custom_op(
+    "triton_w4a16_gemm",
+    _triton_w4a16_gemm_impl,
+    fake_impl=_triton_w4a16_gemm_fake,
+)
+triton_w4a16_gemm = torch.ops.vllm.triton_w4a16_gemm
 
 
 class TritonW4A16LinearKernel(MPLinearKernel):
