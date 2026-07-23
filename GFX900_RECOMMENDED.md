@@ -184,6 +184,135 @@ workload-specific.
 > `platform_sha256` passes the topology, graph, KV/prefix, speculation, and
 > quality gates.
 
+## Promoted gfx900 recipe — all five gates closed (2026-07-23)
+
+**Status: all five Recommendation-gate items — topology, graph, capacity
+(KV/prefix), quality, and speculation — are now independently-launch
+confirmed on this `platform_sha256`.** This section synthesizes that full
+gate set into one recommended production configuration for the accepted
+c4130-2 single-socket 8-die group. The speculation gate closed last
+(2026-07-22/23, source commit `33d5cce0f4cd9853d970e525135bf13252d31f47`,
+see the dedicated blockquote note above): both `confirm-speculation-mtp-k1`
+and `confirm-speculation-ngram-cpu-k4` reproduced their original
+screen-level `DECLINED_NO_END_TO_END_WIN` verdict via 3 independent
+launches each, all PASS, zero failed requests. This closes the gate but
+does **not** overturn the decision it confirms — speculative decoding
+remains declined for this workload (see below).
+
+**Validity.** This recipe is valid only for `platform_sha256`
+`61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36` on
+`c4130-2`'s accepted single-socket 8-die group (independently re-verified
+single-NUMA-node, uniformly PCIe-attached — see the topology confirmation
+above). The underlying gate evidence spans four source commits that all
+reconfirm this same platform digest: campaign base
+`689cbbba3ae5400bd583e1435177464e48f1f94a` (graph and capacity screens),
+`0054f988bcca5d50bcfaddf2ff7545246df6e8ba` (quality reconfirmation, four
+commits ahead of the base, not diverged), `fad847da6dc43b66d4c0ec4042c98154057b9000`
+(RCCL sweep), and `bfc80f4db504a4878a8dffac711b643756922e17` (topology
+confirmation). As with every other recommendation in this file: **do not**
+apply this recipe's flags, buckets, or figures to another host or die count.
+Rerun the versioned `scripts.gfx900` manifest/matrix workflow and recapture a
+matching `platform_sha256` there before trusting any of these numbers on a
+different machine.
+
+### Gate summary
+
+| Gate | Verdict | Confirmed magnitude | Evidence |
+|---|---|---|---|
+| Topology | PASS (per-config reproducibility, not a cross-config ranking) | TP8 26.476→26.5186 tok/s (Δ+0.161%, TPOT Δ-0.054%, TTFT Δ-0.115%); TP4 20.895→21.0840 (Δ+0.903%); TP4×PP2 26.304→26.3448 (Δ+0.154%) | 2026-07-21/22 independent-launch confirm, 3 launches/config, 0 failures |
+| Graph (CUDAGraph decode) | `IMPROVEMENT` | output_throughput +342.725% (12.724873664265084→56.336206381615746 tok/s), p99 TPOT -79.387%, p99 TTFT +1.161% (within the 2% gate) — low-concurrency decode, 512/512, c=1 | `confirm-dense-eager-c1`/`confirm-graphs-full-decode-c1`, 3 launches/arm, 0 failures |
+| Capacity (KV/prefix, TurboQuant) | `IMPROVEMENT` | output_throughput +20.997% (18.600→22.505 tok/s), p99 TPOT -17.624%, p99 TTFT -15.673% — 8,192/256, c=32 | capacity confirm, 3 launches/arm, 0 failures |
+| Quality (TurboQuant) | PASS, all three checks | cache-read PPL Δ -0.10504% (gate ≤+1%); coding 8/10 both arms, identical prompt-id-level pass/fail set; needle@32k 5/5 both arms, all five depths | 2026-07-21 clean-substrate reconfirmation |
+| Speculation | PASS (reproduces the original decline, does not overturn it) | native MTP K=1: 22.376→22.309 tok/s (Δ-0.301%, TPOT Δ+0.547%, TTFT Δ-0.298%); CPU ngram K=4: 24.007→23.755 tok/s (Δ-1.052%, TPOT Δ+1.514%, TTFT Δ-0.297%) — both well inside the ±3%/2% gate | 2026-07-22/23 independent-launch confirm, 3 launches/config, 0 failures |
+
+(RCCL is not one of the five Recommendation-gate checklist items but is
+included below because it determines the recommended launch environment.)
+
+### Recommended launch
+
+```bash
+HIP_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 VLLM_USE_V1=1 \
+vllm serve Qwen/Qwen3.5-9B \
+  --tensor-parallel-size 8 --dtype float16 \
+  --revision c202236235762e1c871ad0ccb60c8ee5ba337b9a \
+  --language-model-only \
+  --max-model-len 4352 --max-num-seqs 32 \
+  --gpu-memory-utilization 0.85 \
+  --kv-cache-dtype turboquant_k8v4 \
+  --compilation-config \
+    '{"mode":0,"cudagraph_mode":"FULL_DECODE_ONLY","cudagraph_capture_sizes":[1,2,4,8,16,32,64,96]}'
+```
+
+- **TP8, single socket (`HIP_VISIBLE_DEVICES=0-7`).** The topology
+  confirmation reproduced the 2026-07-13 TP8 eager screen within noise
+  (Δ+0.161%/-0.054%/-0.115% throughput/TPOT/TTFT) and is retained as the
+  general c4130-2 control; TP4 and TP4×PP2 did not clear a universal
+  topology-promotion gate, so they remain workload-specific alternatives, not
+  this recipe's default.
+- **No `--enforce-eager`; CUDAGraph `FULL_DECODE_ONLY` instead.** This is the
+  one flag this recipe changes from the historical eager control. The
+  decisive, independently confirmed win is output_throughput +342.725%
+  (12.724873664265084 → 56.336206381615746 tok/s) and p99 TPOT -79.387%
+  (79.0647771127532 → 16.297473464836184 ms), with p99 TTFT +1.161% —
+  inside the 2% latency-regression gate. `mode:0` keeps Inductor/`torch.compile`
+  off (it crashes on ROCm); capture sizes `[1,2,4,8,16,32,64,96]` match the
+  confirmed cell's bucket set. This was confirmed at low-concurrency
+  decode-dominant traffic (c=1); the matched full-batch c=32 screen was
+  near-neutral (+1.16%, historical single-launch, not independently
+  confirmed) rather than a regression, so nothing here indicates the flag
+  should be disabled at higher concurrency either.
+- **`--kv-cache-dtype turboquant_k8v4`.** Independently confirmed capacity
+  win: output_throughput +20.997% (18.600 → 22.505 tok/s), p99 TPOT -17.624%,
+  p99 TTFT -15.673%, at 8,192-input/256-output, c=32. Quality gates are clean
+  on this clean substrate: cache-read PPL Δ -0.10504% (gate ≤+1%), coding
+  suite 8/10 both arms with an identical prompt-id-level pass/fail set (no
+  new failure introduced), needle@32k 5/5 both arms across all five probe
+  depths. Use `k8v4` specifically — Qwen3 is quirky-K (key-side quantization
+  is destructive on this family); do not substitute a more aggressive
+  K-quant preset.
+- **No RCCL environment overrides.** The 2026-07-21 communication-tuning
+  sweep reached `DECLINED_STATIC_POLICY_SUFFICIENT` on both TP4 and TP8:
+  every tested `NCCL_ALGO`/`NCCL_PROTO`/`NCCL_MIN_NCHANNELS` combination
+  underperformed RCCL 2.27.7-release's own default auto-tuning (best case
+  only +0.30%, short of the +5% promotion gate). Leave `NCCL_ALGO`/
+  `NCCL_PROTO` unset. Separately, as an operational hazard rather than a
+  performance finding: never set `NCCL_ALGO=Ring` together with
+  `NCCL_PROTO=LL` on an 8-die gfx900 group on this platform — that
+  combination deadlocked all 8 ranks in testing (confirmed via `rocm-smi`:
+  VRAM allocated, 0% CU occupancy) and had to be killed manually.
+- **No `--speculative-config`.** Do not enable speculative decoding — the
+  speculation gate is now independently-launch confirmed, and it
+  reproduces rather than overturns the original decline (see the
+  2026-07-22/23 blockquote note above). Screen level: native MTP K=1
+  measured 22.376 tok/s (acceptance length 1.182) versus the 26.476 tok/s
+  eager TP8 reference (throughput -15.485%, p99 TPOT +50.879%, p99 TTFT
+  +5.969%, all outside the promotion policy); CPU ngram K=4 measured
+  24.007 tok/s versus the same reference. Independent-launch confirm (3
+  launches/config, 0 failed requests, `compare-cells` verdict `PASS` for
+  both): native MTP K=1 22.376 → 22.309 tok/s (Δ-0.301%, p99 TPOT
+  Δ+0.547%, p99 TTFT Δ-0.298%); CPU ngram K=4 24.007 → 23.755 tok/s
+  (Δ-1.052%, p99 TPOT Δ+1.514%, p99 TTFT Δ-0.297%) — both comfortably
+  inside the ±3%/2% gate. This is a reproducibility confirmation, not a
+  new performance finding: the decline verdict against eager TP8 stands
+  unchanged.
+
+### A note on composing the graph and capacity wins together
+
+The graph gate (`FULL_DECODE_ONLY` vs. eager) and the capacity gate
+(`turboquant_k8v4` vs. `auto` KV dtype) were each independently confirmed
+against an eager/auto baseline on their own axis, but this clean-source
+campaign has not yet run a dedicated independent-launch screen with both
+non-default settings active in the same launch. The two mechanisms are
+architecturally orthogonal — CUDAGraph capture replays per-step dispatch,
+TurboQuant compresses KV-cache storage — and the historical (non-clean-source)
+campaign observed no interaction when stacking an analogous set of
+independent optimizations together (AWQ + LLMM1 + graphs produced coherent
+output at the expected combined decode rate). On that basis this recipe
+recommends running graph mode and TurboQuant together, but a joint
+`turboquant_k8v4` + `FULL_DECODE_ONLY` cell has not itself cleared this
+campaign's independent-launch confirmation; treat that specific composition
+as inferred-safe, not separately gate-confirmed, until it is.
+
 ## Historical c4130-2 reference record (2026-07-13)
 
 The historical manifest is
