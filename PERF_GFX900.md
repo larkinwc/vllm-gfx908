@@ -42,7 +42,7 @@ separate write-up decision, not made by this note.
 | `FULL_DECODE_ONLY`, 4,096/256, c=8 | 26.551 versus 26.476 output tok/s eager (+0.28%) | Declined for the prefill-heavy reference workload. |
 | `FULL_DECODE_ONLY`, 512/512, c=1 | Historical: 58.18 versus 12.73 output tok/s eager (+357.1%); clean single-launch screen: 57.651 versus 12.707. **Confirmed** (3 independent launches per arm, both cells PASS, 0 failed requests): `confirm-dense-eager-c1` (eager) 12.724873664265084 versus `confirm-graphs-full-decode-c1` (`FULL_DECODE_ONLY`) 56.336206381615746 output tok/s (+342.725%); p99 TPOT 79.0647771127532 versus 16.297473464836184 ms (-79.387%); p99 TTFT 772.2754819784313 versus 781.2450528336922 ms (+1.161%, within the 2% gate). `compare-cells` verdict: `IMPROVEMENT`, zero regressions. | Throughput/latency capacity gates confirmed and passing. CUDAGraph capture changes no numerics here, so there is no separate quality-gate requirement (unlike TurboQuant's KV-cache-dtype quantization) — promote `FULL_DECODE_ONLY` for this low-concurrency, decode-dominant c=1 workload. |
 | `FULL_DECODE_ONLY`, 512/512, c=32 | 190.51 versus 188.33 output tok/s eager (+1.16%); p99 TPOT 163.09 versus 165.01 ms | Do not enable for throughput batching alone. Repeated scheduler rows show an unpadded size-32 `FULL` graph, so this is not a fallback artifact. |
-| AWQ TP4, `FULL_DECODE_ONLY`, 512/512, c=1 | Historical: graph 39.637 versus eager 10.629 output tok/s. On clean source, eager started only with text-only multimodal limits and `--max-num-batched-tokens 512` (10.677 output tok/s); tested VLLM_COMPILE paths hung during warmup. | Do not enable AWQ graphs on gfx900. |
+| AWQ TP4, `FULL_DECODE_ONLY`, 512/512, c=1 | Historical: graph 39.637 versus eager 10.629 output tok/s. On clean source, eager started only with text-only multimodal limits and `--max-num-batched-tokens 512` (10.677 output tok/s). **Retracted (2026-07-23):** VLLM_COMPILE does not hang — both with and without CUDAGraphs complete warmup in ~14 min via a real, finite GDN/FLA Triton autotune (see the dated note below). **New finding (2026-07-23, open):** post-warmup AWQ decode under VLLM_COMPILE runs at ~1 tok/s versus 44.8 tok/s for `mode=NONE`+graphs measured fresh in the same session — root cause unresolved, evidence contradictory (see note below). | Do not enable AWQ + VLLM_COMPILE on gfx900 — not because it hangs (retracted), but because of the decode-throughput collapse (open issue). |
 | TP8 DecodeBenchConnector burst, 4,096/256, 0.0827 RPS, burstiness 0.25 | Graph 18.119 versus eager 18.064 output tok/s (+0.31%); p99 TPOT 126.93 versus 129.48 ms; p99 TTFT 2,431 versus 1,621 ms | Do not enable graph mode for burst/open-loop traffic: p99 TTFT fails the +2% gate. |
 | TurboQuant versus auto, 8,192/256, c=32 | Historical: 22.092 versus 18.450 output tok/s (+19.7%). Clean single-launch screen: 20.521 versus 18.583 (+10.4%). **Confirmed** (3 independent launches per arm, all PASS, 0 failed requests): 22.505 versus 18.600 output tok/s (+20.997%); p99 TPOT 1377.553 versus 1672.270 ms (-17.624%); p99 TTFT 319853.228 versus 379302.669 ms (-15.673%). `compare-cells` verdict: `IMPROVEMENT`, zero regressions. | Throughput/latency capacity gates confirmed and passing. Quality gates (perplexity, coding, needle-in-haystack) reconfirmed on the clean substrate 2026-07-21: cache-read PPL Δ -0.10504% (gate ≤+1% PASS), coding suite 8/10 both arms with identical prompt-id-level pass/fail sets (no new failure), needle@32k 5/5 both arms (all depths). All three quality gates PASS. Combining capacity+quality into a promoted default is still a separate write-up decision.
 | Prefix-repetition, TurboQuant, c=8 | Cache-on 36.029 output tok/s, 82.8% hit; cache-off 12.740 | Promote prefix caching only for repeated-prefix workloads. |
@@ -265,6 +265,86 @@ on `c4130-2`. Screen baselines:
 `/home/larkinwc/gfx900-runs/speculation/cells/speculation-mtp-k1/cell.json`,
 `/home/larkinwc/gfx900-runs/speculation-ngram/cells/speculation-ngram-cpu-k4/cell.json`
 (both share `platform_sha256 61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`).
+
+**AWQ + VLLM_COMPILE re-investigation (2026-07-23), retracting the prior
+"compiled-warmup hang" claim:** re-ran the AWQ TP4 compiled-warmup
+investigation on this substrate with the Dynamo trace-break fix
+(`ccb228e6e4`/`87e716130`, guards `torch.cuda.is_current_stream_capturing()`
+from being reached while Dynamo traces) in place, on GPU-idle-confirmed
+hardware with a freshly re-validated `platform_sha256` match. **Neither
+tested VLLM_COMPILE configuration hangs.** AWQ TP4 with `mode=VLLM_COMPILE`
+(`mode=3`) + `cudagraph_mode=FULL_DECODE_ONLY` (`capture_sizes=[1]`)
+completed warmup in 14m43s (11:43:11→11:57:54 wall clock; `Graph capturing
+finished in 6 secs` once reached). The same `mode=3` with
+`cudagraph_mode=NONE` (compile only, no HIP graphs) completed in `init
+engine (profile, create kv cache, warmup model) took 826.15 s` (~13m46s).
+Both served correct, coherent completions.
+
+`py-spy dump --pid <worker> --nonblocking` snapshots taken every 2-4 min
+during the wait show real forward progress through the same GDN/FLA
+autotune chain `Blocker C` above already names for the dense model — not a
+stuck frame — and `TRITON_PRINT_AUTOTUNING=1` gave live per-kernel timings
+confirming it, per-rank, averaged across the 4 TP ranks:
+`chunk_local_cumsum_scalar_kernel` ~0.7s, `chunk_scaled_dot_kkt_fwd_kernel`
+~93-96s, `merge_16x16_to_64x64_inverse_kernel` ~10s,
+`recompute_w_u_fwd_kernel` ~26s, `chunk_gated_delta_rule_fwd_kernel_h_blockdim64`
+~311-320s (the dominant cost), `chunk_fwd_kernel_o` ~154-157s — each caught
+mid `make_amdgcn` compile inside `triton/runtime/autotuner.py`. `rocm-smi
+--showuse` read 0% on all GPUs for the entire ~14min wait while `top`
+showed all 4 TP workers pinned at 200%+ CPU: a CPU-bound compile phase, not
+a GPU deadlock. vLLM's own log corroborates the same story:
+`torch.compile took 187.28 s in total` (the Inductor AOT-compile phase,
+separate from and prior to the autotune phase above) and `Initial
+profiling/warmup run took 618.15 s`.
+
+The most likely origin of the original "hang" report: `EngineCore` emits
+`[shm_broadcast.py:698] No available shared memory broadcast block found
+in 60 seconds. This typically happens when some processes are hanging or
+doing some time-consuming work (e.g. compilation, weight/kv cache
+quantization).` every 60s throughout this wait. This is real, unmodified
+vLLM log output, and it reads as an alarm — but per its own text it is
+correctly describing a long-but-finite compile, not a deadlock; a plain
+`rocm-smi --showuse` check alone (0% the whole time) cannot distinguish
+"still compiling on CPU" from "truly stuck" without also checking CPU
+utilization or taking a stack dump.
+
+**Separately, a new and more serious defect was found.** Once warmup
+completes, AWQ decode throughput under `VLLM_COMPILE` collapses to roughly
+1/40th of the `mode=NONE`+graphs baseline measured fresh in the same
+session: 1.06 tok/s (`VLLM_COMPILE`+graphs, 128 tokens in 120.7s) and
+0.81 tok/s (`VLLM_COMPILE`, no graphs, 16-token sample) versus 44.8 tok/s
+for `mode=NONE`+`FULL_DECODE_ONLY` graphs (128 tokens in 2.855s, matching/
+exceeding the historical 39.637 tok/s figure and confirming the
+measurement methodology). Output was verified correct/coherent in every
+case, not corrupted — this is a throughput regression, not a numerics
+bug.
+
+**Root cause is unresolved, and the evidence collected is contradictory
+rather than merely incomplete.** 1-second-cadence `rocm-smi --showuse`
+polling during one decode request showed sustained ~100% GPU utilization
+for most of the request window. Separately, `py-spy dump --nonblocking`
+snapshots of both the worker's and `EngineCore`'s main threads, taken
+during other live decode requests, mostly caught both sides idle, blocked
+on the `shm_broadcast` IPC dequeue waiting on each other rather than doing
+visible compute. These two signals point in opposite directions and have
+**not** been reconciled; neither should be read as the established
+mechanism pending further investigation. Resolving this needs
+torch-profiler or rocprof-level instrumentation, which this investigation
+did not reach.
+
+**Practical conclusion, for a different reason than before:** AWQ +
+`torch.compile` remains not viable for production on gfx900 — not because
+of a hang (that concern above is retracted), but because of this
+decode-throughput collapse. Continue using AWQ in eager mode, or
+`mode=NONE` + `FULL_DECODE_ONLY` graphs for the graph-mode profile, per
+`GFX900_RECOMMENDED.md`. Further profiling of the decode-collapse defect
+is a possible follow-up if AWQ+compile becomes a priority, but it is not a
+promoted path either way, so none is committed here.
+
+Raw logs:
+`/home/larkinwc/gfx900-runs/awq-compile-hang-20260723/attempt{A,B,C}-*.log`
+on `c4130-2` (attempt A: `mode=3`+graphs; attempt B: `mode=3`, no graphs;
+attempt C: `mode=NONE`+graphs control, same session).
 
 ### Promoted-workload profile
 
