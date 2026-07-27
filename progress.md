@@ -9,9 +9,10 @@ consumption is **not yet verified**.
 The accepted platform digest is
 `61835f7caf7bf4057f4314e0d5f669c935e5d1ae5cbb83120745d5339e76bf36`.
 The acceptance clone is
-`/home/larkinwc/src/vllm-gfx900-acceptance-3973e0ec9`; its last established
-lineage in the repository history is
-`3973e0ec9cd10b95f4663096237c025806efdfdb`.
+`/home/larkinwc/src/vllm-gfx900-acceptance-3973e0ec9`, rooted at
+`3973e0ec9cd10b95f4663096237c025806efdfdb`. Its last-known HEAD before the
+outage was `bc7681153de2b00a2ed40abe1aba8943a825ab73`, after the
+session-ephemeral digest fix.
 
 ## Confirmed root cause and causal proof
 
